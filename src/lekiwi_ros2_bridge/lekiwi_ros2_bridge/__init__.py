@@ -1,3 +1,3 @@
-from .bridge_node import Ros2MuJoCoBridge
+"""LeKiWi ROS2 ↔ MuJoCo Bridge package."""
 
-__all__ = ["Ros2MuJoCoBridge"]
+__version__ = "0.1.0"
