@@ -512,3 +512,30 @@ MuJoCo obs → bridge_node → /lekiwi/joint_states + /lekiwi/camera/image_raw
 
 ### 阻礙
 - 兩個 `real_hardware_adapter.py` 文件（一個在 root，一個在 subdir）— 需統一
+## [2026-04-15 07:00] — Bug Fix: flow_mlp→flow_head checkpoint key rename
+
+### 已完成
+- **train_with_better_reward.py** 生成的 `results/improved/final_policy.pt` 有 `flow_mlp.*` key prefix
+- **eval_policy.py** 的 `SimpleCNNFlowMatchingPolicy` 使用 `flow_head.*` prefix
+- 導致 `load_state_dict()` 失敗：`Missing key(flow_head.*) + Unexpected key(flow_mlp.*)`
+- **修復**：用 Python + OrderedDict 原地 rename checkpoint 中所有 `flow_mlp.* → flow_head.*`
+- 修復後評估：Mean reward=-104.726 ± 1.576, Mean distance=0.117m (2 episodes)
+- 清理：`bridge_node.py.bak` 已刪除
+- Git: clean (no uncommitted changes)
+
+### 架構狀態
+- 3個有效policy checkpoint：
+  | Checkpoint | 架構 | Mean Reward | Distance |
+  |------------|------|-------------|-----------|
+  | `results/fresh_train/policy_urdf_ep5.pt` | CLIP-FM | -107.48 | 0.102m |
+  | `results/improved/final_policy.pt` | SimpleCNN-FM | -104.73 | 0.117m |
+  | random baseline | — | -110.16 | 0.443m |
+
+### 下一步
+- Phase 7: 真實 CAN bus 對接（Raspberry Pi GPIO → ST3215）
+- Phase 6.3: VLA 端到端測試（使用 improved checkpoint 驅動 bridge）
+- Phase 5 CTF 安全模式實測（用 `ros2 topic pub /lekiwi/policy_input` 模擬攻擊）
+
+### 阻礙
+- Phase 7: 真實 CAN bus 對接（Raspberry Pi GPIO → ST3215）
+
