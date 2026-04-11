@@ -50,6 +50,7 @@ sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
 from sim_lekiwi import LeKiWiSim
 from sim_lekiwi_urdf import LeKiWiSimURDF
 from security_monitor import SecurityMonitor
+from policy_guardian import PolicyGuardian
 
 # ── Joint name mapping: URDF Gazebo names → bridge canonical names ─────────────
 # From lekiwi.urdf Gazebo plugin joint list:
@@ -165,12 +166,20 @@ class LeKiWiBridge(Node):
         self.security_monitor = SecurityMonitor()
         self.get_logger().info("SecurityMonitor active (CTF mode).")
 
-        # ── ROS2 publishers ────────────────────────────────────────────────────
+        # Active policy guardian — blocks unknown policy fingerprints
+        self.policy_guardian = PolicyGuardian()
+        self.get_logger().info("PolicyGuardian active (Challenge 7 defense).")
+
+        # ── ROS2 QoS profile ──────────────────────────────────────────────────
         qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             durability=QoSDurabilityPolicy.VOLATILE,
             depth=10,
         )
+
+        # Security alert publisher
+        from std_msgs.msg import String
+        self.alert_pub = self.create_publisher(String, "/lekiwi/security_alert", qos)
         self.joint_state_pub = self.create_publisher(JointState, "/lekiwi/joint_states", qos)
 
         # Odometry publisher (mirrors lekiwi_modular omni_odometry.py)
@@ -429,14 +438,45 @@ class LeKiWiBridge(Node):
         from std_msgs.msg import ByteMultiArray
         policy_bytes = bytes(msg.data)
         stamp = self.get_clock().now().nanoseconds / 1e9
-        verdict = self.security_monitor.check_policy(policy_bytes, stamp)
-        if verdict.event_type == "policy_tamper":
+
+        # ── Layer 1: Passive SecurityMonitor (log-only, backward compat) ────
+        sec_verdict = self.security_monitor.check_policy(policy_bytes, stamp)
+
+        # ── Layer 2: Active PolicyGuardian (blocks, alerts, rolls back) ────
+        guardian_verdict = self.policy_guardian.check_and_guard(policy_bytes, stamp)
+
+        # Publish security alert to /lekiwi/security_alert
+        alert_msg = String()
+        if guardian_verdict.action in ("block", "rollback"):
+            import json
+            alert_payload = {
+                "type": guardian_verdict.reason,
+                "severity": guardian_verdict.severity,
+                "fingerprint": guardian_verdict.details.get("fingerprint", "?"),
+                "ctf_flag": guardian_verdict.ctf_flag,
+                "action": guardian_verdict.action,
+            }
+            alert_msg.data = json.dumps(alert_payload)
+            self.alert_pub.publish(alert_msg)
             self.get_logger().error(
-                "POLICY TAMPER DETECTED! {} fp: {} -> {}".format(
-                    verdict.details.get("ctf_flag", ""),
-                    verdict.details.get("old_fingerprint", "?"),
-                    verdict.details.get("new_fingerprint", "?")))
-            self.security_monitor.flush()
+                "⚔️ POLICY BLOCKED [%s] %s  fingerprint=%s  flag=%s".format(
+                    guardian_verdict.severity.upper(),
+                    guardian_verdict.reason,
+                    guardian_verdict.details.get("fingerprint", "?"),
+                    guardian_verdict.ctf_flag or ""))
+        else:
+            # Silent allow — publish a heartbeat so monitoring can see it
+            alert_payload = {
+                "type": "policy_allowed",
+                "severity": "low",
+                "fingerprint": guardian_verdict.details.get("fingerprint", "?"),
+            }
+            alert_msg.data = json.dumps(alert_payload)
+            self.alert_pub.publish(alert_msg)
+
+        # Flush both monitors
+        self.security_monitor.flush()
+        self.policy_guardian.flush()
 
 
 def main(args=None):
