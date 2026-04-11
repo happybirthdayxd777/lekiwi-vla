@@ -1,0 +1,106 @@
+# LeRobot Multi-Task DiT with Flow Matching - Training Config for LeKiwi
+# =======================================================================
+# Usage:
+#   cd ~/lekiwi_vla
+#   lerobot_train configs/lerobot_flow_matching.yaml
+
+experiment:
+  name: lekiwi_flow_matching
+  output_dir: ~/lekiwi_vla/results
+  device: cuda
+
+policy:
+  name: multi_task_dit
+  config:
+    # ── Temporal ──────────────────────────────────────────────────────────
+    n_obs_steps: 2           # Temporal context: 2 frames of history
+    horizon: 16              # Total action sequence length
+    n_action_steps: 8        # Actions executed per step (~0.27s at 30Hz)
+
+    # ── Objective (Flow Matching = 4-step inference) ──────────────────────
+    objective: flow_matching
+    sigma_min: 0.0
+    num_integration_steps: 4   # ⚡ Only 4 steps! (UnifoLM trick)
+    integration_method: euler
+    timestep_sampling_strategy: beta
+    timestep_sampling_s: 0.999
+    timestep_sampling_alpha: 1.5
+    timestep_sampling_beta: 1.0
+
+    # ── Architecture ───────────────────────────────────────────────────────
+    hidden_dim: 512
+    num_layers: 6
+    num_heads: 8
+    dropout: 0.1
+    use_positional_encoding: false
+    use_rope: true
+    rope_base: 10000.0
+    timestep_embed_dim: 256
+
+    # ── Vision Encoder (CLIP) ─────────────────────────────────────────────
+    vision_encoder_name: openai/clip-vit-base-patch16
+    use_separate_rgb_encoder_per_camera: false
+    vision_encoder_lr_multiplier: 0.1
+    image_resize_shape: null
+    image_crop_shape: [224, 224]
+    image_crop_is_random: true
+
+    # ── Text Encoder (CLIP) ───────────────────────────────────────────────
+    text_encoder_name: openai/clip-vit-base-patch16
+    tokenizer_max_length: 77
+    tokenizer_padding: max_length
+    tokenizer_padding_side: right
+    tokenizer_truncation: true
+
+    # ── Normalization ─────────────────────────────────────────────────────
+    normalization_mapping:
+      VISUAL: mean_std
+      STATE: min_max
+      ACTION: min_max
+
+    # ── Training ─────────────────────────────────────────────────────────
+    optimizer_lr: 2.0e-5
+    optimizer_betas: [0.95, 0.999]
+    optimizer_eps: 1.0e-8
+    optimizer_weight_decay: 0.0
+    scheduler_name: cosine
+    scheduler_warmup_steps: 500
+    do_mask_loss_for_padding: true
+    gradient_clipping: 1.0
+    gradient_accumulation_steps: 1
+    max_grad_norm: 1.0
+
+    # Override drop_n_last_frames
+    drop_n_last_frames: 7   # horizon(16) - n_action_steps(8) - n_obs_steps(2) + 1 = 7
+
+# LeKiwi robot features
+robot:
+  type: lekiwi
+  observation_features:
+    observation.images.primary:
+      shape: [3, 224, 224]
+      name: primary
+    observation.state:
+      shape: [9]   # 6 arm joints + 3 wheel velocities
+  action_features:
+    action:
+      shape: [9]   # same 9-DOF output
+
+# Dataset (replace with your actual HuggingFace repo)
+dataset:
+  repo_id: <hf_username>/lekiwi_flow_matching
+  fps: 30
+  image_writer_threads: 4
+
+# Training hyperparameters
+training:
+  num_workers: 4
+  batch_size: 8
+  epochs: 100
+  save_interval: 1000
+  eval_interval: 500
+  max_train_steps: 50000
+  learning_rates:
+    multi_task_dit: 2.0e-5
+    vision_encoder: 2.0e-6
+    text_encoder: 2.0e-6

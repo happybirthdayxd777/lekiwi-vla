@@ -1,175 +1,99 @@
-# LeKiwi VLA System — Deployment Guide
+# LeKiwi VLA Project
 
-Dual-mode VLA (Vision-Language-Action) robot system for LeKiwi platform, using Hugging Face LeRobot framework.
+Autonomous robot learning research platform combining MuJoCo simulation, LeRobot VLA training/inference, and real robot control.
 
-## Architecture
+## Architecture Overview
 
 ```
-                    ┌─────────────────┐
-                    │   USER INPUT    │
-                    │  (Voice/Text)   │
-                    └────────┬────────┘
-                             │
-                    ┌────────▼────────┐
-                    │   WHISPER STT   │
-                    │  (Jetson Orin)  │
-                    └────────┬────────┘
-                             │
-              ┌──────────────┴──────────────┐
-              │                             │
-     ┌────────▼────────┐          ┌────────▼────────┐
-     │   WORKER MODE   │          │  EXPLORER MODE  │
-     │                 │          │                 │
-     │ • Pi0 Policy    │          │ • Gemini Agent  │
-     │ • /act endpoint  │          │ • Function Call │
-     │ • Cloud GPU      │          │ • Local Logic   │
-     └────────┬────────┘          └────────┬────────┘
-              │                             │
-              └──────────────┬──────────────┘
-                             │
-                    ┌────────▼────────┐
-                    │ HARDWARE iF     │
-                    │ (LeRobot/LeKiwi)│
-                    └────────┬────────┘
-                             │
-                    ┌────────▼────────┐
-                    │    LEKIWI       │
-                    │  (Real Robot)   │
-                    └─────────────────┘
+lekiwi_vla/
+├── sim_lekiwi.py              # MuJoCo simulation + Gymnasium wrapper
+├── lerobot_policy_inference.py # LeRobot VLA inference (ACT/Diffusion/Flow Matching)
+├── policies/
+│   └── lerobot_flow_matching.yaml  # Multi-Task DiT training config
+├── scripts/
+│   ├── record_lekiwi.py       # Data recording with LeRobot + SO-101 leader
+│   ├── train_flow_matching.py # Train Flow Matching policy
+│   └── eval_policy.py         # Evaluate any LeRobot policy on sim or real
+├── docs/
+│   └── VLA_COMPARISON.md      # Full VLA architecture comparison report
+└── results/                   # Training checkpoints
 ```
-
-## Hardware Requirements
-
-| Component | Specification |
-|-----------|--------------|
-| **Edge (On Robot)** | Jetson Orin Nano (8GB) or similar |
-| **Cloud (Server)** | GPU with 16GB+ VRAM (RTX 4000 Ada, A100) |
-| **Camera** | 2x USB cameras (front + wrist) |
-| **Motors** | Feetech STS3215 (6 arm + 3 wheel) |
-| **Connection** | USB-C for motor bus, WiFi for cloud |
 
 ## Quick Start
 
-### 1. Cloud Server Setup
-
 ```bash
-cd server
-pip install -r requirements.txt
+# Simulate with mock policy
+python3 lerobot_policy_inference.py --policy mock --steps 100
 
-# Download Pi0 model (~7GB)
-python3 scripts/download_models.py --pi0
+# Record teleoperation data
+python3 scripts/record_lekiwi.py \
+  --hf-repo-id <your_name>/lekiwi-demo \
+  --task "walk to the red marker" \
+  --episodes 10
 
-# Start server
-./start_server.sh
+# Train Flow Matching policy (4-step inference!)
+python3 scripts/train_flow_matching.py \
+  --dataset <your_name>/lekiwi-demo \
+  --output results/lekiwi_fm \
+  --epochs 100
+
+# Evaluate on simulation
+python3 scripts/eval_policy.py \
+  --policy multi_task_dit \
+  --checkpoint results/lekiwi_fm/checkpoints/latest \
+  --dataset <your_name>/lekiwi-demo \
+  --sim
 ```
 
-### 2. Jetson Client Setup
+## Supported Policies
 
-```bash
-# Install LeRobot
-git clone https://github.com/happybirthdayxd777/lekiwi-vla.git
-cd lekiwi-vla
-pip install -r requirements.txt
+| Policy | Action Generation | Inference Steps | LeRobot | Notes |
+|--------|------------------|-----------------|---------|-------|
+| **ACT** | Action Chunking | 1 | ✅ | Fast, good baseline |
+| **Diffusion** | DDPM | 50-100 | ✅ | Smooth but slow |
+| **Multi-Task DiT** | Flow Matching | **4** | ✅ | Best speed/quality |
+| **GR00T-N1.5** | Flow Matching + DiT | 4 | ✅ | nvidia/GR00T-N1.5-3B |
+| **SmolVLA** | Regression | 1 | ✅ | ~1B params, edge device |
+| **Pi0** | Diffusion | 10+ | ✅ | Closed, most capable |
 
-# Configure robot connection
-python3 scripts/find_port.py
-python3 scripts/setup_motors.py --port /dev/ttyACM0
+See `docs/VLA_COMPARISON.md` for full analysis.
 
-# Run client
-python3 client/main_client.py
-```
+## Simulated Robot: LeKiwi
 
-### 3. Run VLA Inference
-
-```bash
-# Test /act endpoint
-curl -X POST http://localhost:8000/act \
-  -H "Content-Type: application/json" \
-  -d '{
-    "image_base64": "<base64_encoded_image>",
-    "text": "pick up the red object",
-    "robot_state": {"arm_positions": [0,0,0,0,0,0], "base_velocities": [0,0,0]}
-  }'
-```
-
-## Directory Structure
-
-```
-lekiwi-vla/
-├── server/
-│   ├── vla_server.py         # FastAPI + Pi0 inference
-│   ├── requirements.txt
-│   └── scripts/
-│       └── download_models.py
-├── client/
-│   ├── main_client.py        # Orchestrator (mode switching)
-│   ├── hardware_interface.py # LeRobot wrapper
-│   ├── agents/
-│   │   ├── worker_agent.py   # Pi0 mode
-│   │   └── explorer_agent.py # Gemini mode
-│   └── scripts/
-├── configs/
-│   └── lekiwi_vla.yaml
-└── README.md
-```
-
-## Mode Switching
-
-Press **SPACE** to toggle between modes:
-
-| Mode | Trigger | Behavior |
-|------|---------|----------|
-| **WORKER** | Default | Pi0 policy, voice command execution |
-| **EXPLORER** | Space | Gemini agent, free exploration |
-
-## LeRobot Integration
-
-This project uses [LeRobot](https://github.com/huggingface/lerobot) from Hugging Face as the underlying robotics framework.
-
-Key LeRobot components used:
-- `LeKiwi` robot class
-- `Pi0Agent` for VLA inference
-- `lerobot-record` for data collection
-- `lerobot-teleoperate` for teleoperation
+- **9 DOF**: 6 arm joints + 3 omni wheels
+- **Gymnasium compatible**: `LeKiwiEnv(env_id="lekiwi/...)`
+- **Observation**: camera image + arm positions + wheel velocities
+- **Action**: 6 joint targets + 3 wheel velocities
 
 ```python
-from lerobot.robots.lekiwi import LeKiwi
-from lerobot.robots.lekiwi.config_lekiwi import LeKiwiConfig
+from sim_lekiwi import LeKiwiSim
 
-# Connect to LeKiwi
-config = LeKiwiConfig(port="/dev/ttyACM0")
-robot = LeKiwi(config)
-robot.connect()
+sim = LeKiwiSim()
+sim.reset()
 
-# Capture observation
-obs = robot.capture_observation()
-
-# Execute action
-robot.send_action(action_tensor)
+for step in range(200):
+    img = sim.render()
+    obs = sim._obs()
+    action = policy.predict(img, obs)
+    obs = sim.step(action)
+    reward = sim.get_reward()
 ```
 
-## AI Models
+## Research Findings
 
-| Model | Purpose | Size |
-|-------|---------|------|
-| Pi0 (7B) | VLA policy | 7B params |
-| Pi0-ext (14B) | Extended VLA | 14B params |
-| Gemini 2.0 | Explorer agent | Cloud |
-| Whisper | Speech-to-text | 3B params |
+See `docs/VLA_COMPARISON.md` for:
+- Deep dive: Flow Matching vs Diffusion vs ACT
+- UnifoLM-VLA architecture analysis (cloned to `~/unifolm-vla/`)
+- Unitree G1 dataset evaluation
+- GR00T-N1.5 vs Pi0 vs OpenVLA benchmark
+- Hardware recommendations for your research
 
-## Development
+## Related Projects
 
-```bash
-# Run tests
-pytest tests/
-
-# Format code
-black .
-
-# Lint
-flake8 .
-```
-
-## License
-
-Apache 2.0
+| Project | Path | Purpose |
+|---------|------|---------|
+| UnifoLM-VLA research | `~/unifolm-vla/` | Unitree's Flow Matching VLA (cloned) |
+| Go2 VLA | `~/go2-vla/` | Quadruped gait controller + ROS2 |
+| Robot CTF Workshop | `~/robot-security-workshop/` | Security research + Docker |
+| Adversarial Toolkit | `~/robot-security-workshop/adversarial_toolkit/` | Robot attack toolkit |
+| LeRobot | `~/lerobot/` | HF LeRobot library (local install) |
