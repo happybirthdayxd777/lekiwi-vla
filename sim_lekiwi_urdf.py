@@ -84,10 +84,13 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
         <!-- Wrist -->
         <mesh name="wrist_pitch"   file="{_mp2('Wrist_Roll_Pitch_08i-v1.stl')}" scale="0.001 0.001 0.001"/>
         <mesh name="wrist_horn"    file="{_mp2('Wrist_Roll_08c-v1.stl')}"   scale="0.001 0.001 0.001"/>
+        <mesh name="wrist_servo"   file="{_mp2('STS3215_03a-v1-3.stl')}"    scale="0.001 0.001 0.001"/>
+        <mesh name="horn_fixed"    file="{_mp2('Passive_Horn_01-v1.stl')}"   scale="0.001 0.001 0.001"/>
 
         <!-- Gripper -->
         <mesh name="servo_gripper"  file="{_mp2('STS3215_03a-v1-4.stl')}"    scale="0.001 0.001 0.001"/>
         <mesh name="moving_jaw"    file="{_mp2('Moving_Jaw_08d-v1.stl')}"   scale="0.001 0.001 0.001"/>
+        <mesh name="gripper_horn"  file="{_mp2('Passive_Horn_01-v1.stl')}"   scale="0.001 0.001 0.001"/>
 
         <!-- Camera -->
         <mesh name="wrist_cam_mount" file="{_mp2('Wrist-Camera-Mount-v11.stl')}" scale="0.001 0.001 0.001"/>
@@ -156,67 +159,67 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                 <!-- Shoulder pan j0 -->
                 <joint name="j0" type="hinge" axis="0 0 1"
                        range="-3.14 3.14" damping="1.5"/>
-                <!-- Shoulder pan geom: flat cylinder -->
-                <geom name="base_q_geom" type="cylinder"
-                      size="0.04 0.015" mass="0.5" rgba="0.9 0.6 0.2 1"/>
+                <!-- Shoulder pan geom: flat STL + horn -->
+                <geom name="base_q_geom" type="mesh" mesh="base_q"
+                      rgba="0.9 0.6 0.2 1" mass="0.5"/>
 
                 <!-- ══ Arm segment 1: j1 shoulder lift ══ -->
-                <body name="arm_1" pos="0 0 0.02">
+                <body name="arm_1" pos="0 0 0.015">
                     <joint name="j1" type="hinge" axis="0 1 0"
                            range="-1.57 1.57" damping="1.5"/>
-                    <!-- Shoulder servo -->
-                    <geom name="s1_geom" type="cylinder"
-                          size="0.022 0.025" mass="0.065" rgba="0.8 0.5 0.2 1"/>
-                    <!-- Arm link 1 -->
-                    <geom name="arm1_link" type="cylinder"
-                          size="0.015 0.05" mass="0.3" rgba="0.7 0.55 0.18 1"
-                          pos="0 0 0.05"/>
+                    <!-- Shoulder servo STL -->
+                    <geom name="s1_geom" type="mesh" mesh="servo_base"
+                          rgba="0.8 0.5 0.2 1" mass="0.065"/>
+                    <!-- Arm link 1: square tube + mirror clip -->
+                    <geom name="arm1_link" type="mesh" mesh="arm_square"
+                          rgba="0.7 0.55 0.18 1" mass="0.3" pos="0 0 0.05"/>
 
                     <!-- ══ Arm segment 2: j2 elbow ══ -->
                     <body name="arm_2" pos="0 0 0.10">
                         <joint name="j2" type="hinge" axis="1 0 0"
                                range="-1.57 1.57" damping="1.2"/>
-                        <geom name="s2_geom" type="cylinder"
-                              size="0.020 0.022" mass="0.065" rgba="0.8 0.5 0.2 1"/>
-                        <geom name="arm2_link" type="cylinder"
-                              size="0.013 0.06" mass="0.25" rgba="0.7 0.5 0.16 1"
-                              pos="0 0 0.06"/>
+                        <!-- Elbow servo + link -->
+                        <geom name="s2_geom" type="mesh" mesh="servo_j2"
+                              rgba="0.8 0.5 0.2 1" mass="0.065"/>
+                        <geom name="arm2_link" type="mesh" mesh="arm_mirror"
+                              rgba="0.7 0.5 0.16 1" mass="0.25" pos="0 0 0.06"/>
 
                         <!-- ══ Arm segment 3: j3 wrist flex ══ -->
                         <body name="arm_3" pos="0 0 0.12">
                             <joint name="j3" type="hinge" axis="1 0 0"
                                    range="-1.57 1.57" damping="0.8"/>
-                            <geom name="s3_geom" type="cylinder"
-                                  size="0.016 0.020" mass="0.065" rgba="0.8 0.5 0.2 1"/>
-                            <geom name="arm3_link" type="cylinder"
-                                  size="0.011 0.04" mass="0.2" rgba="0.6 0.45 0.14 1"
-                                  pos="0 0 0.04"/>
+                            <geom name="s3_geom" type="mesh" mesh="servo_j3"
+                                  rgba="0.8 0.5 0.2 1" mass="0.065"/>
+                            <geom name="arm3_link" type="mesh" mesh="arm_clip"
+                                  rgba="0.6 0.45 0.14 1" mass="0.2" pos="0 0 0.04"/>
 
                             <!-- ══ Wrist: j4 roll ══ -->
                             <body name="arm_4" pos="0 0 0.08">
                                 <joint name="j4" type="hinge" axis="0 0 1"
                                        range="-3.14 3.14" damping="0.6"/>
-                                <geom name="wrist_s_geom" type="cylinder"
-                                      size="0.012 0.015" mass="0.04" rgba="0.6 0.4 0.12 1"/>
+                                <geom name="wrist_s_geom" type="mesh" mesh="wrist_servo"
+                                      rgba="0.6 0.4 0.12 1" mass="0.04"/>
+                                <geom name="wrist_horn_geom" type="mesh" mesh="wrist_horn"
+                                      rgba="0.5 0.35 0.1 1" mass="0.02"/>
 
                                 <!-- ══ Gripper: j5 slide ══ -->
                                 <body name="gripper" pos="0 0 0.03">
                                     <joint name="j5" type="slide"
                                            axis="1 0 0"
                                            range="0 0.04" damping="3.0"/>
-                                    <geom name="gripper_base" type="box"
-                                          size="0.015 0.02 0.015" mass="0.1"
-                                          rgba="0.2 0.2 0.2 1"/>
-                                    <geom name="gripper_jaw" type="box"
-                                          size="0.012 0.025 0.01" mass="0.05"
-                                          rgba="0.3 0.3 0.3 1" pos="0.02 0 0"/>
+                                    <!-- Gripper servo + moving jaw -->
+                                    <geom name="gripper_base" type="mesh" mesh="servo_gripper"
+                                          rgba="0.2 0.2 0.2 1" mass="0.1"/>
+                                    <geom name="gripper_jaw" type="mesh" mesh="moving_jaw"
+                                          rgba="0.3 0.3 0.3 1" mass="0.05" pos="0.02 0 0"/>
                                 </body>
 
                                 <!-- ══ Wrist camera ══ -->
                                 <body name="wrist_cam" pos="0.01 0 -0.04">
-                                    <geom name="wcm_geom" type="cylinder"
-                                          size="0.015 0.02" mass="0.03"
-                                          rgba="0.4 0.4 0.4 1" euler="1.57 0 0"/>
+                                    <geom name="wcm_geom" type="mesh" mesh="wrist_cam_mount"
+                                          rgba="0.4 0.4 0.4 1" mass="0.03"/>
+                                    <geom name="wcm_body" type="mesh" mesh="wrist_cam_body"
+                                          rgba="0.35 0.35 0.35 1" mass="0.02"/>
                                 </body>
                             </body>
                         </body>
