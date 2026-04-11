@@ -1,74 +1,62 @@
-# Lekiwi Hybrid VLA Robot
+# LeKiwi VLA System
 
-A dual-mode intelligent robotic system combining Vision-Language-Action (VLA) models with Large Language Model (LLM) agents for precise manipulation and autonomous exploration.
+Dual-mode VLA (Vision-Language-Action) robot system for LeKiwi platform.
 
-## Overview
-
-Lekiwi is built on the LeKiwi (SO-101) platform and features a hybrid AI architecture:
-
-- **Worker Mode (OpenPI/π0)**: Precision manipulation using a 7B Vision-Language-Action model
-- **Explorer Mode (Gemini)**: Autonomous exploration and natural interaction using LLM-based planning
-
-### Core Philosophy
-**"Local Hearing, Cloud Thinking, Hybrid Action"**
-
-## Hardware
-
-- **Robot**: LeKiwi (SO-101) - 6-DOF robotic arm with mobile base
-- **Edge Compute**: NVIDIA Jetson Orin Nano Super (8GB)
-- **Cloud GPU**: Akamai Cloud Instance with RTX 4000 Ada (20GB VRAM)
-- **Sensors**: RealSense depth camera, dual RGB cameras, IMU
-- **Audio**: USB microphone and speaker for voice interaction
-
-## Key Features
-
-- **Dual-Mode Operation**: Seamlessly switch between precision VLA and exploratory LLM modes
-- **Automatic Fallback**: Intelligent mode switching based on task requirements
-- **Voice Control**: Local speech recognition with Whisper
-- **Visual SLAM**: Real-time mapping and localization
-- **Function Calling**: xLeRobot-style LLM agent control with motor primitives
-- **Cloud-Edge Hybrid**: Distributed processing for optimal performance
-
-## Architecture
+## Architecture Overview
 
 ```
-Voice Input → Jetson (Whisper STT) → Command
-                    ↓
-Camera Stream → Akamai GPU (π0 VLA) → Action Chunks → Jetson → Motors
-                    OR
-Audio/Video → Gemini API → Function Calls → Jetson → Motors
+┌─────────────────────────────────────────────────────────────────────┐
+│                         WORKER MODE (Pi0)                          │
+│   Voice → Whisper STT → Pi0 Policy → Action → Robot Control        │
+│   "Pick up the red box" → [Image + Text] → action_delta            │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                        EXPLORER MODE (Gemini)                       │
+│   Voice → Gemini Agent → Function Calls → Robot Control            │
+│   "Go forward" → move_forward()                                    │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Documentation
+## Hardware Setup
 
-- **[requirements.md](requirements.md)**: Complete technical requirements and specifications
-- **[implementation_plan.md](implementation_plan.md)**: Implementation architecture and proposed changes
-- **[operations_guide.md](operations_guide.md)**: Setup and operational procedures
-- **[task.md](task.md)**: Project task tracking
+- **Brain (Server)**: GPU server (RTX 4000 Ada or better) running FastAPI + Pi0
+- **Body (Edge)**: Jetson Orin Nano (8GB) running client orchestrator
 
 ## Quick Start
 
-### Prerequisites
-- Jetson Orin Nano with JetPack 6.0 (Ubuntu 22.04)
-- ROS2 Humble
-- Akamai Cloud GPU instance
-- Google Gemini API key
+### Server Setup
+```bash
+cd server
+pip install -r requirements.txt
+python3 scripts/download_models.py --pi0
+./start_server.sh
+```
 
-### Installation
+### Jetson Client Setup
+```bash
+# Install LeRobot
+git clone https://github.com/huggingface/lerobot.git
+cd lerobot && pip install -e ".[lekiwi]"
 
-See [operations_guide.md](operations_guide.md) for detailed setup instructions.
+# Configure
+lerobot-setup-motors --robot.type=lekiwi --robot.port=/dev/ttyACM0
 
-## References
+# Launch
+python3 client/main_client.py
+```
 
-- [LeKiwi Official Documentation](https://huggingface.co/docs/lerobot/en/lekiwi)
-- [xLeRobot LLM Agent Control](https://xlerobot.readthedocs.io/en/latest/software/getting_started/LLM_agent.html)
-- [OpenPI VLA Model](https://github.com/physical-intelligence/pi0)
-- [LeRobot GitHub](https://github.com/huggingface/lerobot)
+## Robot Overview
+
+LeKiwi has:
+- **3 omni wheels** (motor IDs 7, 8, 9) - differential drive mobile base
+- **6-DOF arm** (motor IDs 1-6) - STS3215 servos
+- **2 cameras**: front + wrist
+
+## Mode Switching
+
+Press **SPACE** to toggle between Worker and Explorer modes.
 
 ## License
 
-TBD
-
-## Contributing
-
-TBD
+Apache 2.0
