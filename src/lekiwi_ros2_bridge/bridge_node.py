@@ -35,8 +35,11 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import JointState, Image
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import TransformStamped
 from std_msgs.msg import Float64
 from cv_bridge import CvBridge
+import tf2_ros
 
 import numpy as np
 import sys
@@ -47,6 +50,31 @@ sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
 from sim_lekiwi import LeKiWiSim
 from sim_lekiwi_urdf import LeKiWiSimURDF
 from security_monitor import SecurityMonitor
+
+# ── Joint name mapping: URDF Gazebo names → bridge canonical names ─────────────
+# From lekiwi.urdf Gazebo plugin joint list:
+#   wheel_0 → ST3215_Servo_Motor-v1_Revolute-64
+#   wheel_1 → ST3215_Servo_Motor-v1-1_Revolute-62
+#   wheel_2 → ST3215_Servo_Motor-v1-2_Revolute-60
+# Arm joints (from URDF Revolute joints):
+#   arm_j0 → ST3215_Servo_Motor-v1-1_Revolute-49  (first arm joint)
+#   arm_j1 → ST3215_Servo_Motor-v1-2_Revolute-51
+#   arm_j2 → ST3215_Servo_Motor-v1-3_Revolute-53
+#   arm_j3 → STS3215_03a_Wrist_Roll-v1_Revolute-55
+#   arm_j4 → STS3215_03a-v1-4_Revolute-57
+#   arm_j5 → (gripper slide — not in URDF Gazebo plugin)
+URDF_WHEEL_JOINT_NAMES = [
+    "ST3215_Servo_Motor-v1_Revolute-64",       # wheel_0 → w1 in bridge
+    "ST3215_Servo_Motor-v1-1_Revolute-62",     # wheel_1 → w2 in bridge
+    "ST3215_Servo_Motor-v1-2_Revolute-60",     # wheel_2 → w3 in bridge
+]
+URDF_ARM_JOINT_NAMES = [
+    "ST3215_Servo_Motor-v1-1_Revolute-49",    # arm_j0
+    "ST3215_Servo_Motor-v1-2_Revolute-51",    # arm_j1
+    "ST3215_Servo_Motor-v1-3_Revolute-53",    # arm_j2
+    "STS3215_03a_Wrist_Roll-v1_Revolute-55", # arm_j3
+    "STS3215_03a-v1-4_Revolute-57",          # arm_j4
+]
 
 
 # ── Kinematics constants (from omni_controller.py) ──────────────────────────────
@@ -144,6 +172,15 @@ class LeKiWiBridge(Node):
         )
         self.joint_state_pub = self.create_publisher(JointState, "/lekiwi/joint_states", qos)
 
+        # Odometry publisher (mirrors lekiwi_modular omni_odometry.py)
+        self.odom_pub = self.create_publisher(Odometry, "/lekiwi/odom", qos)
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+
+        # URDF-compatible joint states publisher (real URDF joint names)
+        self.joint_state_urdf_pub = self.create_publisher(
+            JointState, "/lekiwi/joint_states_urdf", qos
+        )
+
         # Camera bridge: MuJoCo → ROS2 image
         self.camera_pub  = self.create_publisher(Image, "/lekiwi/camera/image_raw",    qos)
         self.wrist_cam_pub = self.create_publisher(Image, "/lekiwi/wrist_camera/image_raw", qos)
@@ -180,11 +217,17 @@ class LeKiWiBridge(Node):
         self._last_action = np.zeros(9, dtype=np.float64)   # [arm*6, wheel*3]
         self._vla_action_fresh = False                       # set True when VLA writes action
         self._frame_count = 0
+        # Odometry state (mirrors omni_odometry.py)
+        self._odom_x = 0.0
+        self._odom_y = 0.0
+        self._odom_theta = 0.0
+        self._last_odom_time = self.get_clock().now()
         self.get_logger().info(
             "LeKiWi ROS2 bridge ready.  Topics:\n"
             "  /lekiwi/cmd_vel       ← subscribe\n"
             "  /lekiwi/vla_action    ← subscribe (VLA arm override)\n"
             "  /lekiwi/joint_states  → publish\n"
+            "  /lekiwi/odom          → publish (20 Hz)\n"
             "  /lekiwi/camera/image_raw → publish (20 Hz)\n"
             "  /lekiwi/wheel_N/cmd_vel → publish"
         )
@@ -263,19 +306,63 @@ class LeKiWiBridge(Node):
     # ── Timer callback ─────────────────────────────────────────────────────────
 
     def _on_timer(self):
-        """Publish MuJoCo state as JointState + camera Image."""
+        """Publish MuJoCo state as JointState + Odometry + camera Image."""
+        now = self.get_clock().now()
         obs = self.sim._obs()
+        dt = 0.05   # matches timer period
+
+        # ── Odometry ─────────────────────────────────────────────────────────
+        wheel_vel = obs.get("wheel_velocities", np.zeros(3))
+        # Compute vx, vy, wz from wheel velocities using same kinematics as omni_odometry.py
+        vx_total = 0.0
+        vy_total = 0.0
+        wz_total = 0.0
+        wheel_base = 0.1732
+        for i in range(3):
+            angular_speed = wheel_vel[i]
+            wheel_vel_world = angular_speed * WHEEL_RADIUS * _JOINT_AXES[i]
+            vx_total += wheel_vel_world[0] / 3.0
+            vy_total += wheel_vel_world[1] / 3.0
+            wz_total += np.cross(WHEEL_POSITIONS[i], wheel_vel_world)[2] / (3.0 * wheel_base)
+
+        # Integrate position
+        self._odom_theta += wz_total * dt
+        self._odom_x += (vx_total * np.cos(self._odom_theta) - vy_total * np.sin(self._odom_theta)) * dt
+        self._odom_y += (vx_total * np.sin(self._odom_theta) + vy_total * np.cos(self._odom_theta)) * dt
+
+        # Publish /lekiwi/odom
+        odom_msg = Odometry()
+        odom_msg.header.stamp = now.to_msg()
+        odom_msg.header.frame_id = "odom"
+        odom_msg.child_frame_id = "base_link"
+        odom_msg.pose.pose.position.x = self._odom_x
+        odom_msg.pose.pose.position.y = self._odom_y
+        odom_msg.pose.pose.orientation.z = np.sin(self._odom_theta / 2.0)
+        odom_msg.pose.pose.orientation.w = np.cos(self._odom_theta / 2.0)
+        odom_msg.twist.twist.linear.x = vx_total
+        odom_msg.twist.twist.linear.y = vy_total
+        odom_msg.twist.twist.angular.z = wz_total
+        self.odom_pub.publish(odom_msg)
+
+        # Publish TF odom → base_link
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp = now.to_msg()
+        tf_msg.header.frame_id = "odom"
+        tf_msg.child_frame_id = "base_link"
+        tf_msg.transform.translation.x = self._odom_x
+        tf_msg.transform.translation.y = self._odom_y
+        tf_msg.transform.rotation.z = np.sin(self._odom_theta / 2.0)
+        tf_msg.transform.rotation.w = np.cos(self._odom_theta / 2.0)
+        self.tf_broadcaster.sendTransform(tf_msg)
 
         # ── JointState ──────────────────────────────────────────────────────
         msg = JointState()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.stamp = now.to_msg()
         msg.name = self.ARM_NAMES + self.WHEEL_NAMES
 
         # Arm positions (6) + integrate wheel velocities → positions (3)
         arm_pos = list(obs.get("arm_positions", np.zeros(6)))
         # Accumulate wheel positions from velocity integration
-        wheel_vel = obs.get("wheel_velocities", np.zeros(3))
-        dt = 0.05   # matches timer period
         self._wheel_posAccum = getattr(self, '_wheel_posAccum', np.zeros(3)) + wheel_vel * dt
         wheel_pos = list(self._wheel_posAccum)
 
@@ -283,6 +370,20 @@ class LeKiWiBridge(Node):
         msg.velocity = list(obs.get("arm_velocities", np.zeros(6))) + list(wheel_vel)
 
         self.joint_state_pub.publish(msg)
+
+        # ── URDF-compatible JointState (real joint names from lekiwi.urdf) ────
+        # Maps bridge canonical names → URDF Gazebo plugin joint names
+        urdf_msg = JointState()
+        urdf_msg.header.stamp = now.to_msg()
+        # Arm: bridge arm_names → URDF arm joint names (first 5 of 6)
+        # Gripper (j5) not in URDF Gazebo plugin — omit or map to last arm
+        urdf_arm_names = URDF_ARM_JOINT_NAMES
+        urdf_wheel_names = URDF_WHEEL_JOINT_NAMES
+        urdf_msg.name = urdf_arm_names + urdf_wheel_names
+        # Pad arm_positions to 5 for URDF (omit j5/gripper which is not in Gazebo plugin)
+        urdf_msg.position = list(obs.get("arm_positions", np.zeros(6)))[:5] + wheel_pos
+        urdf_msg.velocity = list(obs.get("arm_velocities", np.zeros(6)))[:5] + list(wheel_vel)
+        self.joint_state_urdf_pub.publish(urdf_msg)
 
         # ── Camera Images ────────────────────────────────────────────────────
         self._frame_count += 1
