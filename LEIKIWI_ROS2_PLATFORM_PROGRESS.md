@@ -7,6 +7,25 @@ ROS2 topics/launch  →  ros2_lekiwi_bridge  →  lekiwi_vla MuJoCo sim  →  VL
 
 ---
 
+## [2026-04-14 05:00]
+
+### 已完成
+- **Phase 5.4：VLA node 雙向相機 + 圖像觸發推理**
+  - 問題：`_on_joint_states()` → `_run_inference()` → 等待 image；若 image 延遲抵達（晚 1 幀），該次推理被跳過，導致 VLA policy 推理頻率降低
+  - 修復 1：`image_callback` 收到 image 時，若 `_last_joints` 已就緒，立即執行 `_run_inference()`
+  - 修復 2：新增 `wrist_cam_sub` 監聽 `/lekiwi/wrist_camera/image_raw`（同一 callback）
+  - 效果：每次 image 到達都能觸發推理（不依賴 joint_states 時序），前端/手腕相機同時生效，last-write-wins
+  - Git pushed: `7db1c4f`
+
+### 下一步
+- Phase 4: 統一 launch — `sim_type:=gazebo` 模式對接真實 Gazebo
+- Phase 5.5: 確認 VLA inference 在 joint_states + wrist_camera 同時存在時正常運行
+
+### 阻礙
+- なし（Phase 1-3 完整，Phase 5 推进中）
+
+---
+
 ## [2026-04-14 03:30]
 
 ### 已完成
