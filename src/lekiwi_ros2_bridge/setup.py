@@ -20,6 +20,7 @@ setup(
     entry_points={
         "console_scripts": [
             "bridge_node = lekiwi_ros2_bridge.bridge_node:main",
+            "vla_policy_node = lekiwi_ros2_bridge.vla_policy_node:main",
         ],
     },
 )
