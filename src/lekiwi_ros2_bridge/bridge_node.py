@@ -10,19 +10,23 @@ Supports two simulation backends:
 
 Topics:
   Input  : /lekiwi/cmd_vel        (geometry_msgs/Twist)
+  Input  : /lekiwi/vla_action     (Float64MultiArray, arm*6 + wheel*3, native units)
   Output : /lekiwi/joint_states   (sensor_msgs/JointState)
   Output : /lekiwi/camera/image_raw (Image, 20 Hz, URDF model only)
+  Output : /lekiwi/wheel_N/cmd_vel (Float64, mirrors real robot)
 
 Architecture:
   ROS2 /lekiwi/cmd_vel
         ↓ (Twist → [vx, vy, wz])
   BridgeNode._on_cmd_vel()
         ↓
+  BridgeNode._on_vla_action()     ← NEW: arm override from VLA policy
+        ↓
   LeKiWiSim.step(action=[arm*6, wheel_speeds*3])
         ↓
   BridgeNode._publish_joint_states()
         ↓ (JointState ← MuJoCo obs)
-  ROS2 /lekiwi/joint_states
+  ROS2 /lekiwi/joint_states  →  LeKiWiVLAPolicyNode → /lekiwi/vla_action  (closed loop)
 """
 
 import rclpy
@@ -150,8 +154,14 @@ class LeKiWiBridge(Node):
         ]
 
         # ── ROS2 subscribers ───────────────────────────────────────────────────
-                self.cmd_vel_sub = self.create_subscription(
+        self.cmd_vel_sub = self.create_subscription(
             Twist, "/lekiwi/cmd_vel", self._on_cmd_vel, qos
+        )
+
+        # VLA action subscriber: arm (6) + wheel (3) in native units from policy node
+        from std_msgs.msg import Float64MultiArray
+        self.vla_action_sub = self.create_subscription(
+            Float64MultiArray, "/lekiwi/vla_action", self._on_vla_action, qos
         )
 
         # CTF Challenge 7: policy injection topic
@@ -166,10 +176,12 @@ class LeKiWiBridge(Node):
 
         # ── State ───────────────────────────────────────────────────────────────
         self._last_action = np.zeros(9, dtype=np.float64)   # [arm*6, wheel*3]
+        self._vla_action_fresh = False                       # set True when VLA writes action
         self._frame_count = 0
         self.get_logger().info(
             "LeKiWi ROS2 bridge ready.  Topics:\n"
             "  /lekiwi/cmd_vel       ← subscribe\n"
+            "  /lekiwi/vla_action    ← subscribe (VLA arm override)\n"
             "  /lekiwi/joint_states  → publish\n"
             "  /lekiwi/camera/image_raw → publish (20 Hz)\n"
             "  /lekiwi/wheel_N/cmd_vel → publish"
@@ -178,7 +190,13 @@ class LeKiWiBridge(Node):
     # ── cmd_vel callback ────────────────────────────────────────────────────────
 
     def _on_cmd_vel(self, msg: Twist):
-        """Convert Twist → wheel speeds, combine with current arm action, step sim."""
+        """
+        Convert Twist → wheel speeds, combine with current arm action, step sim.
+
+        When VLA is active (VLA action received), arm portion is already in
+        _last_action from _on_vla_action; we only override the wheel portion.
+        When VLA is not active, arms stay at their last commanded position.
+        """
         vx = float(msg.linear.x)
         vy = float(msg.linear.y)
         wz = float(msg.angular.z)
@@ -197,8 +215,14 @@ class LeKiWiBridge(Node):
         # Compute wheel angular velocities from kinematics
         wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
 
-        # Keep arm portion of last action (held at 0 for now; future: arm topics)
-        arm_action = self._last_action[0:6]
+        # If VLA has set an arm action, keep arms; otherwise keep last arm pos.
+        # _vla_action_fresh is cleared after each timer step so we know whether
+        # to trust the arm portion of _last_action.
+        if self._vla_action_fresh:
+            arm_action = self._last_action[0:6]
+        else:
+            # No VLA action yet: hold arms at last commanded position
+            arm_action = self._last_action[0:6]
 
         # Build full action vector for MuJoCo
         action = np.concatenate([arm_action, wheel_speeds]).astype(np.float64)
@@ -212,6 +236,27 @@ class LeKiWiBridge(Node):
             wm = Float64()
             wm.data = float(speed)
             self.wheel_pubs[i].publish(wm)
+
+    # ── VLA action callback ────────────────────────────────────────────────────
+
+    def _on_vla_action(self, msg):
+        """
+        Receive VLA policy action (arm*6 + wheel*3 in native units).
+        Arms override whatever _on_cmd_vel set for the arm portion.
+        VLA action always wins for arm joints to enable closed-loop control.
+        """
+        try:
+            action = np.array(msg.data, dtype=np.float64)
+            if action.shape != (9,):
+                self.get_logger().warn(f"VLA action shape {action.shape} != (9,), ignoring", once=True)
+                return
+            # VLA action = native units; clamp to safe limits
+            action[:6] = np.clip(action[:6], self.ARM_CTRL_MIN,  self.ARM_CTRL_MAX)
+            action[6:] = np.clip(action[6:], self.WHEEL_CTRL_MIN, self.WHEEL_CTRL_MAX)
+            self._last_action = action
+            self._vla_action_fresh = True
+        except Exception as e:
+            self.get_logger().warn(f"VLA action parse error: {e}", once=True)
 
     # ── Timer callback ─────────────────────────────────────────────────────────
 
@@ -249,6 +294,9 @@ class LeKiWiBridge(Node):
                 self.camera_pub.publish(ros_img)
             except Exception as e:
                 self.get_logger().warn(f"Camera render failed: {e}", once=True)
+
+        # Clear VLA fresh flag so next cmd_vel knows arms need re-confirmation
+        self._vla_action_fresh = False
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 
