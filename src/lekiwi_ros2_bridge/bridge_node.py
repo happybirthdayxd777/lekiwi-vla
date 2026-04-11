@@ -80,19 +80,27 @@ ARM_JOINTS = [
 
 ALL_JOINTS = WHEEL_JOINTS + ARM_JOINTS
 
-# Wheel configuration (from lekiwi_modular omni_controller_fixed.py)
-WHEEL_RADIUS = 0.05
+# Wheel positions relative to base_link — from omni_controller_fixed.py:
+# wheel_base = 0.1732 (meters), angles at 30°, 150°, 270°
+# Wheel 0: +30° (front-right) → [0.15, 0.0866, 0]
+# Wheel 1: +150° (left)      → [-0.15, 0.0866, 0]
+# Wheel 2: +270° (back-right) → [0, -0.1732, 0]
+_angles = np.deg2rad([30, 150, 270])
+_wheel_base = 0.1732
 WHEEL_POSITIONS = [
-    np.array([0.1732,  0.0,   0.0]),
-    np.array([-0.0866, 0.15,  0.0]),
-    np.array([-0.0866, -0.15, 0.0]),
+    _wheel_base * np.array([np.cos(a), np.sin(a), 0.0])
+    for a in _angles
 ]
-# Joint rotation axes for each omni wheel (normalized)
-# These determine how robot velocity projects onto wheel angular velocity
+# Roller axes — ACTUAL axes from lekiwi.urdf (extracted via regex from XML):
+#   Revolute-64 (wheel 0, front-right): [-0.866, 0, 0.5]
+#   Revolute-62 (wheel 1, left):        [ 0.866, 0, 0.5]
+#   Revolute-60 (wheel 2, back-right):  [ 0,    0, -1]
+# NOTE: The WHEEL_JOINTS list uses URDF joint names as identifiers, so the
+# order here matches WHEEL_JOINTS[0..2] in sequence.
 WHEEL_JOINT_AXES = [
-    np.array([ 0.866025, 0.0,  0.5]) / np.linalg.norm([0.866025, 0.0,  0.5]),  # ≈ [0.866, 0, 0.5]
-    np.array([ 0.866025, 0.0,  0.5]) / np.linalg.norm([0.866025, 0.0,  0.5]),
-    np.array([-0.866025, 0.0,  0.5]) / np.linalg.norm([0.866025, 0.0,  0.5]),  # reversed for opposing wheel
+    np.array([-0.866025, 0.0, 0.5])  / 1.0,   # wheel 0 (Revolute-64)
+    np.array([ 0.866025, 0.0, 0.5])  / 1.0,   # wheel 1 (Revolute-62)
+    np.array([ 0.0,      0.0,-1.0])  / 1.0,   # wheel 2 (Revolute-60)
 ]
 
 
