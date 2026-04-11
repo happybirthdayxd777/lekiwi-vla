@@ -1,17 +1,17 @@
 """
-Unified LeKiWi Launch — Real vs Sim mode switch
+Unified LeKiWi Launch — Simulation mode switch
 ===============================================
 
 Usage:
-  ros2 launch lekiwi_ros2_bridge bridge.launch.py mode:=sim
-  ros2 launch lekiwi_ros2_bridge bridge.launch.py mode:=real
+  # Primitive cylinders (fast, stable)
+  ros2 launch lekiwi_ros2_bridge bridge.launch.py sim_type:=primitive
 
-Modes:
-  sim  — start MuJoCo bridge (LeKiWiSim) + joint_state + camera publishers
-         Use this when there is no real hardware.
+  # Real STL mesh geometry (from lekiwi_modular URDF)
+  ros2 launch lekiwi_ros2_bridge bridge.launch.py sim_type:=urdf
 
-  real — start lekiwi_modular controllers + our bridge as passthrough
-         Use this when connecting to real LeKiWi hardware.
+The bridge node subscribes to /lekiwi/cmd_vel and publishes:
+  /lekiwi/joint_states  — joint positions + velocities
+  /lekiwi/camera/image_raw — camera image (20 Hz, URDF mode only)
 """
 
 import launch
@@ -22,59 +22,23 @@ from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description() -> LaunchDescription:
-    mode_arg = DeclareLaunchArgument(
-        "mode",
-        default_value="sim",
-        description="Execution mode: 'sim' (MuJoCo) or 'real' (hardware)",
+    sim_type_arg = DeclareLaunchArgument(
+        "sim_type",
+        default_value="primitive",
+        description=(
+            "Simulation type: 'primitive' (fast cylinders) "
+            "or 'urdf' (real STL meshes from lekiwi_modular)"
+        ),
     )
-    mode = LaunchConfiguration("mode")
+    sim_type = LaunchConfiguration("sim_type")
 
-    # ── Sim mode: bridge node only ──────────────────────────────────────────────
     bridge_node = Node(
         package="lekiwi_ros2_bridge",
         executable="bridge_node",
         name="lekiwi_ros2_bridge",
         output="screen",
-        parameters=[],
+        parameters=[{"sim_type": sim_type}],
     )
 
-    # ── Real mode: lekiwi_modular stack + bridge as monitor ─────────────────────
-    omni_controller = Node(
-        package="lekiwi_controller",
-        executable="omni_controller",
-        name="omni_controller",
-        output="screen",
-    )
-
-    omni_odometry = Node(
-        package="lekiwi_controller",
-        executable="omni_odometry",
-        name="omni_odometry",
-        output="screen",
-    )
-
-    # Bridge in real mode: reads /lekiwi/cmd_vel from teleop,
-    # forwards arm state to VLA policy via /lekiwi/joint_states
-    # Also publishes /lekiwi/camera/image_raw from MuJoCo sim
-    bridge_real = Node(
-        package="lekiwi_ros2_bridge",
-        executable="bridge_node",
-        name="lekiwi_ros2_bridge",
-        output="screen",
-        parameters=[{"mode": "real"}],
-    )
-
-    # ── LaunchDescription ──────────────────────────────────────────────────────
-    ld = LaunchDescription([mode_arg])
-
-    # Sim mode actions
-    ld.add_action(bridge_node)
-
-    # Real mode actions (registered but择启动 depends on future expand)
-    # Currently include modular controllers as reference; actual conditional
-    # launch will be added once lekiwi_modular is colcon-built in this workspace.
-    # ld.add_action(omni_controller)
-    # ld.add_action(omni_odometry)
-    # ld.add_action(bridge_real)
-
+    ld = LaunchDescription([sim_type_arg, bridge_node])
     return ld

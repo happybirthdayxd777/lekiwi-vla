@@ -4,22 +4,23 @@ LeKiWi ROS2 ↔ MuJoCo Bridge Node
 ================================
 Bridges ROS2 cmd_vel → MuJoCo sim, and MuJoCo sensor data → ROS2 joint_states.
 
+Supports two simulation backends:
+  - LeKiWiSim      (sim_lekiwi.py)   — cylinder primitives, fast & stable
+  - LeKiWiSimURDF  (sim_lekiwi_urdf.py) — real STL meshes from lekiwi_modular
+
 Topics:
   Input  : /lekiwi/cmd_vel        (geometry_msgs/Twist)
   Output : /lekiwi/joint_states   (sensor_msgs/JointState)
-
-The bridge maps the 3-wheel omni kinematics from omni_controller.py onto
-LeKiWiSim (sim_lekiwi.py) ctrl[6:9], and converts the MuJoCo observation
-back into a ROS2 JointState message.
+  Output : /lekiwi/camera/image_raw (Image, 20 Hz, URDF model only)
 
 Architecture:
   ROS2 /lekiwi/cmd_vel
         ↓ (Twist → [vx, vy, wz])
-  BridgeNode.cmd_vel_callback()
+  BridgeNode._on_cmd_vel()
         ↓
   LeKiWiSim.step(action=[arm*6, wheel_speeds*3])
         ↓
-  BridgeNode.publish_joint_states()
+  BridgeNode._publish_joint_states()
         ↓ (JointState ← MuJoCo obs)
   ROS2 /lekiwi/joint_states
 """
@@ -37,9 +38,10 @@ import numpy as np
 import sys
 import os
 
-# ── LeKiWiSim import ──────────────────────────────────────────────────────────
+# ── Simulation backend imports ─────────────────────────────────────────────────
 sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
 from sim_lekiwi import LeKiWiSim
+from sim_lekiwi_urdf import LeKiWiSimURDF
 
 
 # ── Kinematics constants (from omni_controller.py) ──────────────────────────────
@@ -99,13 +101,30 @@ class LeKiWiBridge(Node):
     ARM_NAMES  = ["j0", "j1", "j2", "j3", "j4", "j5"]
     WHEEL_NAMES = ["w1", "w2", "w3"]
 
-    def __init__(self):
+    def __init__(self, sim_type: str = "primitive"):
+        """
+        Parameters
+        ----------
+        sim_type : str
+            "primitive" → LeKiWiSim (fast cylinders, stable)
+            "urdf"      → LeKiWiSimURDF (STL mesh geometry)
+        """
         super().__init__("lekiwi_ros2_bridge")
 
+        # Declare and retrieve sim_type parameter (set via launch file)
+        self.declare_parameter("sim_type", "primitive")
+        p = self.get_parameter("sim_type")
+        sim_type = str(p.value) if p.value else "primitive"
+
         # ── Initialise MuJoCo simulation ────────────────────────────────────
-        self.get_logger().info("Starting LeKiWi MuJoCo simulation…")
-        self.sim = LeKiWiSim()
-        self.get_logger().info("MuJoCo simulation initialised.")
+        if sim_type == "urdf":
+            self.get_logger().info("Starting LeKiWiSimURDF (STL mesh geometry)…")
+            self.sim: LeKiWiSim | LeKiWiSimURDF = LeKiWiSimURDF()
+            self.get_logger().info("URDF simulation initialised.")
+        else:
+            self.get_logger().info("Starting LeKiWiSim (cylinder primitives)…")
+            self.sim = LeKiWiSim()
+            self.get_logger().info("Primitive simulation initialised.")
 
         # ── ROS2 publishers ────────────────────────────────────────────────────
         qos = QoSProfile(
