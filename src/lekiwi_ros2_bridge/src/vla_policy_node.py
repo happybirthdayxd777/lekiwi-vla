@@ -142,14 +142,21 @@ def _make_clip_fm_policy(pretrained: Optional[str], device: str):
         policy.load_state_dict(state_dict, strict=False)
         print(f"[CLIP-FM] Loaded checkpoint from {ckpt_path}")
     else:
-        # Use the demo policy that was trained
-        default_ckpt = os.path.expanduser(
+        # Priority: fresh URDF-trained checkpoint (clean CLIP architecture)
+        fresh_ckpt = os.path.expanduser(
+            "~/hermes_research/lekiwi_vla/results/fresh_train/policy_urdf_ep5.pt"
+        )
+        old_ckpt = os.path.expanduser(
             "~/hermes_research/lekiwi_vla/results/fm_50ep_improved/policy_ep10.pt"
         )
-        if os.path.exists(default_ckpt):
-            state_dict = torch.load(default_ckpt, map_location=device, weights_only=False)
+        if os.path.exists(fresh_ckpt):
+            state_dict = torch.load(fresh_ckpt, map_location=device, weights_only=False)
+            policy.load_state_dict(state_dict, strict=True)
+            print(f"[CLIP-FM] Loaded fresh URDF-trained checkpoint: {fresh_ckpt}")
+        elif os.path.exists(old_ckpt):
+            state_dict = torch.load(old_ckpt, map_location=device, weights_only=False)
             policy.load_state_dict(state_dict, strict=False)
-            print(f"[CLIP-FM] Loaded default checkpoint: {default_ckpt}")
+            print(f"[CLIP-FM] Loaded old checkpoint (key remapping may be needed): {old_ckpt}")
 
     policy.to(device)
     policy.eval()
