@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-Evaluate a trained Flow Matching policy on LeKiwi simulation.
-Compares trained policy vs random policy baseline.
+Evaluate trained policies on LeKiwi simulation.
+Supports both SimpleCNN-Flow Matching and CLIP-Flow Matching architectures.
 
 Usage:
-  python3 scripts/eval_policy.py --policy flow_matching --checkpoint /tmp/fm_real/final_policy.pt --episodes 10
+  # SimpleCNN-Flow Matching
+  python3 scripts/eval_policy.py --arch simple_cnn_fm --checkpoint /tmp/fm_real/final_policy.pt --episodes 10
+
+  # CLIP-Flow Matching
+  python3 scripts/eval_policy.py --arch clip_fm --checkpoint /tmp/clip_fm_test/final_policy.pt --episodes 10
+
+  # Random baseline
   python3 scripts/eval_policy.py --policy random --episodes 10
 """
 
@@ -20,7 +26,7 @@ from pathlib import Path
 from sim_lekiwi import LeKiwiSim
 
 
-# ─── Policy Network (must match training architecture) ──────────────────────
+# ─── SimpleCNN Vision Encoder (from train_flow_matching_real.py) ──────────────
 
 class VisionEncoder(nn.Module):
     def __init__(self, embed_dim=512):
@@ -43,47 +49,120 @@ class FlowMatchingMLP(nn.Module):
     def __init__(self, vision_dim=512, state_dim=9, action_dim=9, hidden=512):
         super().__init__()
         self.time_mlp = nn.Sequential(nn.Linear(1, 64), nn.SiLU(), nn.Linear(64, 128))
+        total_dim = vision_dim + state_dim + action_dim + 128  # 658
         self.net = nn.Sequential(
-            nn.Linear(vision_dim + state_dim + action_dim + 128, hidden),
-            nn.SiLU(), nn.LayerNorm(hidden),
+            nn.Linear(total_dim, hidden), nn.SiLU(), nn.LayerNorm(hidden),
             nn.Linear(hidden, hidden), nn.SiLU(), nn.LayerNorm(hidden),
             nn.Linear(hidden, hidden), nn.SiLU(), nn.LayerNorm(hidden),
             nn.Linear(hidden, action_dim),
         )
         self.skip = nn.Linear(action_dim, action_dim, bias=False)
 
-    def forward(self, image_embed, state, noisy_action, timestep):
+    def forward(self, vis, state, noisy_action, timestep):
         t_feat = self.time_mlp(timestep)
-        x = torch.cat([image_embed, state, noisy_action, t_feat], dim=-1)
+        x = torch.cat([vis, state, noisy_action, t_feat], dim=-1)
         return self.net(x) + self.skip(noisy_action)
 
 
-class FlowMatchingPolicy(nn.Module):
+class SimpleCNNFlowMatchingPolicy(nn.Module):
+    """SimpleCNN + Flow Matching (8M params)."""
     def __init__(self, state_dim=9, action_dim=9, hidden=512):
         super().__init__()
         self.vision_encoder = VisionEncoder(embed_dim=hidden)
-        self.flow_mlp = FlowMatchingMLP(hidden, state_dim, action_dim, hidden)
-        self.state_dim = state_dim
+        self.flow_head = FlowMatchingMLP(hidden, state_dim, action_dim, hidden)
+        self.state_dim  = state_dim
         self.action_dim = action_dim
 
     def forward(self, image, state, noisy_action, timestep):
         vis = self.vision_encoder(image)
-        return self.flow_mlp(vis, state, noisy_action, timestep)
+        return self.flow_head(vis, state, noisy_action, timestep)
 
     @torch.no_grad()
     def infer(self, image, state, num_steps=4):
-        action = torch.randn(image.shape[0], self.action_dim, device=image.device)
+        action = torch.randn(image.shape[0], self.action_dim, device=next(self.parameters()).device)
         dt = 1.0 / num_steps
         for i in range(num_steps):
             t = torch.full([image.shape[0], 1], 1.0 - i * dt, device=image.device)
             vis = self.vision_encoder(image)
-            velocity = self.flow_mlp(vis, state, action, t)
+            velocity = self.flow_head(vis, state, action, t)
             action = action - dt * velocity
         return action
 
 
+# ─── CLIP Vision Encoder ─────────────────────────────────────────────────────
+
+class CLIPVisionEncoder(nn.Module):
+    """CLIP ViT-B/32 frozen encoder → 768 → 512."""
+    def __init__(self, device="cpu"):
+        super().__init__()
+        from transformers import CLIPModel, CLIPProcessor
+        self.clip = CLIPModel.from_pretrained(
+            "openai/clip-vit-base-patch32",
+            torch_dtype=torch.float32,
+        ).to(device)
+        self.processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        self.device = device
+        for p in self.clip.parameters():
+            p.requires_grad = False
+        self.proj = nn.Linear(768, 512).to(device)
+
+    def forward(self, images):
+        pixel_values = (images * 255).clamp(0, 255).round().to(torch.uint8)
+        with torch.no_grad():
+            out = self.clip.vision_model(pixel_values=pixel_values)
+            pooled = out.pooler_output
+        return self.proj(pooled)
+
+
+class CLIPFlowMatchingHead(nn.Module):
+    def __init__(self, vision_dim=512, state_dim=9, action_dim=9, hidden=512):
+        super().__init__()
+        self.time_mlp = nn.Sequential(nn.Linear(1, 128), nn.SiLU(), nn.Linear(128, 256))
+        total_dim = vision_dim + state_dim + action_dim + 256  # 786
+        self.net = nn.Sequential(
+            nn.Linear(total_dim, hidden), nn.SiLU(), nn.LayerNorm(hidden),
+            nn.Linear(hidden, hidden), nn.SiLU(), nn.LayerNorm(hidden),
+            nn.Linear(hidden, hidden), nn.SiLU(), nn.LayerNorm(hidden),
+            nn.Linear(hidden, action_dim),
+        )
+        self.skip = nn.Linear(action_dim, action_dim, bias=False)
+
+    def forward(self, vis, state, noisy_action, timestep):
+        t_feat = self.time_mlp(timestep)
+        x = torch.cat([vis, state, noisy_action, t_feat], dim=-1)
+        return self.net(x) + self.skip(noisy_action)
+
+
+class CLIPFlowMatchingPolicy(nn.Module):
+    """CLIP ViT-B/32 + Flow Matching (151M frozen + 970K trainable)."""
+    def __init__(self, state_dim=9, action_dim=9, hidden=512, device="cpu"):
+        super().__init__()
+        self.vision_encoder = CLIPVisionEncoder(device=device)
+        self.flow_head = CLIPFlowMatchingHead(vision_dim=hidden, state_dim=state_dim,
+                                              action_dim=action_dim, hidden=hidden)
+        self.state_dim  = state_dim
+        self.action_dim = action_dim
+        self.device = device
+
+    def forward(self, image, state, noisy_action, timestep):
+        vis = self.vision_encoder(image)
+        return self.flow_head(vis, state, noisy_action, timestep)
+
+    @torch.no_grad()
+    def infer(self, image, state, num_steps=4):
+        action = torch.randn(image.shape[0], self.action_dim, device=self.device)
+        dt = 1.0 / num_steps
+        for i in range(num_steps):
+            t = torch.full([image.shape[0], 1], 1.0 - i * dt, device=self.device)
+            vis = self.vision_encoder(image)
+            velocity = self.flow_head(vis, state, action, t)
+            action = action - dt * velocity
+        return action
+
+
+# ─── Random Baseline ─────────────────────────────────────────────────────────
+
 class RandomPolicy:
-    """Baseline: random action uniformly in [-1, 1]."""
     def __init__(self, action_dim=9):
         self.action_dim = action_dim
     def infer(self, image, state, num_steps=4):
@@ -92,8 +171,25 @@ class RandomPolicy:
 
 # ─── Evaluation ──────────────────────────────────────────────────────────────
 
+def make_policy(arch, checkpoint, device):
+    """Load a policy from checkpoint based on architecture."""
+    if arch == "simple_cnn_fm":
+        policy = SimpleCNNFlowMatchingPolicy(state_dim=9, action_dim=9)
+    elif arch == "clip_fm":
+        policy = CLIPFlowMatchingPolicy(state_dim=9, action_dim=9, device=device)
+    else:
+        raise ValueError(f"Unknown arch: {arch}")
+
+    sd = torch.load(checkpoint, map_location=device, weights_only=True)
+    policy.load_state_dict(sd)
+    policy.to(device)
+    policy.eval()
+    return policy
+
+
 def evaluate(policy, device, episodes=10, max_steps=200):
     """Run episodes and collect metrics."""
+    from sim_lekiwi import LeKiwiSim
     sim = LeKiwiSim()
     all_rewards = []
     all_distances = []
@@ -101,91 +197,76 @@ def evaluate(policy, device, episodes=10, max_steps=200):
     for ep in range(episodes):
         sim.reset()
         total_reward = 0.0
-        start_pos = sim.data.qpos[6:9].copy()  # base position [x, y, theta]
+        start_pos = sim.data.qpos[6:9].copy()
 
         for step in range(max_steps):
-            # Get observation
             img_pil = sim.render()
-            img_np = np.array(img_pil.resize((224, 224)), dtype=np.float32) / 255.0
-            img_t  = torch.from_numpy(img_np.transpose(2, 0, 1)).unsqueeze(0).to(device)
+            img_np  = np.array(img_pil.resize((224, 224)), dtype=np.float32) / 255.0
+            img_t   = torch.from_numpy(img_np.transpose(2, 0, 1)).unsqueeze(0).to(device)
 
-            arm_pos  = sim.data.qpos[0:6]
-            wheel_v  = sim.data.qvel[0:3]
-            state_t  = torch.from_numpy(np.concatenate([arm_pos, wheel_v])).float().unsqueeze(0).to(device)
+            arm_pos = sim.data.qpos[0:6]
+            wheel_v = sim.data.qvel[0:3]
+            state_t = torch.from_numpy(np.concatenate([arm_pos, wheel_v])).float().unsqueeze(0).to(device)
 
-            # Get action
             action = policy.infer(img_t, state_t, num_steps=4)
-            action_np = action.cpu().numpy()[0]
+            action_np = np.clip(action.cpu().numpy()[0], -1, 1)
 
-            # Denormalize to [-1, 1] range (already in that range)
-            action_clipped = np.clip(action_np, -1, 1)
-
-            # Step — standalone sim returns dict with reward via get_reward()
-            sim.step(action_clipped)
-            reward = sim.get_reward()  # standalone: -dist - 0.01*effort
+            sim.step(action_np)
+            reward = sim.get_reward()
             total_reward += reward
 
-        # Final distance
         end_pos = sim.data.qpos[6:9]
         dist = np.linalg.norm(end_pos[:2] - start_pos[:2])
-
         all_rewards.append(total_reward)
         all_distances.append(dist)
         print(f"  Episode {ep+1:2d}: reward={total_reward:+.3f}, distance={dist:.3f}m")
 
     return {
-        "mean_reward":  np.mean(all_rewards),
-        "std_reward":   np.std(all_rewards),
-        "mean_distance": np.mean(all_distances),
-        "std_distance":  np.std(all_distances),
-        "all_rewards":   all_rewards,
+        "mean_reward":    np.mean(all_rewards),
+        "std_reward":     np.std(all_rewards),
+        "mean_distance":  np.mean(all_distances),
+        "std_distance":   np.std(all_distances),
+        "all_rewards":    all_rewards,
     }
 
 
-# ─── Main ────────────────────────────────────────────────────────────────────
+# ─── Main ───────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--policy",    type=str,   default="flow_matching")
-    parser.add_argument("--checkpoint",type=str,   default="/tmp/fm_real/final_policy.pt")
-    parser.add_argument("--episodes",  type=int,   default=10)
-    parser.add_argument("--device",    type=str,   default="mps")
-    parser.add_argument("--hidden",    type=int,   default=512)
+    parser.add_argument("--policy",     type=str,   default=None, help="'random' for baseline")
+    parser.add_argument("--arch",       type=str,   default="simple_cnn_fm",
+                        choices=["simple_cnn_fm", "clip_fm"])
+    parser.add_argument("--checkpoint", type=str,   default=None)
+    parser.add_argument("--episodes",   type=int,   default=10)
+    parser.add_argument("--device",     type=str,   default="mps")
     args = parser.parse_args()
 
-    print(f"=" * 60)
-    print(f"  Evaluating: {args.policy}")
-    print(f"  Episodes: {args.episodes} | Device: {args.device}")
-    print(f"=" * 60)
-
-    # Load policy
-    if args.policy == "flow_matching":
-        print(f"\n[1] Loading trained policy from {args.checkpoint}...")
-        policy = FlowMatchingPolicy(state_dim=9, action_dim=9, hidden=args.hidden)
-        state_dict = torch.load(args.checkpoint, map_location=args.device, weights_only=True)
-        policy.load_state_dict(state_dict)
-        policy.to(args.device)
-        policy.eval()
-        print(f"  ✓ Loaded (device={args.device})")
-    elif args.policy == "random":
-        print(f"\n[1] Using random baseline policy")
+    print(f"\n{'='*60}")
+    if args.policy == "random":
+        print(f"  Policy: RANDOM BASELINE")
         policy = RandomPolicy(action_dim=9)
         device = "cpu"
     else:
-        raise ValueError(f"Unknown policy: {args.policy}")
+        if not args.checkpoint:
+            raise ValueError("--checkpoint required for trained policies")
+        print(f"  Architecture: {args.arch}")
+        print(f"  Checkpoint:  {args.checkpoint}")
+        policy = make_policy(args.arch, args.checkpoint, args.device)
+        device = args.device
+    print(f"  Episodes: {args.episodes} | Device: {device}")
+    print(f"{'='*60}\n")
 
-    # Evaluate
-    print(f"\n[2] Running {args.episodes} episodes...")
-    device = args.device if args.policy == "flow_matching" else "cpu"
+    print(f"[Running {args.episodes} episodes...]")
     metrics = evaluate(policy, device, episodes=args.episodes)
 
-    print(f"\n[3] Results:")
-    print(f"  Mean reward:    {metrics['mean_reward']:+.3f} ± {metrics['std_reward']:.3f}")
-    print(f"  Mean distance:  {metrics['mean_distance']:.3f} ± {metrics['std_distance']:.3f}m")
-    print(f"  Best reward:    {max(metrics['all_rewards']):+.3f}")
-    print(f"  Worst reward:   {min(metrics['all_rewards']):+.3f}")
-
-    print("\n✓ Evaluation complete")
+    print(f"\n{'='*40}")
+    print(f"  Mean reward:   {metrics['mean_reward']:+.3f} ± {metrics['std_reward']:.3f}")
+    print(f"  Mean distance: {metrics['mean_distance']:.3f} ± {metrics['std_distance']:.3f}m")
+    print(f"  Best reward:   {max(metrics['all_rewards']):+.3f}")
+    print(f"  Worst reward:  {min(metrics['all_rewards']):+.3f}")
+    print(f"{'='*40}")
+    print("✓ Evaluation complete")
 
 if __name__ == "__main__":
     main()
