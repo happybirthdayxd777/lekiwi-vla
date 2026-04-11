@@ -57,13 +57,14 @@ WHEEL_POSITIONS = np.array([
     [-0.0866, -0.15,   0.0 ],   # wheel 2 — back-right
 ], dtype=np.float64)
 
-# Normalised joint axes (omni rollers)
+# Roller axes from URDF (how each wheel contacts the ground)
+# Wheel 0: pure rotation around Z; Wheel 1/2: 30° offset + 26.6° roller tilt
+# (Corrected from omni_controller_fixed.py analysis)
 _JOINT_AXES = np.array([
-    [0.866025, 0.0, 0.5],
-    [0.866025, 0.0, 0.5],
-    [0.866025, 0.0, 0.5],
+    [0.0,        0.0, -1.0      ],   # wheel 0 — front
+    [0.866025,   0.0,  0.5      ],   # wheel 1 — back-left
+    [-0.866025,  0.0,  0.5      ],   # wheel 2 — back-right
 ], dtype=np.float64)
-_JOINT_AXES /= np.linalg.norm(_JOINT_AXES, axis=1, keepdims=True)
 
 
 def twist_to_wheel_speeds(vx: float, vy: float, wz: float) -> np.ndarray:
