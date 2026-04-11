@@ -252,9 +252,9 @@ class LeKiWiBridge(Node):
         is preserved and only the wheel portion is overridden by cmd_vel.
         When VLA is not active, arms stay at their last commanded position.
 
-        Note: _vla_action_fresh is set True by _on_vla_action and stays True
-        until the next _on_cmd_vel call (which processes a new cmd_vel + VLA action
-        combo). There is NO timer-based clearing -- cmd_vel drives the loop.
+        Note: _vla_action_fresh is set True by _on_vla_action; the timer
+        callback clears it at the end of each tick so stale VLA actions
+        (e.g., if the VLA node dies) are automatically ignored.
         """
         vx = float(msg.linear.x)
         vy = float(msg.linear.y)
@@ -420,6 +420,10 @@ class LeKiWiBridge(Node):
                     self.wrist_cam_pub.publish(wrist_ros)
             except Exception as e:
                 self.get_logger().warn(f"Camera render failed: {e}", once=True)
+
+        # Clear VLA freshness flag at end of each tick so stale VLA actions
+        # (e.g., if the VLA node crashes) are automatically ignored.
+        self._vla_action_fresh = False
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 
