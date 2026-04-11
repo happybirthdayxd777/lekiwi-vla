@@ -6,6 +6,17 @@ Standalone launch for the VLA policy node (no bridge).
 Usage:
   ros2 launch lekiwi_ros2_bridge vla.launch.py policy:=mock device:=cpu
   ros2 launch lekiwi_ros2_bridge vla.launch.py policy:=pi0 pretrained:=/path/to/model device:=cuda
+  ros2 launch lekiwi_ros2_bridge vla.launch.py policy:=clip_fm device:=cpu
+  ros2 launch lekiwi_ros2_bridge vla.launch.py policy:=clip_fm pretrained:=~/hermes_research/lekiwi_vla/results/fm_50ep_improved/policy_ep10.pt device:=cpu
+
+Policies:
+  mock    — sinusoidal testing (no GPU)
+  pi0     — LeRobot pi0 policy
+  pi0_fast— LeRobot pi0_fast policy
+  act     — LeRobot ACT policy
+  diffusion — LeRobot diffusion policy
+  clip_fm — CLIP ViT-B/32 + Flow Matching (scripts/train_clip_fm.py), default
+             checkpoint: ~/hermes_research/lekiwi_vla/results/fm_50ep_improved/policy_ep10.pt
 
 Topics:
   Subscribes:
@@ -25,7 +36,7 @@ def generate_launch_description() -> LaunchDescription:
 
     policy_arg = DeclareLaunchArgument(
         "policy", default_value="mock",
-        description="VLA policy: mock, pi0, pi0_fast, act, diffusion",
+        description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm",
     )
     pretrained_arg = DeclareLaunchArgument(
         "pretrained", default_value="",

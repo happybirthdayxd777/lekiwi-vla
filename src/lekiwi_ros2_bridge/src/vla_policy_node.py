@@ -126,8 +126,93 @@ def _make_lerobot_policy(policy_name: str, pretrained: Optional[str], device: st
     return policy
 
 
+# ── CLIP-Flow Matching policy loader ────────────────────────────────────────
+
+def _make_clip_fm_policy(pretrained: Optional[str], device: str):
+    """Load CLIP-FM policy trained via scripts/train_clip_fm.py."""
+    import torch
+    sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
+    from scripts.train_clip_fm import CLIPFlowMatchingPolicy
+
+    policy = CLIPFlowMatchingPolicy(state_dim=9, action_dim=9, hidden=512, device=device)
+
+    if pretrained:
+        ckpt_path = os.path.expanduser(pretrained)
+        state_dict = torch.load(ckpt_path, map_location=device, weights_only=False)
+        policy.load_state_dict(state_dict, strict=False)
+        print(f"[CLIP-FM] Loaded checkpoint from {ckpt_path}")
+    else:
+        # Use the demo policy that was trained
+        default_ckpt = os.path.expanduser(
+            "~/hermes_research/lekiwi_vla/results/fm_50ep_improved/policy_ep10.pt"
+        )
+        if os.path.exists(default_ckpt):
+            state_dict = torch.load(default_ckpt, map_location=device, weights_only=False)
+            policy.load_state_dict(state_dict, strict=False)
+            print(f"[CLIP-FM] Loaded default checkpoint: {default_ckpt}")
+
+    policy.to(device)
+    policy.eval()
+    return policy
+
+
+def _normalize_state(state: np.ndarray) -> np.ndarray:
+    """
+    Normalize LeKiWi state from native units to [-1,1] policy input.
+    state order: [arm*6, wheel*3]
+    """
+    arm   = state[:6]
+    wheel = state[6:9]
+    arm_norm = np.clip((arm - LEKIWI_ARM_LIMITS[:, 0]) /
+                       (LEKIWI_ARM_LIMITS[:, 1] - LEKIWI_ARM_LIMITS[:, 0]) * 2 - 1,
+                       -1, 1)
+    wheel_norm = np.clip((wheel - LEKIWI_WHEEL_LIMITS[:, 0]) /
+                          (LEKIWI_WHEEL_LIMITS[:, 1] - LEKIWI_WHEEL_LIMITS[:, 0]) * 2 - 1,
+                          -1, 1)
+    return np.concatenate([arm_norm, wheel_norm]).astype(np.float32)
+
+
+class CLIPFMPolicyRunner:
+    """
+    Wrapper that adapts CLIPFlowMatchingPolicy's infer() interface
+    to the same predict(obs) API used by MockPolicyRunner / LeRobot.
+    obs keys: image (np.ndarray HWC uint8), state (np.ndarray [9] native units)
+    """
+
+    def __init__(self, policy, device="cpu"):
+        import torch
+        self.policy = policy
+        self.device = device
+        self.torch = torch
+
+    def predict(self, obs: dict) -> np.ndarray:
+        import torch
+        # Image: HWC uint8 [0,255] → CHW float [0,1]
+        img = obs["image"]  # HWC uint8
+        img = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+        img = img.to(self.device)
+
+        # State: native units → [-1,1]
+        state = _normalize_state(obs["state"]).astype(np.float32)
+        state_t = torch.from_numpy(state).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            action = self.policy.infer(img, state_t, num_steps=4)
+
+        return action.squeeze(0).cpu().numpy()
+
+    def reset(self):
+        pass
+
+
+def _make_clip_fm_policy_wrapper(pretrained: Optional[str], device: str):
+    raw = _make_clip_fm_policy(pretrained, device)
+    return CLIPFMPolicyRunner(raw, device)
+
+
 _POLICY_LOADERS = {
-    "mock": _make_mock_policy,
+    "mock":    _make_mock_policy,
+    "clip_fm": _make_clip_fm_policy_wrapper,
 }
 
 

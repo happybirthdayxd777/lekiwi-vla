@@ -9,7 +9,7 @@ One launch file to rule them all:
 
 Modes:
   sim_type : primitive | urdf
-  policy   : mock | pi0 | pi0_fast | act | diffusion
+  policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm
 
 Starts:
   1. lekiwi_ros2_bridge (bridge node) — ROS2 ↔ MuJoCo
@@ -37,11 +37,11 @@ def generate_launch_description() -> LaunchDescription:
     )
     policy = DeclareLaunchArgument(
         "policy", default_value="mock",
-        description="VLA policy: mock, pi0, pi0_fast, act, diffusion",
+        description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm",
     )
     pretrained = DeclareLaunchArgument(
         "pretrained", default_value="",
-        description="Path to pretrained LeRobot policy checkpoint",
+        description="Path to pretrained policy checkpoint (LeRobot or clip_fm .pt)",
     )
     device = DeclareLaunchArgument(
         "device", default_value="cpu",
