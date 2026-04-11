@@ -147,20 +147,43 @@ class LeKiWiBridge(Node):
         """
         super().__init__("lekiwi_ros2_bridge")
 
-        # Declare and retrieve sim_type parameter (set via launch file)
+        # Declare and retrieve parameters (set via launch file)
         self.declare_parameter("sim_type", "primitive")
-        p = self.get_parameter("sim_type")
-        sim_type = str(p.value) if p.value else "primitive"
+        self.declare_parameter("mode", "sim")
+        p_sim = self.get_parameter("sim_type")
+        p_mode = self.get_parameter("mode")
+        sim_type = str(p_sim.value) if p_sim.value else "primitive"
+        self.mode = str(p_mode.value) if p_mode.value else "sim"
 
-        # ── Initialise MuJoCo simulation ────────────────────────────────────
-        if sim_type == "urdf":
+        # ── Initialise simulation OR real hardware ────────────────────────
+        if self.mode == "real":
+            self.get_logger().info("Starting REAL HARDWARE mode (serial servos)…")
+            from real_hardware_adapter import RealHardwareAdapter, MockHardwareAdapter
+            # Try real hardware; fall back to mock if serial unavailable
+            self.hw: RealHardwareAdapter | MockHardwareAdapter = RealHardwareAdapter(
+                port="/dev/ttyUSB0",
+                baudrate=115200,
+                arm_servo_ids=[1, 2, 3, 4, 5],
+                wheel_servo_ids=[10, 11, 12],
+                arm_num_joints=5,
+                wheel_num_joints=3,
+            )
+            if not self.hw.connect():
+                self.get_logger().warn("Real hardware unavailable — using mock adapter")
+                self.hw = MockHardwareAdapter()
+                self.hw.connect()
+            self.sim = None
+            self.get_logger().info("Real hardware adapter ready.")
+        elif sim_type == "urdf":
             self.get_logger().info("Starting LeKiWiSimURDF (STL mesh geometry)…")
             self.sim: LeKiWiSim | LeKiWiSimURDF = LeKiWiSimURDF()
             self.get_logger().info("URDF simulation initialised.")
+            self.hw = None
         else:
             self.get_logger().info("Starting LeKiWiSim (cylinder primitives)…")
             self.sim = LeKiWiSim()
             self.get_logger().info("Primitive simulation initialised.")
+            self.hw = None
 
         # CTF security monitor
         self.security_monitor = SecurityMonitor()
@@ -227,6 +250,11 @@ class LeKiWiBridge(Node):
         self._last_action = np.zeros(9, dtype=np.float64)   # [arm*6, wheel*3]
         self._vla_action_fresh = False                       # set True when VLA writes action
         self._frame_count = 0
+
+        # ── Watchdog timer for real hardware mode ──────────────────────────────
+        self._last_cmd_vel_time = self.get_clock().now()
+        self._watchdog_timer = self.create_timer(0.5, self._on_watchdog)   # 2 Hz check
+        self._watchdog_count = 0
         # Odometry state (mirrors omni_odometry.py)
         self._odom_x = 0.0
         self._odom_y = 0.0
@@ -252,10 +280,12 @@ class LeKiWiBridge(Node):
         is preserved and only the wheel portion is overridden by cmd_vel.
         When VLA is not active, arms stay at their last commanded position.
 
-        Note: _vla_action_fresh is set True by _on_vla_action; the timer
-        callback clears it at the end of each tick so stale VLA actions
-        (e.g., if the VLA node dies) are automatically ignored.
+        In real hardware mode, also resets the watchdog timer.
         """
+        # Reset watchdog timer on any cmd_vel
+        self._last_cmd_vel_time = self.get_clock().now()
+        self._watchdog_count = 0
+
         vx = float(msg.linear.x)
         vy = float(msg.linear.y)
         wz = float(msg.angular.z)
@@ -275,18 +305,25 @@ class LeKiWiBridge(Node):
         wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
 
         # If VLA has set an arm action, keep arms; otherwise keep last arm pos.
-        # _vla_action_fresh is cleared after each timer step so we know whether
-        # to trust the arm portion of _last_action.
         if self._vla_action_fresh:
             arm_action = self._last_action[0:6]
         else:
-            # No VLA action yet: hold arms at last commanded position
             arm_action = self._last_action[0:6]
 
-        # Build full action vector for MuJoCo
-        action = np.concatenate([arm_action, wheel_speeds]).astype(np.float64)
+        # ── Real hardware mode: send commands to serial servos ───────────
+        if self.mode == "real" and self.hw is not None:
+            self.hw.queue_arm_positions(list(arm_action[:self.hw.arm_num_joints]))
+            self.hw.queue_wheel_velocities(list(wheel_speeds))
+            self._last_action = np.concatenate([arm_action, wheel_speeds])
+            # Republish wheel velocities (mirrors real robot)
+            for i, speed in enumerate(wheel_speeds):
+                wm = Float64()
+                wm.data = float(speed)
+                self.wheel_pubs[i].publish(wm)
+            return
 
-        # Execute one simulation step
+        # ── Simulation mode: step MuJoCo ─────────────────────────────────
+        action = np.concatenate([arm_action, wheel_speeds]).astype(np.float64)
         self.sim.step(action)
         self._last_action = action
 
@@ -320,8 +357,82 @@ class LeKiWiBridge(Node):
     # ── Timer callback ─────────────────────────────────────────────────────────
 
     def _on_timer(self):
-        """Publish MuJoCo state as JointState + Odometry + camera Image."""
+        """Publish state as JointState + Odometry + camera Image."""
         now = self.get_clock().now()
+
+        # ── Real hardware mode: read from serial servos ─────────────────
+        if self.mode == "real" and self.hw is not None:
+            obs = self.hw.get_state()
+            wheel_vel = obs["wheel_velocities"]
+            dt = 0.05
+            # Accumulate wheel positions
+            self._wheel_posAccum = getattr(self, '_wheel_posAccum', np.zeros(3)) + wheel_vel * dt
+
+            # Odometry from wheel velocities
+            vx_total = 0.0
+            vy_total = 0.0
+            wz_total = 0.0
+            wheel_base = 0.1732
+            for i in range(3):
+                angular_speed = wheel_vel[i]
+                wheel_vel_world = angular_speed * WHEEL_RADIUS * _JOINT_AXES[i]
+                vx_total += wheel_vel_world[0] / 3.0
+                vy_total += wheel_vel_world[1] / 3.0
+                wz_total += np.cross(WHEEL_POSITIONS[i], wheel_vel_world)[2] / (3.0 * wheel_base)
+
+            self._odom_theta += wz_total * dt
+            self._odom_x += (vx_total * np.cos(self._odom_theta) - vy_total * np.sin(self._odom_theta)) * dt
+            self._odom_y += (vx_total * np.sin(self._odom_theta) + vy_total * np.cos(self._odom_theta)) * dt
+
+            # Publish /lekiwi/odom
+            odom_msg = Odometry()
+            odom_msg.header.stamp = now.to_msg()
+            odom_msg.header.frame_id = "odom"
+            odom_msg.child_frame_id = "base_link"
+            odom_msg.pose.pose.position.x = self._odom_x
+            odom_msg.pose.pose.position.y = self._odom_y
+            odom_msg.pose.pose.orientation.z = np.sin(self._odom_theta / 2.0)
+            odom_msg.pose.pose.orientation.w = np.cos(self._odom_theta / 2.0)
+            odom_msg.twist.twist.linear.x = vx_total
+            odom_msg.twist.twist.linear.y = vy_total
+            odom_msg.twist.twist.angular.z = wz_total
+            self.odom_pub.publish(odom_msg)
+
+            # Publish TF
+            tf_msg = TransformStamped()
+            tf_msg.header.stamp = now.to_msg()
+            tf_msg.header.frame_id = "odom"
+            tf_msg.child_frame_id = "base_link"
+            tf_msg.transform.translation.x = self._odom_x
+            tf_msg.transform.translation.y = self._odom_y
+            tf_msg.transform.rotation.z = np.sin(self._odom_theta / 2.0)
+            tf_msg.transform.rotation.w = np.cos(self._odom_theta / 2.0)
+            self.tf_broadcaster.sendTransform(tf_msg)
+
+            # JointState (canonical names)
+            wheel_pos = list(self._wheel_posAccum)
+            arm_pos = list(obs["arm_positions"][:6])
+            arm_vel = list(obs["arm_velocities"][:6])
+            msg = JointState()
+            msg.header.stamp = now.to_msg()
+            msg.name = self.ARM_NAMES + self.WHEEL_NAMES
+            msg.position = arm_pos + wheel_pos
+            msg.velocity = arm_vel + list(wheel_vel)
+            self.joint_state_pub.publish(msg)
+
+            # URDF-compatible JointState
+            urdf_msg = JointState()
+            urdf_msg.header.stamp = now.to_msg()
+            urdf_msg.name = URDF_ARM_JOINT_NAMES + URDF_WHEEL_JOINT_NAMES
+            urdf_msg.position = arm_pos + wheel_pos
+            urdf_msg.velocity = arm_vel + list(wheel_vel)
+            self.joint_state_urdf_pub.publish(urdf_msg)
+
+            # Clear VLA freshness
+            self._vla_action_fresh = False
+            return
+
+        # ── Simulation mode: read from MuJoCo ───────────────────────────
         obs = self.sim._obs()
         dt = 0.05   # matches timer period
 
@@ -424,6 +535,30 @@ class LeKiWiBridge(Node):
         # Clear VLA freshness flag at end of each tick so stale VLA actions
         # (e.g., if the VLA node crashes) are automatically ignored.
         self._vla_action_fresh = False
+
+    # ── Watchdog ─────────────────────────────────────────────────────────────────
+
+    def _on_watchdog(self):
+        """
+        Hardware safety watchdog: if no cmd_vel received in >1s, halt servos.
+        Only active in real hardware mode.
+        """
+        if self.mode != "real":
+            return
+        now = self.get_clock().now()
+        dt = (now - self._last_cmd_vel_time).nanoseconds / 1e9
+        if dt > 1.0:
+            self._watchdog_count += 1
+            if self._watchdog_count == 1:
+                self.get_logger().warn(
+                    f"⚠️ cmd_vel watchdog timeout ({dt:.1f}s) — halting servos",
+                    throttle_duration_sec=5.0)
+            # Send zero velocity to all servos (emergency stop)
+            if self.hw is not None:
+                zero_arm  = [0.0] * self.hw.arm_num_joints
+                zero_wheel = [0.0] * self.hw.wheel_num_joints
+                self.hw.queue_arm_positions(zero_arm, speed_rpm=10.0)
+                self.hw.queue_wheel_velocities(zero_wheel)
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 

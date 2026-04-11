@@ -1,0 +1,74 @@
+# LeKiWi Hardware Configuration
+# =============================================================
+# This file defines the physical parameters for real hardware mode.
+# MuJoCo sim is bypassed; bridge_node reads servo feedback directly.
+# =============================================================
+
+# Serial / USB connection to servo controller
+servo:
+  port: "/dev/ttyUSB0"          # USB-serial adapter for ST3215 servo controllers
+  baudrate: 115200
+  timeout: 0.1                  # seconds
+
+# Arm servo IDs and joint mapping
+arm:
+  num_joints: 5
+  joint_names:
+    - "shoulder_pan"     # ST3215_03a-v1-1 — base rotation
+    - "shoulder_lift"    # ST3215_03a-v1-2
+    - "elbow"            # ST3215_03a-v1-3
+    - "wrist_pitch"      # ST3215_03a-v1-4
+    - "wrist_roll"       # ST3215_03a-v1-5
+  servo_ids: [1, 2, 3, 4, 5]   # ST3215 servo IDs on serial bus
+  # Position limits (radians)
+  limits:
+    shoulder_pan:  [-1.57, 1.57]
+    shoulder_lift: [-1.57, 1.57]
+    elbow:         [-1.57, 1.57]
+    wrist_pitch:   [-1.57, 1.57]
+    wrist_roll:    [-3.14, 3.14]   # continuous
+  # Velocity limits (rad/s)
+  max_velocity: 5.0
+
+# Wheel parameters (omni-wheel mobile base)
+wheel:
+  num_wheels: 3
+  wheel_names:
+    - "wheel_0"
+    - "wheel_1"
+    - "wheel_2"
+  joint_names:
+    - "ST3215_Servo_Motor-v1_Revolute-64"      # FL
+    - "ST3215_Servo_Motor-v1-1_Revolute-62"    # FR
+    - "ST3215_Servo_Motor-v1-2_Revolute-60"    # RL
+  radius: 0.05                # wheel radius (m)
+  base: 0.1732               # wheel base radius (m)
+  servo_ids: [10, 11, 12]    # wheel servo IDs
+  max_velocity: 20.0        # rad/s safety limit
+
+# Camera configuration
+camera:
+  wrist:
+    device: "/dev/video2"    # USB webcam on wrist
+    width: 640
+    height: 480
+    fps: 30
+  front:
+    device: "/dev/video0"    # USB webcam on front
+    width: 640
+    height: 480
+    fps: 30
+
+# Topic names (hardware mode overrides)
+topics:
+  arm_commands: "/lekiwi/arm_commands"    # Input: Float64MultiArray from controller
+  joint_states: "/lekiwi/joint_states"    # Output: from servo feedback
+  cmd_vel: "/lekiwi/cmd_vel"              # Input: mobile base velocity
+  wheel_cmd: "/lekiwi/wheel_cmd"          # Output: individual wheel velocity
+
+# Safety
+safety:
+  enable_fingerprint: true          # HMAC verification of servo commands
+  fingerprint_key_file: "~/.lekiwi/hardware.key"
+  watchdog_timeout: 0.5            # seconds — crash if no cmd_vel received
+  max_acceleration: 5.0           # rad/s²
