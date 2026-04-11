@@ -7,6 +7,25 @@ ROS2 topics/launch  →  ros2_lekiwi_bridge  →  lekiwi_vla MuJoCo sim  →  VL
 
 ---
 
+## [2026-04-14 03:30]
+
+### 已完成
+- **修復 VLA 閉環死鎖：`_vla_action_fresh` 計時器清除**
+  - 問題：`_vla_action_fresh` 在 `_on_vla_action()` 設為 True 後**永不清除**，導致 VLA action 永久鎖死手臂（即使 VLA node 當機）
+  - 修復：在 `_on_timer()` 末尾清除 `_vla_action_fresh = False`
+  - 效果：每 50ms 週期結束後，若無新 VLA action，手臂自動釋放回 cmd_vel 控制
+  - Docstring 更新以反映計時器驅動清除機制
+  - Git pushed: `72172a4`
+
+### 下一步
+- Phase 5: Camera → VLA input pipeline — wrist camera image → VLA policy
+- Phase 4: 統一 launch — `sim_type:=gazebo` 模式對接真實 Gazebo
+
+### 阻礙
+- なし（架構 Phase 1-3 完整）
+
+---
+
 ## [2026-04-13 23:00]
 
 ### 已完成
