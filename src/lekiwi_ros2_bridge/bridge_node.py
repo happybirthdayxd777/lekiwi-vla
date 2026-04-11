@@ -69,11 +69,12 @@ URDF_WHEEL_JOINT_NAMES = [
     "ST3215_Servo_Motor-v1-2_Revolute-60",     # wheel_2 → w3 in bridge
 ]
 URDF_ARM_JOINT_NAMES = [
-    "ST3215_Servo_Motor-v1-1_Revolute-49",    # arm_j0
-    "ST3215_Servo_Motor-v1-2_Revolute-51",    # arm_j1
-    "ST3215_Servo_Motor-v1-3_Revolute-53",    # arm_j2
-    "STS3215_03a_Wrist_Roll-v1_Revolute-55", # arm_j3
-    "STS3215_03a-v1-4_Revolute-57",          # arm_j4
+    "STS3215_03a-v1_Revolute-45",             # arm_j0 — shoulder pan (axis≈Z, range ±1.57)
+    "STS3215_03a-v1-1_Revolute-49",           # arm_j1 — shoulder lift (axis=[1,0,0], range -3.14..0)
+    "STS3215_03a-v1-2_Revolute-51",           # arm_j2 — elbow (axis=[1,0,0], range 0..3.14)
+    "STS3215_03a-v1-3_Revolute-53",           # arm_j3 — wrist pitch (axis=[1,0,0], range 0..3.14)
+    "STS3215_03a_Wrist_Roll-v1_Revolute-55", # arm_j4 — wrist roll (axis=[0,0.423,-0.906])
+    "STS3215_03a-v1-4_Revolute-57",          # arm_j5 — gripper slide (axis=[0,-0.906,-0.423], range ±1.57)
 ]
 
 
@@ -375,14 +376,13 @@ class LeKiWiBridge(Node):
         # Maps bridge canonical names → URDF Gazebo plugin joint names
         urdf_msg = JointState()
         urdf_msg.header.stamp = now.to_msg()
-        # Arm: bridge arm_names → URDF arm joint names (first 5 of 6)
-        # Gripper (j5) not in URDF Gazebo plugin — omit or map to last arm
-        urdf_arm_names = URDF_ARM_JOINT_NAMES
+        # Arm: bridge arm_names → URDF arm joint names (all 6, including gripper j5)
+        urdf_arm_names = URDF_ARM_JOINT_NAMES   # 6 joints
         urdf_wheel_names = URDF_WHEEL_JOINT_NAMES
         urdf_msg.name = urdf_arm_names + urdf_wheel_names
-        # Pad arm_positions to 5 for URDF (omit j5/gripper which is not in Gazebo plugin)
-        urdf_msg.position = list(obs.get("arm_positions", np.zeros(6)))[:5] + wheel_pos
-        urdf_msg.velocity = list(obs.get("arm_velocities", np.zeros(6)))[:5] + list(wheel_vel)
+        # arm_positions[0:6] includes j5/gripper (slide joint)
+        urdf_msg.position = list(obs.get("arm_positions", np.zeros(6))) + wheel_pos
+        urdf_msg.velocity = list(obs.get("arm_velocities", np.zeros(6))) + list(wheel_vel)
         self.joint_state_urdf_pub.publish(urdf_msg)
 
         # ── Camera Images ────────────────────────────────────────────────────
