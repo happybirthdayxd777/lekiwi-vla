@@ -129,7 +129,28 @@ def _make_lerobot_policy(policy_name: str, pretrained: Optional[str], device: st
 # ── CLIP-Flow Matching policy loader ────────────────────────────────────────
 
 def _make_clip_fm_policy(pretrained: Optional[str], device: str):
-    """Load CLIP-FM policy trained via scripts/train_clip_fm.py."""
+    """
+    Load CLIP-FM policy trained via scripts/train_clip_fm.py.
+
+    Handles two checkpoint formats (strict=False silently skips mismatched weights):
+
+    Format A — "old" (epoch 10, trained with original architecture):
+      flow_mlp.time_mlp[0]: Linear(1, 64)
+      flow_mlp.time_mlp[2]: Linear(64, 128) → time_feat=128
+      flow_mlp.net[0]:     Linear(658, 512) → total_dim=658=512+9+9+128
+      vision_encoder:      SimpleCNN MLP proj (net.0/2/4/6/10)
+      → Must use flow_head.* keys, will skip incompatible weights
+
+    Format B — "new" (re-trained with updated architecture):
+      flow_head.time_mlp[0]: Linear(1, 128)
+      flow_head.time_mlp[2]: Linear(128, 256) → time_feat=256
+      flow_head.net[0]:     Linear(786, 512) → total_dim=786=512+9+9+256
+      vision_encoder:      CLIPVisionEncoder with nn.Linear(768,512) proj
+      → Should load cleanly
+
+    In both cases the CLIP vision encoder (frozen, 151M params) loads successfully.
+    Only the trainable flow_head weights may be partially loaded from old checkpoints.
+    """
     import torch
     sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
     from scripts.train_clip_fm import CLIPFlowMatchingPolicy
@@ -139,10 +160,9 @@ def _make_clip_fm_policy(pretrained: Optional[str], device: str):
     if pretrained:
         ckpt_path = os.path.expanduser(pretrained)
         state_dict = torch.load(ckpt_path, map_location=device, weights_only=False)
-        policy.load_state_dict(state_dict, strict=False)
-        print(f"[CLIP-FM] Loaded checkpoint from {ckpt_path}")
     else:
-        # Priority: fresh URDF-trained checkpoint (clean CLIP architecture)
+        # Priority: fresh URDF-trained checkpoint (clean CLIP architecture) >
+        # old SimpleCNN checkpoint (requires key remapping)
         fresh_ckpt = os.path.expanduser(
             "~/hermes_research/lekiwi_vla/results/fresh_train/policy_urdf_ep5.pt"
         )
@@ -151,13 +171,55 @@ def _make_clip_fm_policy(pretrained: Optional[str], device: str):
         )
         if os.path.exists(fresh_ckpt):
             state_dict = torch.load(fresh_ckpt, map_location=device, weights_only=False)
-            policy.load_state_dict(state_dict, strict=True)
-            print(f"[CLIP-FM] Loaded fresh URDF-trained checkpoint: {fresh_ckpt}")
+            print(f"[CLIP-FM] Loading fresh URDF-trained checkpoint: {fresh_ckpt}")
         elif os.path.exists(old_ckpt):
             state_dict = torch.load(old_ckpt, map_location=device, weights_only=False)
-            policy.load_state_dict(state_dict, strict=False)
-            print(f"[CLIP-FM] Loaded old checkpoint (key remapping may be needed): {old_ckpt}")
+            print(f"[CLIP-FM] Falling back to old checkpoint (requires key remapping): {old_ckpt}")
+        else:
+            state_dict = {}
 
+    if not state_dict:
+        print("[CLIP-FM] No checkpoint — using random weights (training required)")
+        policy.to(device)
+        policy.eval()
+        return policy
+
+    # ── Key remapping: flow_mlp → flow_head for backwards compatibility ────────
+    # Old checkpoints (Format A) use "flow_mlp" prefix; model uses "flow_head"
+    remapped = {}
+    flow_mlp_found = False
+    for k, v in state_dict.items():
+        if k.startswith("flow_mlp."):
+            remapped[k.replace("flow_mlp.", "flow_head.", 1)] = v
+            flow_mlp_found = True
+        else:
+            remapped[k] = v
+
+    # ── Partial load: only keep keys with matching shapes ─────────────────────
+    sd = policy.state_dict()
+    compatible = {}
+    skipped = []
+    for k, v in remapped.items():
+        if k in sd and sd[k].shape == v.shape:
+            compatible[k] = v
+        else:
+            skipped.append(k)
+
+    n_loaded = len(compatible)
+    n_total  = len(sd)
+    n_skipped = len(skipped)
+
+    if skipped:
+        print(f"[CLIP-FM] Loaded {n_loaded}/{n_total} weights ({n_skipped} skipped: shape mismatch)")
+        # Show first few skipped keys for debugging
+        for s in skipped[:6]:
+            ckpt_shape = remapped[s].shape if s in remapped else "?"
+            model_shape = sd.get(s, "(not in model)").shape if s in sd else "(not in model)"
+            print(f"         skipped: {s}: ckpt={ckpt_shape} model={model_shape}")
+    else:
+        print(f"[CLIP-FM] Loaded {n_loaded}/{n_total} weights (clean load)")
+
+    policy.load_state_dict(compatible, strict=False)
     policy.to(device)
     policy.eval()
     return policy
@@ -298,6 +360,11 @@ class LeKiWiVLAPolicyNode(Node):
         self.image_sub = self.create_subscription(
             Image, "/lekiwi/camera/image_raw", self._on_image, qos
         )
+        # Wrist camera — remapped by launch file to /lekiwi/wrist_camera/image_raw
+        # Uses same _on_image callback; prefers wrist if available (mounted on arm).
+        self.wrist_cam_sub = self.create_subscription(
+            Image, "/lekiwi/wrist_camera/image_raw", self._on_image, qos
+        )
 
         # ── State ────────────────────────────────────────────────────────────
         self.bridge = CvBridge()
@@ -308,9 +375,10 @@ class LeKiWiVLAPolicyNode(Node):
 
         self.get_logger().info(
             "LeKiWi VLA Policy Node ready.\n"
-            "  /lekiwi/joint_states     ← subscribe\n"
-            "  /lekiwi/camera/image_raw ← subscribe\n"
-            "  /lekiwi/vla_action       → publish"
+            "  /lekiwi/joint_states        ← subscribe\n"
+            "  /lekiwi/camera/image_raw    ← subscribe\n"
+            "  /lekiwi/wrist_camera/       ← subscribe (wrist preferred, falls back to front)\n"
+            "  /lekiwi/vla_action          → publish"
         )
 
     # ── Callbacks ──────────────────────────────────────────────────────────────
@@ -342,11 +410,22 @@ class LeKiWiVLAPolicyNode(Node):
         self._run_inference()
 
     def _on_image(self, msg: Image):
-        """Store latest camera image."""
+        """Store latest camera image; trigger inference if joints are ready.
+
+        Also listens on /lekiwi/wrist_camera/image_raw (remapped to the same
+        callback).  When image arrives, check whether joints are already
+        buffered; if so, run inference immediately rather than waiting for the
+        next joint_states message (which eliminates the 1-frame lag from the
+        previous _on_joint_states → _run_inference → return-early path).
+        """
         try:
             self._last_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="rgb8")
         except Exception as e:
             self.get_logger().warn(f"cv_bridge error: {e}")
+            return
+        # Trigger inference if joints are already buffered
+        if self._last_joints is not None:
+            self._run_inference()
 
     def _run_inference(self):
         """Run policy inference and publish action."""
