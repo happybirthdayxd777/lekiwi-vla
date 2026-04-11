@@ -10,8 +10,10 @@ Usage:
   ros2 launch lekiwi_ros2_bridge bridge.launch.py sim_type:=urdf
 
 The bridge node subscribes to /lekiwi/cmd_vel and publishes:
-  /lekiwi/joint_states  — joint positions + velocities
-  /lekiwi/camera/image_raw — camera image (20 Hz, URDF mode only)
+  /lekiwi/joint_states           — joint positions + velocities
+  /lekiwi/camera/image_raw       — front camera image (20 Hz)
+  /lekiwi/wrist_camera/image_raw — wrist camera image (20 Hz, URDF mode only)
+  /lekiwi/wheel_N/cmd_vel       — wheel velocity commands
 """
 
 import launch

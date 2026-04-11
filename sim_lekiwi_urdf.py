@@ -220,6 +220,9 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                                           rgba="0.4 0.4 0.4 1" mass="0.03"/>
                                     <geom name="wcm_body" type="mesh" mesh="wrist_cam_body"
                                           rgba="0.35 0.35 0.35 1" mass="0.02"/>
+                                    <!-- Wrist camera sensor: 80° FOV, follows arm_j4 rotation -->
+                                    <camera name="wrist" pos="0.008 0 -0.018"
+                                            xyaxes="1 0 0 0 1 0" fovy="80"/>
                                 </body>
                             </body>
                         </body>
@@ -311,7 +314,17 @@ class LeKiWiSimURDF:
         return -float(np.linalg.norm(self._target[:2] - self.data.qpos[:2]))
 
     def render(self) -> Optional[np.ndarray]:
+        """Render from front camera (640x480)."""
         cam_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "front")
+        r = mujoco.Renderer(self.model, 640, 480)
+        r.update_scene(self.data, camera=cam_id)
+        img = r.render()
+        r.close()
+        return img
+
+    def render_wrist(self) -> Optional[np.ndarray]:
+        """Render from wrist camera (640x480, follows arm_j4 rotation)."""
+        cam_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist")
         r = mujoco.Renderer(self.model, 640, 480)
         r.update_scene(self.data, camera=cam_id)
         img = r.render()
@@ -363,9 +376,11 @@ def test_camera():
     sim.reset()
     img = sim.render()
     if img is not None:
-        print(f"  ✓ shape={img.shape}, dtype={img.dtype}")
-        return True
-    return False
+        print(f"  ✓ front shape={img.shape}, dtype={img.dtype}")
+    wrist_img = sim.render_wrist()
+    if wrist_img is not None:
+        print(f"  ✓ wrist  shape={wrist_img.shape}, dtype={wrist_img.dtype}")
+    return (img is not None) and (wrist_img is not None)
 
 
 if __name__ == "__main__":

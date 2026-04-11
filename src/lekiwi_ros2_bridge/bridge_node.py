@@ -145,7 +145,8 @@ class LeKiWiBridge(Node):
         self.joint_state_pub = self.create_publisher(JointState, "/lekiwi/joint_states", qos)
 
         # Camera bridge: MuJoCo → ROS2 image
-        self.camera_pub = self.create_publisher(Image, "/lekiwi/camera/image_raw", qos)
+        self.camera_pub  = self.create_publisher(Image, "/lekiwi/camera/image_raw",    qos)
+        self.wrist_cam_pub = self.create_publisher(Image, "/lekiwi/wrist_camera/image_raw", qos)
         self.bridge = CvBridge()
 
         # Separate publishers for each wheel (mirrors omni_controller output)
@@ -283,16 +284,26 @@ class LeKiWiBridge(Node):
 
         self.joint_state_pub.publish(msg)
 
-        # ── Camera Image ────────────────────────────────────────────────────
+        # ── Camera Images ────────────────────────────────────────────────────
         self._frame_count += 1
         if self._frame_count % 1 == 0:   # publish every frame (20 Hz)
             try:
+                # Front camera
                 img_pil = self.sim.render(640, 480)
                 img_np  = np.asarray(img_pil)
                 ros_img = self.bridge.cv2_to_imgmsg(img_np, encoding="rgb8")
                 ros_img.header.stamp = msg.header.stamp
                 ros_img.header.frame_id = "lekiwi_camera"
                 self.camera_pub.publish(ros_img)
+
+                # Wrist camera (URDF model only)
+                if hasattr(self.sim, 'render_wrist'):
+                    wrist_pil = self.sim.render_wrist()
+                    wrist_np  = np.asarray(wrist_pil)
+                    wrist_ros = self.bridge.cv2_to_imgmsg(wrist_np, encoding="rgb8")
+                    wrist_ros.header.stamp = msg.header.stamp
+                    wrist_ros.header.frame_id = "wrist_camera"
+                    self.wrist_cam_pub.publish(wrist_ros)
             except Exception as e:
                 self.get_logger().warn(f"Camera render failed: {e}", once=True)
 

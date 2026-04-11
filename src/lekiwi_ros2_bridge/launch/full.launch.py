@@ -14,7 +14,12 @@ Modes:
 Starts:
   1. lekiwi_ros2_bridge (bridge node) — ROS2 ↔ MuJoCo
   2. lekiwi_vla_policy_node            — VLA policy inference
-  3. Optional: Gazebo simulation (when sim_type=gazebo)
+
+Topics published by bridge:
+  /lekiwi/joint_states           — arm (6) + wheel (3) positions & velocities
+  /lekiwi/camera/image_raw       — front camera (20 Hz)
+  /lekiwi/wrist_camera/image_raw — wrist camera (20 Hz, URDF mode only)
+  /lekiwi/wheel_N/cmd_vel       — wheel velocity (Float64)
 """
 
 import os
@@ -65,7 +70,7 @@ def generate_launch_description() -> LaunchDescription:
         remappings=[
             # VLA node reads from bridge's joint_states output
             ("/lekiwi/joint_states",    "/lekiwi/joint_states"),
-            ("/lekiwi/camera/image_raw","/lekiwi/camera/image_raw"),
+            ("/lekiwi/camera/image_raw", "/lekiwi/camera/image_raw"),
         ],
         output="screen",
     )
