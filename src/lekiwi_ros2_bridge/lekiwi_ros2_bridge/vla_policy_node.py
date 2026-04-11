@@ -360,6 +360,11 @@ class LeKiWiVLAPolicyNode(Node):
         self.image_sub = self.create_subscription(
             Image, "/lekiwi/camera/image_raw", self._on_image, qos
         )
+        # Wrist camera — remapped by launch file to /lekiwi/wrist_camera/image_raw
+        # Uses same _on_image callback; prefers wrist if available (mounted on arm).
+        self.wrist_cam_sub = self.create_subscription(
+            Image, "/lekiwi/wrist_camera/image_raw", self._on_image, qos
+        )
 
         # ── State ────────────────────────────────────────────────────────────
         self.bridge = CvBridge()
@@ -370,9 +375,10 @@ class LeKiWiVLAPolicyNode(Node):
 
         self.get_logger().info(
             "LeKiWi VLA Policy Node ready.\n"
-            "  /lekiwi/joint_states     ← subscribe\n"
-            "  /lekiwi/camera/image_raw ← subscribe\n"
-            "  /lekiwi/vla_action       → publish"
+            "  /lekiwi/joint_states        ← subscribe\n"
+            "  /lekiwi/camera/image_raw    ← subscribe\n"
+            "  /lekiwi/wrist_camera/       ← subscribe (wrist preferred, falls back to front)\n"
+            "  /lekiwi/vla_action          → publish"
         )
 
     # ── Callbacks ──────────────────────────────────────────────────────────────
@@ -404,11 +410,22 @@ class LeKiWiVLAPolicyNode(Node):
         self._run_inference()
 
     def _on_image(self, msg: Image):
-        """Store latest camera image."""
+        """Store latest camera image; trigger inference if joints are ready.
+
+        Also listens on /lekiwi/wrist_camera/image_raw (remapped to the same
+        callback).  When image arrives, check whether joints are already
+        buffered; if so, run inference immediately rather than waiting for the
+        next joint_states message (which eliminates the 1-frame lag from the
+        previous _on_joint_states → _run_inference → return-early path).
+        """
         try:
             self._last_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="rgb8")
         except Exception as e:
             self.get_logger().warn(f"cv_bridge error: {e}")
+            return
+        # Trigger inference if joints are already buffered
+        if self._last_joints is not None:
+            self._run_inference()
 
     def _run_inference(self):
         """Run policy inference and publish action."""
