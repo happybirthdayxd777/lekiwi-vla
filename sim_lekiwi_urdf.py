@@ -78,6 +78,11 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
         <mesh name="base_q"        file="{_mp2('Base_08q-v1.stl')}"          scale="0.001 0.001 0.001"/>
         <mesh name="wave_plate"     file="{_mp2('WaveShare_Mounting_Plate_01d-v1.stl')}" scale="0.001 0.001 0.001"/>
         <mesh name="arm_clip"       file="{_mp2('SO_ARM100_08k_Asym_Mirror_Clip-v1.stl')}" scale="0.001 0.001 0.001"/>
+
+        <!-- Omni wheel meshes (from urdf/meshes/) — scale on asset, not geom -->
+        <mesh name="omni_wheel_mount-v5"   file="{_mp2('omni_wheel_mount-v5.stl')}"   scale="0.001 0.001 0.001"/>
+        <mesh name="omni_wheel_mount-v5-1" file="{_mp2('omni_wheel_mount-v5-1.stl')}" scale="0.001 0.001 0.001"/>
+        <mesh name="omni_wheel_mount-v5-2" file="{_mp2('omni_wheel_mount-v5-2.stl')}" scale="0.001 0.001 0.001"/>
         <mesh name="arm_square"     file="{_mp2('SO_ARM100_08k_116_Square-v1.stl')}" scale="0.001 0.001 0.001"/>
         <mesh name="arm_mirror"     file="{_mp2('SO_ARM100_08k_Mirror-v1.stl')}" scale="0.001 0.001 0.001"/>
 
@@ -127,31 +132,38 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
             <geom name="cam_m" type="mesh" mesh="base_cam_mount"
                   rgba="0.5 0.5 0.5 1" pos="0 0 0.08"/>
 
-            <!-- ══ Wheel 0: front-right ─ collider only (wheel geometry) ══ -->
+            <!-- ══ Wheel 0: front-right ─ STL omni wheel mesh ══ -->
             <body name="wheel0" pos="0.0866 0.10 -0.06">
-                <joint name="w1" type="hinge" axis="1 0 0" damping="0.5"/>
-                <geom name="wheel0_geom" type="cylinder"
-                      size="0.035 0.018" mass="0.1"
+                <joint name="w1" type="hinge" axis="-0.866 0 0.5" damping="0.5"/>
+                <!-- STL omni wheel mesh: euler rotates mesh to align with joint axis -->
+                <geom name="wheel0_geom" type="mesh" mesh="omni_wheel_mount-v5"
+                      mass="0.15"
                       contype="1" conaffinity="1"
-                      friction="0.9 0.05 0.01" rgba="0.05 0.05 0.05 1"/>
+                      friction="0.9 0.05 0.01"
+                      rgba="0.15 0.15 0.15 1"
+                      euler="0 1.5708 0"/>
             </body>
 
-            <!-- ══ Wheel 1: back-left ══ -->
+            <!-- ══ Wheel 1: back-left ─ STL omni wheel mesh ══ -->
             <body name="wheel1" pos="-0.0866 0.10 -0.06">
-                <joint name="w2" type="hinge" axis="1 0 0" damping="0.5"/>
-                <geom name="wheel1_geom" type="cylinder"
-                      size="0.035 0.018" mass="0.1"
+                <joint name="w2" type="hinge" axis="0.866 0 0.5" damping="0.5"/>
+                <geom name="wheel1_geom" type="mesh" mesh="omni_wheel_mount-v5-1"
+                      mass="0.15"
                       contype="1" conaffinity="1"
-                      friction="0.9 0.05 0.01" rgba="0.05 0.05 0.05 1"/>
+                      friction="0.9 0.05 0.01"
+                      rgba="0.15 0.15 0.15 1"
+                      euler="0 1.5708 0"/>
             </body>
 
-            <!-- ══ Wheel 2: back-right ══ -->
+            <!-- ══ Wheel 2: back-right ─ STL omni wheel mesh ══ -->
             <body name="wheel2" pos="-0.0866 -0.10 -0.06">
-                <joint name="w3" type="hinge" axis="1 0 0" damping="0.5"/>
-                <geom name="wheel2_geom" type="cylinder"
-                      size="0.035 0.018" mass="0.1"
+                <joint name="w3" type="hinge" axis="0 0 -1" damping="0.5"/>
+                <geom name="wheel2_geom" type="mesh" mesh="omni_wheel_mount-v5-2"
+                      mass="0.15"
                       contype="1" conaffinity="1"
-                      friction="0.9 0.05 0.01" rgba="0.05 0.05 0.05 1"/>
+                      friction="0.9 0.05 0.01"
+                      rgba="0.15 0.15 0.15 1"
+                      euler="0 1.5708 0"/>
             </body>
 
             <!-- ══ Arm base ══ -->
