@@ -36,6 +36,7 @@ from cv_bridge import CvBridge
 import numpy as np
 import sys
 import os
+from security_monitor import SecurityMonitor
 
 # ── LeKiWiSim import ──────────────────────────────────────────────────────────
 sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
@@ -130,6 +131,13 @@ class LeKiWiBridge(Node):
             Twist, "/lekiwi/cmd_vel", self._on_cmd_vel, qos
         )
 
+        # CTF Challenge 7: policy injection topic
+        from std_msgs.msg import ByteMultiArray
+        self.policy_sub = self.create_subscription(
+            ByteMultiArray, "/lekiwi/policy_input", self._on_policy_input, qos
+        )
+        self._blocked_count = 0
+
         # ── Timer: step MuJoCo & publish at 20 Hz (camera is expensive) ────────
         self.timer = self.create_timer(0.05, self._on_timer)   # 20 Hz
 
@@ -151,6 +159,17 @@ class LeKiWiBridge(Node):
         vx = float(msg.linear.x)
         vy = float(msg.linear.y)
         wz = float(msg.angular.z)
+
+        # CTF security check -- drop anomalous commands
+        stamp = self.get_clock().now().nanoseconds / 1e9
+        verdict = self.security_monitor.check_cmd_vel(vx, vy, wz, stamp)
+        if verdict.blocked:
+            self._blocked_count += 1
+            self.get_logger().warn(
+                "Blocked cmd_vel #{:} {:} severity={:} vx={:.3f} vy={:.3f} wz={:.3f}".format(
+                    self._blocked_count, verdict.event_type, verdict.severity, vx, vy, wz),
+                throttle_duration_sec=2.0)
+            return
 
         # Compute wheel angular velocities from kinematics
         wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
@@ -219,6 +238,20 @@ class LeKiWiBridge(Node):
         arm_pos = np.clip(arm_pos, self.ARM_CTRL_MIN, self.ARM_CTRL_MAX)
         self._last_action[0:6] = arm_pos
 
+
+    # ── Policy input callback (CTF Challenge 7) ───────────────────────────
+    def _on_policy_input(self, msg):
+        from std_msgs.msg import ByteMultiArray
+        policy_bytes = bytes(msg.data)
+        stamp = self.get_clock().now().nanoseconds / 1e9
+        verdict = self.security_monitor.check_policy(policy_bytes, stamp)
+        if verdict.event_type == "policy_tamper":
+            self.get_logger().error(
+                "POLICY TAMPER DETECTED! {:} fp: {:} -> {:}".format(
+                    verdict.details.get("ctf_flag", ""),
+                    verdict.details.get("old_fingerprint", "?"),
+                    verdict.details.get("new_fingerprint", "?")))
+            self.security_monitor.flush()
 
 def main(args=None):
     rclpy.init(args=args)

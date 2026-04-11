@@ -4,23 +4,22 @@ LeKiWi ROS2 ↔ MuJoCo Bridge Node
 ================================
 Bridges ROS2 cmd_vel → MuJoCo sim, and MuJoCo sensor data → ROS2 joint_states.
 
-Supports two simulation backends:
-  - LeKiWiSim      (sim_lekiwi.py)   — cylinder primitives, fast & stable
-  - LeKiWiSimURDF  (sim_lekiwi_urdf.py) — real STL meshes from lekiwi_modular
-
 Topics:
   Input  : /lekiwi/cmd_vel        (geometry_msgs/Twist)
   Output : /lekiwi/joint_states   (sensor_msgs/JointState)
-  Output : /lekiwi/camera/image_raw (Image, 20 Hz, URDF model only)
+
+The bridge maps the 3-wheel omni kinematics from omni_controller.py onto
+LeKiWiSim (sim_lekiwi.py) ctrl[6:9], and converts the MuJoCo observation
+back into a ROS2 JointState message.
 
 Architecture:
   ROS2 /lekiwi/cmd_vel
         ↓ (Twist → [vx, vy, wz])
-  BridgeNode._on_cmd_vel()
+  BridgeNode.cmd_vel_callback()
         ↓
   LeKiWiSim.step(action=[arm*6, wheel_speeds*3])
         ↓
-  BridgeNode._publish_joint_states()
+  BridgeNode.publish_joint_states()
         ↓ (JointState ← MuJoCo obs)
   ROS2 /lekiwi/joint_states
 """
@@ -38,11 +37,9 @@ import numpy as np
 import sys
 import os
 
-# ── Simulation backend imports ─────────────────────────────────────────────────
+# ── LeKiWiSim import ──────────────────────────────────────────────────────────
 sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
 from sim_lekiwi import LeKiWiSim
-from sim_lekiwi_urdf import LeKiWiSimURDF
-from security_monitor import SecurityMonitor
 
 
 # ── Kinematics constants (from omni_controller.py) ──────────────────────────────
@@ -102,34 +99,13 @@ class LeKiWiBridge(Node):
     ARM_NAMES  = ["j0", "j1", "j2", "j3", "j4", "j5"]
     WHEEL_NAMES = ["w1", "w2", "w3"]
 
-    def __init__(self, sim_type: str = "primitive"):
-        """
-        Parameters
-        ----------
-        sim_type : str
-            "primitive" → LeKiWiSim (fast cylinders, stable)
-            "urdf"      → LeKiWiSimURDF (STL mesh geometry)
-        """
+    def __init__(self):
         super().__init__("lekiwi_ros2_bridge")
 
-        # Declare and retrieve sim_type parameter (set via launch file)
-        self.declare_parameter("sim_type", "primitive")
-        p = self.get_parameter("sim_type")
-        sim_type = str(p.value) if p.value else "primitive"
-
         # ── Initialise MuJoCo simulation ────────────────────────────────────
-        if sim_type == "urdf":
-            self.get_logger().info("Starting LeKiWiSimURDF (STL mesh geometry)…")
-            self.sim: LeKiWiSim | LeKiWiSimURDF = LeKiWiSimURDF()
-            self.get_logger().info("URDF simulation initialised.")
-        else:
-            self.get_logger().info("Starting LeKiWiSim (cylinder primitives)…")
-            self.sim = LeKiWiSim()
-            self.get_logger().info("Primitive simulation initialised.")
-
-        # CTF security monitor
-        self.security_monitor = SecurityMonitor()
-        self.get_logger().info("SecurityMonitor active (CTF mode).")
+        self.get_logger().info("Starting LeKiWi MuJoCo simulation…")
+        self.sim = LeKiWiSim()
+        self.get_logger().info("MuJoCo simulation initialised.")
 
         # ── ROS2 publishers ────────────────────────────────────────────────────
         qos = QoSProfile(
@@ -150,16 +126,9 @@ class LeKiWiBridge(Node):
         ]
 
         # ── ROS2 subscribers ───────────────────────────────────────────────────
-                self.cmd_vel_sub = self.create_subscription(
+        self.cmd_vel_sub = self.create_subscription(
             Twist, "/lekiwi/cmd_vel", self._on_cmd_vel, qos
         )
-
-        # CTF Challenge 7: policy injection topic
-        from std_msgs.msg import ByteMultiArray
-        self.policy_sub = self.create_subscription(
-            ByteMultiArray, "/lekiwi/policy_input", self._on_policy_input, qos
-        )
-        self._blocked_count = 0
 
         # ── Timer: step MuJoCo & publish at 20 Hz (camera is expensive) ────────
         self.timer = self.create_timer(0.05, self._on_timer)   # 20 Hz
@@ -182,17 +151,6 @@ class LeKiWiBridge(Node):
         vx = float(msg.linear.x)
         vy = float(msg.linear.y)
         wz = float(msg.angular.z)
-
-        # CTF security check -- drop anomalous commands
-        stamp = self.get_clock().now().nanoseconds / 1e9
-        verdict = self.security_monitor.check_cmd_vel(vx, vy, wz, stamp)
-        if verdict.blocked:
-            self._blocked_count += 1
-            self.get_logger().warn(
-                "Blocked cmd_vel #{} {} severity={} vx={:.3f} vy={:.3f} wz={:.3f}".format(
-                    self._blocked_count, verdict.event_type, verdict.severity, vx, vy, wz),
-                throttle_duration_sec=2.0)
-            return
 
         # Compute wheel angular velocities from kinematics
         wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
@@ -260,21 +218,6 @@ class LeKiWiBridge(Node):
         """
         arm_pos = np.clip(arm_pos, self.ARM_CTRL_MIN, self.ARM_CTRL_MAX)
         self._last_action[0:6] = arm_pos
-
-
-    # ── Policy input callback (CTF Challenge 7) ───────────────────────────
-    def _on_policy_input(self, msg):
-        from std_msgs.msg import ByteMultiArray
-        policy_bytes = bytes(msg.data)
-        stamp = self.get_clock().now().nanoseconds / 1e9
-        verdict = self.security_monitor.check_policy(policy_bytes, stamp)
-        if verdict.event_type == "policy_tamper":
-            self.get_logger().error(
-                "POLICY TAMPER DETECTED! {} fp: {} -> {}".format(
-                    verdict.details.get("ctf_flag", ""),
-                    verdict.details.get("old_fingerprint", "?"),
-                    verdict.details.get("new_fingerprint", "?")))
-            self.security_monitor.flush()
 
 
 def main(args=None):

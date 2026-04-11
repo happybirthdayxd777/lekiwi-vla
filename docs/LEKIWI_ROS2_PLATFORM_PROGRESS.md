@@ -106,3 +106,17 @@
   - 3個 omni-wheel 馬達（continuous revolute）
   - 6個機械臂關節（continuous revolute）
 - 發現 bug：`omni_controller.py` 三輪 `joint_axes` 完全相同，已修復到 `omni_controller_fixed.py`
+
+### 2026-04-11 19:30
+- **Phase 5 CTF Security Mode: 完成！**
+- 新增 `lekiwi_ros2_bridge/security_monitor.py`:
+  - `SecurityMonitor` class — thread-safe入侵檢測
+  - 5種異常檢測器：速度突刺、NaN/Inf、速率變化、Replay attack、政策篡改
+  - CTF Challenge 7 (policy_hijack) 自動捕獲 flag: `ROBOT_CTF{policy_hijack_4c8e2a9f}`
+  - 攻擊日誌寫入 `~/hermes_research/lekiwi_vla/security_log.jsonl`
+- 更新 `bridge_node.py` 整合 SecurityMonitor:
+  - `/lekiwi/cmd_vel` → 先過SecurityMonitor審查，異常直接阻擋
+  - 新增 `/lekiwi/policy_input` 監控topic（CTF Challenge 7）
+  - 阻擋計數 `_blocked_count` + throttled警告日誌
+- 進度：Phase 1 ✅ 基礎 Bridge | Phase 2 🔄 URDF整合中 | Phase 5 ✅ CTF安全監控
+- 下一步：統一 launch file + VLA 集成
