@@ -129,7 +129,28 @@ def _make_lerobot_policy(policy_name: str, pretrained: Optional[str], device: st
 # ── CLIP-Flow Matching policy loader ────────────────────────────────────────
 
 def _make_clip_fm_policy(pretrained: Optional[str], device: str):
-    """Load CLIP-FM policy trained via scripts/train_clip_fm.py."""
+    """
+    Load CLIP-FM policy trained via scripts/train_clip_fm.py.
+
+    Handles two checkpoint formats (strict=False silently skips mismatched weights):
+
+    Format A — "old" (epoch 10, trained with original architecture):
+      flow_mlp.time_mlp[0]: Linear(1, 64)
+      flow_mlp.time_mlp[2]: Linear(64, 128) → time_feat=128
+      flow_mlp.net[0]:     Linear(658, 512) → total_dim=658=512+9+9+128
+      vision_encoder:      SimpleCNN MLP proj (net.0/2/4/6/10)
+      → Must use flow_head.* keys, will skip incompatible weights
+
+    Format B — "new" (re-trained with updated architecture):
+      flow_head.time_mlp[0]: Linear(1, 128)
+      flow_head.time_mlp[2]: Linear(128, 256) → time_feat=256
+      flow_head.net[0]:     Linear(786, 512) → total_dim=786=512+9+9+256
+      vision_encoder:      CLIPVisionEncoder with nn.Linear(768,512) proj
+      → Should load cleanly
+
+    In both cases the CLIP vision encoder (frozen, 151M params) loads successfully.
+    Only the trainable flow_head weights may be partially loaded from old checkpoints.
+    """
     import torch
     sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
     from scripts.train_clip_fm import CLIPFlowMatchingPolicy
@@ -139,18 +160,57 @@ def _make_clip_fm_policy(pretrained: Optional[str], device: str):
     if pretrained:
         ckpt_path = os.path.expanduser(pretrained)
         state_dict = torch.load(ckpt_path, map_location=device, weights_only=False)
-        policy.load_state_dict(state_dict, strict=False)
-        print(f"[CLIP-FM] Loaded checkpoint from {ckpt_path}")
     else:
-        # Use the demo policy that was trained
         default_ckpt = os.path.expanduser(
             "~/hermes_research/lekiwi_vla/results/fm_50ep_improved/policy_ep10.pt"
         )
         if os.path.exists(default_ckpt):
             state_dict = torch.load(default_ckpt, map_location=device, weights_only=False)
-            policy.load_state_dict(state_dict, strict=False)
-            print(f"[CLIP-FM] Loaded default checkpoint: {default_ckpt}")
+        else:
+            state_dict = {}
 
+    if not state_dict:
+        print("[CLIP-FM] No checkpoint — using random weights (training required)")
+        policy.to(device)
+        policy.eval()
+        return policy
+
+    # ── Key remapping: flow_mlp → flow_head for backwards compatibility ────────
+    # Old checkpoints (Format A) use "flow_mlp" prefix; model uses "flow_head"
+    remapped = {}
+    flow_mlp_found = False
+    for k, v in state_dict.items():
+        if k.startswith("flow_mlp."):
+            remapped[k.replace("flow_mlp.", "flow_head.", 1)] = v
+            flow_mlp_found = True
+        else:
+            remapped[k] = v
+
+    # ── Partial load: only keep keys with matching shapes ─────────────────────
+    sd = policy.state_dict()
+    compatible = {}
+    skipped = []
+    for k, v in remapped.items():
+        if k in sd and sd[k].shape == v.shape:
+            compatible[k] = v
+        else:
+            skipped.append(k)
+
+    n_loaded = len(compatible)
+    n_total  = len(sd)
+    n_skipped = len(skipped)
+
+    if skipped:
+        print(f"[CLIP-FM] Loaded {n_loaded}/{n_total} weights ({n_skipped} skipped: shape mismatch)")
+        # Show first few skipped keys for debugging
+        for s in skipped[:6]:
+            ckpt_shape = remapped[s].shape if s in remapped else "?"
+            model_shape = sd.get(s, "(not in model)").shape if s in sd else "(not in model)"
+            print(f"         skipped: {s}: ckpt={ckpt_shape} model={model_shape}")
+    else:
+        print(f"[CLIP-FM] Loaded {n_loaded}/{n_total} weights (clean load)")
+
+    policy.load_state_dict(compatible, strict=False)
     policy.to(device)
     policy.eval()
     return policy
