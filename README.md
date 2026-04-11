@@ -1,61 +1,174 @@
-# LeKiwi VLA System
+# LeKiwi VLA System — Deployment Guide
 
-Dual-mode VLA (Vision-Language-Action) robot system for LeKiwi platform.
+Dual-mode VLA (Vision-Language-Action) robot system for LeKiwi platform, using Hugging Face LeRobot framework.
 
-## Architecture Overview
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         WORKER MODE (Pi0)                          │
-│   Voice → Whisper STT → Pi0 Policy → Action → Robot Control        │
-│   "Pick up the red box" → [Image + Text] → action_delta            │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────┐
-│                        EXPLORER MODE (Gemini)                       │
-│   Voice → Gemini Agent → Function Calls → Robot Control            │
-│   "Go forward" → move_forward()                                    │
-└─────────────────────────────────────────────────────────────────────┘
+                    ┌─────────────────┐
+                    │   USER INPUT    │
+                    │  (Voice/Text)   │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │   WHISPER STT   │
+                    │  (Jetson Orin)  │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+     ┌────────▼────────┐          ┌────────▼────────┐
+     │   WORKER MODE   │          │  EXPLORER MODE  │
+     │                 │          │                 │
+     │ • Pi0 Policy    │          │ • Gemini Agent  │
+     │ • /act endpoint  │          │ • Function Call │
+     │ • Cloud GPU      │          │ • Local Logic   │
+     └────────┬────────┘          └────────┬────────┘
+              │                             │
+              └──────────────┬──────────────┘
+                             │
+                    ┌────────▼────────┐
+                    │ HARDWARE iF     │
+                    │ (LeRobot/LeKiwi)│
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │    LEKIWI       │
+                    │  (Real Robot)   │
+                    └─────────────────┘
 ```
 
-## Hardware Setup
+## Hardware Requirements
 
-- **Brain (Server)**: GPU server (RTX 4000 Ada or better) running FastAPI + Pi0
-- **Body (Edge)**: Jetson Orin Nano (8GB) running client orchestrator
+| Component | Specification |
+|-----------|--------------|
+| **Edge (On Robot)** | Jetson Orin Nano (8GB) or similar |
+| **Cloud (Server)** | GPU with 16GB+ VRAM (RTX 4000 Ada, A100) |
+| **Camera** | 2x USB cameras (front + wrist) |
+| **Motors** | Feetech STS3215 (6 arm + 3 wheel) |
+| **Connection** | USB-C for motor bus, WiFi for cloud |
 
 ## Quick Start
 
-### Server Setup
+### 1. Cloud Server Setup
+
 ```bash
 cd server
 pip install -r requirements.txt
+
+# Download Pi0 model (~7GB)
 python3 scripts/download_models.py --pi0
+
+# Start server
 ./start_server.sh
 ```
 
-### Jetson Client Setup
+### 2. Jetson Client Setup
+
 ```bash
 # Install LeRobot
-git clone https://github.com/huggingface/lerobot.git
-cd lerobot && pip install -e ".[lekiwi]"
+git clone https://github.com/happybirthdayxd777/lekiwi-vla.git
+cd lekiwi-vla
+pip install -r requirements.txt
 
-# Configure
-lerobot-setup-motors --robot.type=lekiwi --robot.port=/dev/ttyACM0
+# Configure robot connection
+python3 scripts/find_port.py
+python3 scripts/setup_motors.py --port /dev/ttyACM0
 
-# Launch
+# Run client
 python3 client/main_client.py
 ```
 
-## Robot Overview
+### 3. Run VLA Inference
 
-LeKiwi has:
-- **3 omni wheels** (motor IDs 7, 8, 9) - differential drive mobile base
-- **6-DOF arm** (motor IDs 1-6) - STS3215 servos
-- **2 cameras**: front + wrist
+```bash
+# Test /act endpoint
+curl -X POST http://localhost:8000/act \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_base64": "<base64_encoded_image>",
+    "text": "pick up the red object",
+    "robot_state": {"arm_positions": [0,0,0,0,0,0], "base_velocities": [0,0,0]}
+  }'
+```
+
+## Directory Structure
+
+```
+lekiwi-vla/
+├── server/
+│   ├── vla_server.py         # FastAPI + Pi0 inference
+│   ├── requirements.txt
+│   └── scripts/
+│       └── download_models.py
+├── client/
+│   ├── main_client.py        # Orchestrator (mode switching)
+│   ├── hardware_interface.py # LeRobot wrapper
+│   ├── agents/
+│   │   ├── worker_agent.py   # Pi0 mode
+│   │   └── explorer_agent.py # Gemini mode
+│   └── scripts/
+├── configs/
+│   └── lekiwi_vla.yaml
+└── README.md
+```
 
 ## Mode Switching
 
-Press **SPACE** to toggle between Worker and Explorer modes.
+Press **SPACE** to toggle between modes:
+
+| Mode | Trigger | Behavior |
+|------|---------|----------|
+| **WORKER** | Default | Pi0 policy, voice command execution |
+| **EXPLORER** | Space | Gemini agent, free exploration |
+
+## LeRobot Integration
+
+This project uses [LeRobot](https://github.com/huggingface/lerobot) from Hugging Face as the underlying robotics framework.
+
+Key LeRobot components used:
+- `LeKiwi` robot class
+- `Pi0Agent` for VLA inference
+- `lerobot-record` for data collection
+- `lerobot-teleoperate` for teleoperation
+
+```python
+from lerobot.robots.lekiwi import LeKiwi
+from lerobot.robots.lekiwi.config_lekiwi import LeKiwiConfig
+
+# Connect to LeKiwi
+config = LeKiwiConfig(port="/dev/ttyACM0")
+robot = LeKiwi(config)
+robot.connect()
+
+# Capture observation
+obs = robot.capture_observation()
+
+# Execute action
+robot.send_action(action_tensor)
+```
+
+## AI Models
+
+| Model | Purpose | Size |
+|-------|---------|------|
+| Pi0 (7B) | VLA policy | 7B params |
+| Pi0-ext (14B) | Extended VLA | 14B params |
+| Gemini 2.0 | Explorer agent | Cloud |
+| Whisper | Speech-to-text | 3B params |
+
+## Development
+
+```bash
+# Run tests
+pytest tests/
+
+# Format code
+black .
+
+# Lint
+flake8 .
+```
 
 ## License
 
