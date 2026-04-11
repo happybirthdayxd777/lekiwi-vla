@@ -29,8 +29,9 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, Image
 from std_msgs.msg import Float64
+from cv_bridge import CvBridge
 
 import numpy as np
 import sys
@@ -114,6 +115,10 @@ class LeKiWiBridge(Node):
         )
         self.joint_state_pub = self.create_publisher(JointState, "/lekiwi/joint_states", qos)
 
+        # Camera bridge: MuJoCo → ROS2 image
+        self.camera_pub = self.create_publisher(Image, "/lekiwi/camera/image_raw", qos)
+        self.bridge = CvBridge()
+
         # Separate publishers for each wheel (mirrors omni_controller output)
         self.wheel_pubs = [
             self.create_publisher(Float64, f"/lekiwi/wheel_{i}/cmd_vel", qos)
@@ -125,13 +130,18 @@ class LeKiWiBridge(Node):
             Twist, "/lekiwi/cmd_vel", self._on_cmd_vel, qos
         )
 
-        # ── Timer: step MuJoCo & publish at 50 Hz ───────────────────────────────
-        self.timer = self.create_timer(0.02, self._on_timer)   # 50 Hz
+        # ── Timer: step MuJoCo & publish at 20 Hz (camera is expensive) ────────
+        self.timer = self.create_timer(0.05, self._on_timer)   # 20 Hz
 
         # ── State ───────────────────────────────────────────────────────────────
         self._last_action = np.zeros(9, dtype=np.float64)   # [arm*6, wheel*3]
+        self._frame_count = 0
         self.get_logger().info(
-            "LeKiWi ROS2 bridge ready.  Subscribing /lekiwi/cmd_vel → publishing /lekiwi/joint_states"
+            "LeKiWi ROS2 bridge ready.  Topics:\n"
+            "  /lekiwi/cmd_vel       ← subscribe\n"
+            "  /lekiwi/joint_states  → publish\n"
+            "  /lekiwi/camera/image_raw → publish (20 Hz)\n"
+            "  /lekiwi/wheel_N/cmd_vel → publish"
         )
 
     # ── cmd_vel callback ────────────────────────────────────────────────────────
@@ -164,22 +174,39 @@ class LeKiWiBridge(Node):
     # ── Timer callback ─────────────────────────────────────────────────────────
 
     def _on_timer(self):
-        """Publish current MuJoCo state as JointState message."""
+        """Publish MuJoCo state as JointState + camera Image."""
         obs = self.sim._obs()
 
+        # ── JointState ──────────────────────────────────────────────────────
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = self.ARM_NAMES + self.WHEEL_NAMES
 
-        # Arm positions (6) + Wheel positions (3)
-        msg.position = list(obs.get("arm_positions", np.zeros(6))) + \
-                       list(obs.get("wheel_positions", np.zeros(3)))
+        # Arm positions (6) + integrate wheel velocities → positions (3)
+        arm_pos = list(obs.get("arm_positions", np.zeros(6)))
+        # Accumulate wheel positions from velocity integration
+        wheel_vel = obs.get("wheel_velocities", np.zeros(3))
+        dt = 0.05   # matches timer period
+        self._wheel_posAccum = getattr(self, '_wheel_posAccum', np.zeros(3)) + wheel_vel * dt
+        wheel_pos = list(self._wheel_posAccum)
 
-        # Arm velocities (6) + Wheel velocities (3)
-        msg.velocity = list(obs.get("arm_velocities", np.zeros(6))) + \
-                       list(obs.get("wheel_velocities", np.zeros(3)))
+        msg.position = arm_pos + wheel_pos
+        msg.velocity = list(obs.get("arm_velocities", np.zeros(6))) + list(wheel_vel)
 
         self.joint_state_pub.publish(msg)
+
+        # ── Camera Image ────────────────────────────────────────────────────
+        self._frame_count += 1
+        if self._frame_count % 1 == 0:   # publish every frame (20 Hz)
+            try:
+                img_pil = self.sim.render(640, 480)
+                img_np  = np.asarray(img_pil)
+                ros_img = self.bridge.cv2_to_imgmsg(img_np, encoding="rgb8")
+                ros_img.header.stamp = msg.header.stamp
+                ros_img.header.frame_id = "lekiwi_camera"
+                self.camera_pub.publish(ros_img)
+            except Exception as e:
+                self.get_logger().warn(f"Camera render failed: {e}", once=True)
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 

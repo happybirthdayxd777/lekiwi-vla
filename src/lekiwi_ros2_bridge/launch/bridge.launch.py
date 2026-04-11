@@ -7,7 +7,7 @@ Usage:
   ros2 launch lekiwi_ros2_bridge bridge.launch.py mode:=real
 
 Modes:
-  sim  — start MuJoCo bridge (LeKiWiSim) + joint_state publisher
+  sim  — start MuJoCo bridge (LeKiWiSim) + joint_state + camera publishers
          Use this when there is no real hardware.
 
   real — start lekiwi_modular controllers + our bridge as passthrough
@@ -55,6 +55,7 @@ def generate_launch_description() -> LaunchDescription:
 
     # Bridge in real mode: reads /lekiwi/cmd_vel from teleop,
     # forwards arm state to VLA policy via /lekiwi/joint_states
+    # Also publishes /lekiwi/camera/image_raw from MuJoCo sim
     bridge_real = Node(
         package="lekiwi_ros2_bridge",
         executable="bridge_node",

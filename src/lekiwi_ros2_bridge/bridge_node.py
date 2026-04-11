@@ -1,390 +1,236 @@
 #!/usr/bin/env python3
 """
-ROS2 ↔ MuJoCo Bridge for LeKiWi
+LeKiWi ROS2 ↔ MuJoCo Bridge Node
 ================================
-Bridges ROS2 control commands to MuJoCo simulation.
+Bridges ROS2 cmd_vel → MuJoCo sim, and MuJoCo sensor data → ROS2 joint_states.
 
-Listens to:
-  /lekiwi/cmd_vel          (geometry_msgs/Twist) — base velocity command
-  /lekiwi/arm/cmd_pose     (Float64MultiArray)  — arm joint positions
+Topics:
+  Input  : /lekiwi/cmd_vel        (geometry_msgs/Twist)
+  Output : /lekiwi/joint_states   (sensor_msgs/JointState)
 
-Publishes:
-  /lekiwi/joint_states     (sensor_msgs/JointState) — all joint states
-  /lekiwi/odom             (nav_msgs/Odometry)        — base odometry
-  /lekiwi/camera/image_raw (sensor_msgs/Image)       — simulated camera
+The bridge maps the 3-wheel omni kinematics from omni_controller.py onto
+LeKiWiSim (sim_lekiwi.py) ctrl[6:9], and converts the MuJoCo observation
+back into a ROS2 JointState message.
 
-Usage (with ROS2):
-  $ ros2 run lekiwi_ros2_bridge bridge_node
-
-  (Requires ROS2 Humble + lekiwi_modular workspace sourced)
+Architecture:
+  ROS2 /lekiwi/cmd_vel
+        ↓ (Twist → [vx, vy, wz])
+  BridgeNode.cmd_vel_callback()
+        ↓
+  LeKiWiSim.step(action=[arm*6, wheel_speeds*3])
+        ↓
+  BridgeNode.publish_joint_states()
+        ↓ (JointState ← MuJoCo obs)
+  ROS2 /lekiwi/joint_states
 """
 
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
+
+from geometry_msgs.msg import Twist
+from sensor_msgs.msg import JointState, Image
+from std_msgs.msg import Float64
+from cv_bridge import CvBridge
+
 import numpy as np
-from typing import Optional, List
-import time
+import sys
+import os
 
-# ─────────────────────────────────────────────────────────────
-#  Attempt ROS2 imports; fall back gracefully if not available
-# ─────────────────────────────────────────────────────────────
-try:
-    import rclpy
-    from rclpy.node import Node
-    from geometry_msgs.msg import Twist
-    from sensor_msgs.msg import JointState, Image
-    from nav_msgs.msg import Odometry
-    from std_msgs.msg import Float64MultiArray
-    import std_msgs.msg
-    HAS_ROS2 = True
-except ImportError:
-    HAS_ROS2 = False
-    Twist = object
-    JointState = object
-    Odometry = object
-    Float64MultiArray = object
+# ── LeKiWiSim import ──────────────────────────────────────────────────────────
+sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
+from sim_lekiwi import LeKiWiSim
 
 
-# ─────────────────────────────────────────────────────────────
-#  Import or mock MuJoCo simulation
-# ─────────────────────────────────────────────────────────────
-import sys as _sys
-_lekiwi_vla_path = str(__file__).split("/src/")[0]
-if _lekiwi_vla_path not in _sys.path:
-    _sys.path.insert(0, _lekiwi_vla_path)
+# ── Kinematics constants (from omni_controller.py) ──────────────────────────────
+WHEEL_RADIUS   = 0.05    # m
+WHEEL_POSITIONS = np.array([
+    [ 0.1732,  0.0,    0.0 ],   # wheel 0 — front
+    [-0.0866,  0.15,   0.0 ],   # wheel 1 — back-left
+    [-0.0866, -0.15,   0.0 ],   # wheel 2 — back-right
+], dtype=np.float64)
 
-try:
-    from sim_lekiwi import LeKiwiSim
-    HAS_MUJOCO = True
-except ImportError:
-    HAS_MUJOCO = False
-    LeKiwiSim = object
-
-
-# ─────────────────────────────────────────────────────────────
-#  Constants: joint names matching lekiwi.urdf
-# ─────────────────────────────────────────────────────────────
-
-WHEEL_JOINTS = [
-    "ST3215_Servo_Motor-v1_Revolute-64",      # wheel 0 (front)
-    "ST3215_Servo_Motor-v1-1_Revolute-62",    # wheel 1 (left rear)
-    "ST3215_Servo_Motor-v1-2_Revolute-60",    # wheel 2 (right rear)
-]
-
-ARM_JOINTS = [
-    "STS3215_03a-v1_Revolute-45",             # arm_joint_1
-    "STS3215_03a-v1-1_Revolute-49",           # arm_joint_2
-    "STS3215_03a-v1-2_Revolute-51",           # arm_joint_3
-    "STS3215_03a-v1-3_Revolute-53",           # arm_joint_4
-    "STS3215_03a_Wrist_Roll-v1_Revolute-55", # arm_joint_5
-    "STS3215_03a-v1-4_Revolute-57",           # arm_joint_6
-]
-
-ALL_JOINTS = WHEEL_JOINTS + ARM_JOINTS
-
-# Wheel positions relative to base_link — from omni_controller_fixed.py:
-# wheel_base = 0.1732 (meters), angles at 30°, 150°, 270°
-# Wheel 0: +30° (front-right) → [0.15, 0.0866, 0]
-# Wheel 1: +150° (left)      → [-0.15, 0.0866, 0]
-# Wheel 2: +270° (back-right) → [0, -0.1732, 0]
-_angles = np.deg2rad([30, 150, 270])
-_wheel_base = 0.1732
-WHEEL_POSITIONS = [
-    _wheel_base * np.array([np.cos(a), np.sin(a), 0.0])
-    for a in _angles
-]
-# Roller axes — ACTUAL axes from lekiwi.urdf (extracted via regex from XML):
-#   Revolute-64 (wheel 0, front-right): [-0.866, 0, 0.5]
-#   Revolute-62 (wheel 1, left):        [ 0.866, 0, 0.5]
-#   Revolute-60 (wheel 2, back-right):  [ 0,    0, -1]
-# NOTE: The WHEEL_JOINTS list uses URDF joint names as identifiers, so the
-# order here matches WHEEL_JOINTS[0..2] in sequence.
-WHEEL_JOINT_AXES = [
-    np.array([-0.866025, 0.0, 0.5])  / 1.0,   # wheel 0 (Revolute-64)
-    np.array([ 0.866025, 0.0, 0.5])  / 1.0,   # wheel 1 (Revolute-62)
-    np.array([ 0.0,      0.0,-1.0])  / 1.0,   # wheel 2 (Revolute-60)
-]
+# Normalised joint axes (omni rollers)
+_JOINT_AXES = np.array([
+    [0.866025, 0.0, 0.5],
+    [0.866025, 0.0, 0.5],
+    [0.866025, 0.0, 0.5],
+], dtype=np.float64)
+_JOINT_AXES /= np.linalg.norm(_JOINT_AXES, axis=1, keepdims=True)
 
 
-# ─────────────────────────────────────────────────────────────
-#  Main Bridge Node
-# ─────────────────────────────────────────────────────────────
-
-class LeKiWiRos2Bridge(Node if HAS_ROS2 else object):
+def twist_to_wheel_speeds(vx: float, vy: float, wz: float) -> np.ndarray:
     """
-    ROS2 ↔ MuJoCo bridge for LeKiWi.
+    Convert robot-level Twist (vx, vy, wz) into 3 wheel angular velocities.
+    Mirrors the exact kinematics from lekiwi_modular/omni_controller.py.
+    Returns shape (3,).
+    """
+    wheel_speeds = np.zeros(3, dtype=np.float64)
+    for i in range(3):
+        wheel_vel = np.array([
+            vx - wz * WHEEL_POSITIONS[i, 1],
+            vy + wz * WHEEL_POSITIONS[i, 0],
+            0.0,
+        ])
+        angular_speed = np.dot(wheel_vel, _JOINT_AXES[i]) / WHEEL_RADIUS
+        wheel_speeds[i] = angular_speed
+    return wheel_speeds
 
-    In "simulation mode" (no real robot):
-      - Reads /lekiwi/cmd_vel → applies to MuJoCo sim
-      - Publishes joint_states, odom, camera from MuJoCo
 
-    In "passthrough mode" (real robot):
-      - Forwards commands to real robot
-      - Relays sensor data back to ROS2
+class LeKiWiBridge(Node):
+    """
+    ROS2 ↔ MuJoCo bridge for LeKiWi robot.
+
+    Publishers:
+      /lekiwi/joint_states   — arm (6) + wheel (3) joint positions & velocities
+
+    Subscribers:
+      /lekiwi/cmd_vel        — Twist (linear x/y, angular z)
     """
 
-    def __init__(self, sim_mode: bool = True, device: str = "cpu"):
-        if HAS_ROS2:
-            super().__init__("lekiwi_ros2_bridge")
+    # MuJoCo ctrl index layout (from sim_lekiwi.py):
+    #   ctrl[0:6]  = arm joints   (j0..j5, range ±3.14)
+    #   ctrl[6:9]  = wheel joints (w1..w3, range ±5.0)
+    ARM_CTRL_MIN  = -3.14
+    ARM_CTRL_MAX  =  3.14
+    WHEEL_CTRL_MIN = -5.0
+    WHEEL_CTRL_MAX =  5.0
 
-        self.sim_mode = sim_mode
-        self.device = device
-        self._last_cmd_vel: Optional[np.ndarray] = None  # [vx, vy, wz]
+    ARM_NAMES  = ["j0", "j1", "j2", "j3", "j4", "j5"]
+    WHEEL_NAMES = ["w1", "w2", "w3"]
 
-        # ── MuJoCo Simulation ──────────────────────────────
-        if self.sim_mode and HAS_MUJOCO:
-            self.get_logger().info("Initializing MuJoCo simulation...") if HAS_ROS2 else print("[INFO] Initializing MuJoCo simulation...")
-            self.sim = LeKiwiSim()
-            self.sim.reset()
-            self.get_logger().info("MuJoCo sim ready.") if HAS_ROS2 else print("[INFO] MuJoCo sim ready.")
-        else:
-            self.sim = None
+    def __init__(self):
+        super().__init__("lekiwi_ros2_bridge")
 
-        if HAS_ROS2:
-            self._setup_ros2()
+        # ── Initialise MuJoCo simulation ────────────────────────────────────
+        self.get_logger().info("Starting LeKiWi MuJoCo simulation…")
+        self.sim = LeKiWiSim()
+        self.get_logger().info("MuJoCo simulation initialised.")
 
-    def _setup_ros2(self):
-        """Set up ROS2 publishers and subscribers."""
-        # ── Subscribers ────────────────────────────────────
+        # ── ROS2 publishers ────────────────────────────────────────────────────
+        qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            depth=10,
+        )
+        self.joint_state_pub = self.create_publisher(JointState, "/lekiwi/joint_states", qos)
+
+        # Camera bridge: MuJoCo → ROS2 image
+        self.camera_pub = self.create_publisher(Image, "/lekiwi/camera/image_raw", qos)
+        self.bridge = CvBridge()
+
+        # Separate publishers for each wheel (mirrors omni_controller output)
+        self.wheel_pubs = [
+            self.create_publisher(Float64, f"/lekiwi/wheel_{i}/cmd_vel", qos)
+            for i in range(3)
+        ]
+
+        # ── ROS2 subscribers ───────────────────────────────────────────────────
         self.cmd_vel_sub = self.create_subscription(
-            Twist, "/lekiwi/cmd_vel",
-            self._on_cmd_vel, 10
-        )
-        self.arm_cmd_sub = self.create_subscription(
-            Float64MultiArray, "/lekiwi/arm/cmd_pose",
-            self._on_arm_cmd, 10
+            Twist, "/lekiwi/cmd_vel", self._on_cmd_vel, qos
         )
 
-        # ── Publishers ─────────────────────────────────────
-        self.joint_states_pub = self.create_publisher(
-            JointState, "/lekiwi/joint_states", 10
-        )
-        self.odom_pub = self.create_publisher(
-            Odometry, "/lekiwi/odom", 10
-        )
+        # ── Timer: step MuJoCo & publish at 20 Hz (camera is expensive) ────────
+        self.timer = self.create_timer(0.05, self._on_timer)   # 20 Hz
 
+        # ── State ───────────────────────────────────────────────────────────────
+        self._last_action = np.zeros(9, dtype=np.float64)   # [arm*6, wheel*3]
+        self._frame_count = 0
         self.get_logger().info(
-            f"LeKiWi ROS2 Bridge ready (sim_mode={self.sim_mode})"
+            "LeKiWi ROS2 bridge ready.  Topics:\n"
+            "  /lekiwi/cmd_vel       ← subscribe\n"
+            "  /lekiwi/joint_states  → publish\n"
+            "  /lekiwi/camera/image_raw → publish (20 Hz)\n"
+            "  /lekiwi/wheel_N/cmd_vel → publish"
         )
 
-    # ── cmd_vel → MuJoCo ──────────────────────────────────────
+    # ── cmd_vel callback ────────────────────────────────────────────────────────
 
     def _on_cmd_vel(self, msg: Twist):
-        """Convert Twist to wheel velocities and apply to MuJoCo."""
-        vx  = msg.linear.x
-        vy  = msg.linear.y
-        wz  = msg.angular.z
-        self._last_cmd_vel = np.array([vx, vy, wz])
+        """Convert Twist → wheel speeds, combine with current arm action, step sim."""
+        vx = float(msg.linear.x)
+        vy = float(msg.linear.y)
+        wz = float(msg.angular.z)
 
-        if self.sim is None:
-            return
+        # Compute wheel angular velocities from kinematics
+        wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
 
-        # Compute wheel angular velocities (inverse kinematics)
-        wheel_speeds = self._compute_wheel_speeds(vx, vy, wz)
+        # Keep arm portion of last action (held at 0 for now; future: arm topics)
+        arm_action = self._last_action[0:6]
 
-        # Build action: [arm_joints(6), wheel_velocities(3)]
-        # LeKiwiSim action format = [arm(6), wheel(3)] — NOT [wheel, arm]
-        action = np.zeros(9, dtype=np.float32)
-        action[6] = wheel_speeds[0]   # w1
-        action[7] = wheel_speeds[1]  # w2
-        action[8] = wheel_speeds[2]  # w3
-        # action[0:6] = arm positions (kept at 0 = neutral)
+        # Build full action vector for MuJoCo
+        action = np.concatenate([arm_action, wheel_speeds]).astype(np.float64)
 
+        # Execute one simulation step
         self.sim.step(action)
+        self._last_action = action
 
-    def _compute_wheel_speeds(self, vx: float, vy: float, wz: float) -> List[float]:
-        """Inverse kinematics for 3 omni wheels."""
-        speeds = []
-        for i in range(3):
-            robot_vel = np.array([
-                vx - wz * WHEEL_POSITIONS[i][1],
-                vy + wz * WHEEL_POSITIONS[i][0],
-                0.0
-            ])
-            angular_speed = np.dot(robot_vel, WHEEL_JOINT_AXES[i]) / WHEEL_RADIUS
-            speeds.append(float(angular_speed))
-        return speeds
+        # Also republish individual wheel velocities (mirrors real robot)
+        for i, speed in enumerate(wheel_speeds):
+            wm = Float64()
+            wm.data = float(speed)
+            self.wheel_pubs[i].publish(wm)
 
-    # ── Arm command ─────────────────────────────────────────────
+    # ── Timer callback ─────────────────────────────────────────────────────────
 
-    def _on_arm_cmd(self, msg: Float64MultiArray):
-        """Set arm joint positions."""
-        if self.sim is None:
-            return
-        positions = np.array(msg.data, dtype=np.float32)
-        if len(positions) == 6:
-            # Apply as direct joint position offsets (simplified)
-            # In full integration, would use joint position controller
-            pass
+    def _on_timer(self):
+        """Publish MuJoCo state as JointState + camera Image."""
+        obs = self.sim._obs()
 
-    # ── Odometry Publisher ──────────────────────────────────────
+        # ── JointState ──────────────────────────────────────────────────────
+        msg = JointState()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.name = self.ARM_NAMES + self.WHEEL_NAMES
 
-    def publish_odometry(self):
-        """Publish base odometry from MuJoCo.
+        # Arm positions (6) + integrate wheel velocities → positions (3)
+        arm_pos = list(obs.get("arm_positions", np.zeros(6)))
+        # Accumulate wheel positions from velocity integration
+        wheel_vel = obs.get("wheel_velocities", np.zeros(3))
+        dt = 0.05   # matches timer period
+        self._wheel_posAccum = getattr(self, '_wheel_posAccum', np.zeros(3)) + wheel_vel * dt
+        wheel_pos = list(self._wheel_posAccum)
 
-        LeKiwiSim qpos layout:
-          qpos[0:3]  = base x, y, z
-          qpos[3:7]  = base quaternion (4D)
-          qpos[7:13] = arm joints (6D)
-          qpos[13:16] = wheel joints (3D)
+        msg.position = arm_pos + wheel_pos
+        msg.velocity = list(obs.get("arm_velocities", np.zeros(6))) + list(wheel_vel)
+
+        self.joint_state_pub.publish(msg)
+
+        # ── Camera Image ────────────────────────────────────────────────────
+        self._frame_count += 1
+        if self._frame_count % 1 == 0:   # publish every frame (20 Hz)
+            try:
+                img_pil = self.sim.render(640, 480)
+                img_np  = np.asarray(img_pil)
+                ros_img = self.bridge.cv2_to_imgmsg(img_np, encoding="rgb8")
+                ros_img.header.stamp = msg.header.stamp
+                ros_img.header.frame_id = "lekiwi_camera"
+                self.camera_pub.publish(ros_img)
+            except Exception as e:
+                self.get_logger().warn(f"Camera render failed: {e}", once=True)
+
+    # ── Helpers ─────────────────────────────────────────────────────────────────
+
+    def apply_arm_action(self, arm_pos: np.ndarray):
         """
-        if not HAS_ROS2 or self.sim is None:
-            return
-
-        odom = Odometry()
-        odom.header.stamp = self.get_clock().now().to_msg()
-        odom.header.frame_id = "odom"
-        odom.child_frame_id = "base_link"
-
-        if hasattr(self.sim.data, "qpos"):
-            odom.pose.pose.position.x = self.sim.data.qpos[0]
-            odom.pose.pose.position.y = self.sim.data.qpos[1]
-            odom.pose.pose.position.z = self.sim.data.qpos[2]
-            odom.pose.pose.orientation.x = self.sim.data.qpos[3]
-            odom.pose.pose.orientation.y = self.sim.data.qpos[4]
-            odom.pose.pose.orientation.z = self.sim.data.qpos[5]
-            odom.pose.pose.orientation.w = self.sim.data.qpos[6]
-
-        if hasattr(self.sim.data, "qvel"):
-            odom.twist.twist.linear.x = self.sim.data.qvel[0]
-            odom.twist.twist.linear.y = self.sim.data.qvel[1]
-            odom.twist.twist.angular.z = self.sim.data.qvel[2]
-
-        self.odom_pub.publish(odom)
-
-    # ── Joint States Publisher ───────────────────────────────────
-
-    def publish_joint_states(self):
-        """Read sim state and publish joint_states to ROS2.
-
-        LeKiwiSim joint layout:
-          arm_joints (j0..j5)   → qpos[7:13], qvel[7:13]
-          wheel_joints (w1..w3)  → qpos[13:16], qvel[13:16]
+        Directly set arm joint targets.
+        arm_pos: shape (6,) in radians.
+        Used by external VLA policy nodes.
         """
-        if not HAS_ROS2 or self.sim is None:
-            return
+        arm_pos = np.clip(arm_pos, self.ARM_CTRL_MIN, self.ARM_CTRL_MAX)
+        self._last_action[0:6] = arm_pos
 
-        js = JointState()
-        js.header.stamp = self.get_clock().now().to_msg()
-        js.name = ARM_JOINTS + WHEEL_JOINTS
-
-        # Arm positions: qpos[7:13]
-        arm_pos = list(self.sim.data.qpos[7:13]) if hasattr(self.sim.data, "qpos") else [0.0] * 6
-        # Wheel positions: qpos[13:16]
-        wheel_pos = list(self.sim.data.qpos[13:16]) if hasattr(self.sim.data, "qpos") else [0.0] * 3
-        js.position = arm_pos + wheel_pos
-
-        # Arm velocities: qvel[7:13]
-        arm_vel = list(self.sim.data.qvel[7:13]) if hasattr(self.sim.data, "qvel") else [0.0] * 6
-        # Wheel velocities: qvel[13:16]
-        wheel_vel = list(self.sim.data.qvel[13:16]) if hasattr(self.sim.data, "qvel") else [0.0] * 3
-        js.velocity = arm_vel + wheel_vel
-
-        self.joint_states_pub.publish(js)
-
-    # ── Spin (for non-ROS2 standalone use) ─────────────────────
-
-    def spin_once(self):
-        """One step: apply pending command, publish state. For standalone use."""
-        if self.sim is None:
-            return
-
-        # Apply last cmd_vel if any (maintains velocity)
-        if self._last_cmd_vel is not None:
-            vx, vy, wz = self._last_cmd_vel
-            wheel_speeds = self._compute_wheel_speeds(vx, vy, wz)
-            action = np.zeros(9, dtype=np.float32)
-            action[6] = wheel_speeds[0]  # w1 — LeKiwiSim format is [arm(6), wheel(3)]
-            action[7] = wheel_speeds[1]  # w2
-            action[8] = wheel_speeds[2]  # w3
-            self.sim.step(action)
-
-        # Publish (ROS2 only)
-        if HAS_ROS2:
-            self.publish_joint_states()
-            self.publish_odometry()
-
-    def spin(self, hz: float = 50):
-        """Main loop for standalone (non-ROS2) operation."""
-        rate = 1.0 / hz
-        while True:
-            t0 = time.time()
-            self.spin_once()
-            dt = time.time() - t0
-            if dt < rate:
-                time.sleep(rate - dt)
-
-
-# ─────────────────────────────────────────────────────────────
-#  Standalone test (no ROS2 required)
-# ─────────────────────────────────────────────────────────────
-
-def test_bridge():
-    """Test the bridge without ROS2 — just exercise the simulation."""
-    print("=" * 60)
-    print("  LeKiWi Bridge — Standalone Test")
-    print("=" * 60)
-
-    bridge = LeKiWiRos2Bridge(sim_mode=True)
-
-    print("\n[1] Testing forward motion (vx=0.1, vy=0, wz=0)")
-    bridge._last_cmd_vel = np.array([0.1, 0.0, 0.0])
-    for _ in range(50):
-        bridge.spin_once()
-
-    pos = bridge.sim.data.qpos[6:9] if bridge.sim else None
-    print(f"    Position after 50 steps: {pos}")
-
-    print("\n[2] Testing turning (vx=0, vy=0, wz=0.5)")
-    bridge._last_cmd_vel = np.array([0.0, 0.0, 0.5])
-    for _ in range(50):
-        bridge.spin_once()
-
-    pos = bridge.sim.data.qpos[6:9] if bridge.sim else None
-    print(f"    Position after 50 steps: {pos}")
-
-    print("\n[3] Testing full motion")
-    bridge.sim.reset()
-    bridge._last_cmd_vel = np.array([0.1, 0.05, 0.2])
-    for _ in range(100):
-        bridge.spin_once()
-
-    pos = bridge.sim.data.qpos[6:9] if bridge.sim else None
-    print(f"    Final position: {pos}")
-
-    print("\n[4] Checking joint names match URDF")
-    print(f"    Wheel joints: {WHEEL_JOINTS}")
-    print(f"    Arm joints:   {ARM_JOINTS}")
-    print(f"    All joints:   {len(ALL_JOINTS)} total")
-
-    print("\n✓ Bridge test complete")
-
-    return bridge
-
-
-# ─────────────────────────────────────────────────────────────
-#  ROS2 entry point
-# ─────────────────────────────────────────────────────────────
 
 def main(args=None):
-    if not HAS_ROS2:
-        print("[ERROR] ROS2 not available. Use test_bridge() instead.")
-        return
-
     rclpy.init(args=args)
-    node = LeKiWiRos2Bridge(sim_mode=True)
-    executor = rclpy.executors.SingleThreadedExecutor()
-    executor.add_node(node)
-
+    node = LeKiWiBridge()
     try:
-        executor.spin()
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info("LeKiWi bridge interrupted.")
     finally:
-        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        test_bridge()
-    else:
-        main()
+    main()
