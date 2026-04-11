@@ -187,14 +187,31 @@ class CLIPFMPolicyRunner:
 
     def predict(self, obs: dict) -> np.ndarray:
         import torch
-        # Image: HWC uint8 [0,255] → CHW float [0,1]
-        img = obs["image"]  # HWC uint8
-        img = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float() / 255.0
-        img = img.to(self.device)
+        # Accept both LeRobot-style keys and simple keys:
+        # LeRobot:  obs["observation.images.primary"] = (1,3,224,224) CHW float [0,1]
+        #           obs["observation.state"]          = (1,9) float [native]
+        # Simple:   obs["image"] = HWC uint8, obs["state"] = (9,) native
+        if "observation.images.primary" in obs:
+            # LeRobot format: already (1,3,224,224) CHW float [0,1]
+            img = torch.from_numpy(obs["observation.images.primary"]).float()
+            if img.dim() == 3:
+                img = img.unsqueeze(0)
+            img = img.to(self.device)
+            state_np = obs["observation.state"]
+        elif "image" in obs:
+            # Simple format: HWC uint8 [0,255]
+            img_np = obs["image"]
+            img = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+            img = img.to(self.device)
+            state_np = obs["state"]
+        else:
+            raise KeyError(f"obs must contain 'image' or 'observation.images.primary', got keys: {list(obs.keys())}")
 
-        # State: native units → [-1,1]
-        state = _normalize_state(obs["state"]).astype(np.float32)
-        state_t = torch.from_numpy(state).unsqueeze(0).to(self.device)
+        # Normalize state to [-1,1] for policy
+        state = _normalize_state(state_np).astype(np.float32)
+        if state.ndim == 1:
+            state = state[np.newaxis, ...]
+        state_t = torch.from_numpy(state).to(self.device)
 
         with torch.no_grad():
             action = self.policy.infer(img, state_t, num_steps=4)
