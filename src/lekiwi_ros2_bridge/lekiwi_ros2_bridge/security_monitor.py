@@ -19,7 +19,7 @@ Attack log -> JSON file at:
   ~/hermes_research/lekiwi_vla/security_log.jsonl
 """
 
-import time, json, math, threading, hashlib, hmac
+import time, json, math, threading, hashlib, hmac, os
 from collections import deque
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -46,7 +46,8 @@ class SecurityMonitor:
 
     def __init__(self, log_path: str = None):
         if log_path is None:
-            log_path = "/root/hermes_research/lekiwi_vla/security_log.jsonl"
+            _home = os.path.expanduser("~")
+            log_path = os.path.join(_home, "hermes_research", "lekiwi_vla", "security_log.jsonl")
         self._log_path = log_path
         self._lock     = threading.Lock()
         self._log_buf  = []

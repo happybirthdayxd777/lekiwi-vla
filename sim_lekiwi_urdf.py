@@ -202,12 +202,21 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                                 <geom name="wrist_horn_geom" type="mesh" mesh="wrist_horn"
                                       rgba="0.5 0.35 0.1 1" mass="0.02"/>
 
-                                <!-- ══ Gripper: j5 slide ══ -->
+                                <!-- ══ Gripper: fixed base plate (passive jaw) + j5 slide (active jaw) ══ -->
+                                <body name="gripper_base_fixed" pos="0 0 0.03">
+                                    <!-- Fixed passive jaw plate (does not move, mounted to wrist) -->
+                                    <geom name="gripper_fixed_plate" type="mesh" mesh="gripper_horn"
+                                          rgba="0.25 0.25 0.25 1" mass="0.04"
+                                          pos="-0.015 0 0" euler="0 0 0"/>
+                                    <geom name="gripper_base_servo" type="mesh" mesh="servo_gripper"
+                                          rgba="0.2 0.2 0.2 1" mass="0.08"
+                                          pos="-0.005 0 0"/>
+                                </body>
                                 <body name="gripper" pos="0 0 0.03">
                                     <joint name="j5" type="slide"
                                            axis="1 0 0"
                                            range="0 0.04" damping="3.0"/>
-                                    <!-- Gripper servo + moving jaw -->
+                                    <!-- Moving jaw: slides along X axis, 0=closed 0.04=open -->
                                     <geom name="gripper_base" type="mesh" mesh="servo_gripper"
                                           rgba="0.2 0.2 0.2 1" mass="0.1"/>
                                     <geom name="gripper_jaw" type="mesh" mesh="moving_jaw"
