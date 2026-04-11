@@ -239,9 +239,13 @@ class LeKiWiBridge(Node):
         """
         Convert Twist → wheel speeds, combine with current arm action, step sim.
 
-        When VLA is active (VLA action received), arm portion is already in
-        _last_action from _on_vla_action; we only override the wheel portion.
+        When VLA is active (_vla_action_fresh=True), arm portion from _last_action
+        is preserved and only the wheel portion is overridden by cmd_vel.
         When VLA is not active, arms stay at their last commanded position.
+
+        Note: _vla_action_fresh is set True by _on_vla_action and stays True
+        until the next _on_cmd_vel call (which processes a new cmd_vel + VLA action
+        combo). There is NO timer-based clearing -- cmd_vel drives the loop.
         """
         vx = float(msg.linear.x)
         vy = float(msg.linear.y)
@@ -407,9 +411,6 @@ class LeKiWiBridge(Node):
                     self.wrist_cam_pub.publish(wrist_ros)
             except Exception as e:
                 self.get_logger().warn(f"Camera render failed: {e}", once=True)
-
-        # Clear VLA fresh flag so next cmd_vel knows arms need re-confirmation
-        self._vla_action_fresh = False
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 

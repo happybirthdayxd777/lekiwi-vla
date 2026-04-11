@@ -413,9 +413,11 @@ class LeKiWiVLAPolicyNode(Node):
         img_arr = np.array(img_resized).transpose(2, 0, 1).astype(np.float32) / 255.0
 
         joints = self._last_joints
+        # NOTE: CLIP-FM policy was trained with wheel_velocities as the 3 wheel
+        # state dimensions (matching lerobot_policy_inference.py), NOT positions.
         state = np.concatenate([
             joints["arm_positions"],
-            joints["wheel_positions"],
+            joints["wheel_velocities"],   # ← was: wheel_positions (training mismatch bug)
         ]).astype(np.float32)
 
         obs = {
