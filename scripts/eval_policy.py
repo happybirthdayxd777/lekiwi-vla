@@ -1,260 +1,191 @@
 #!/usr/bin/env python3
 """
-LeKiwi Policy Evaluation Script
-===============================
-Evaluates a trained LeRobot policy on the LeKiwi simulation or real robot.
-
-Supports: ACT, Diffusion, Multi-Task DiT (Flow Matching), GR00T, SmolVLA, pi0
+Evaluate a trained Flow Matching policy on LeKiwi simulation.
+Compares trained policy vs random policy baseline.
 
 Usage:
-  # Sim: mock policy
-  python3 scripts/eval_policy.py --policy mock --sim
-
-  # Sim: LeRobot Multi-Task DiT (Flow Matching)
-  python3 scripts/eval_policy.py \
-    --policy multi_task_dit \
-    --checkpoint results/lekiwi_fm/checkpoints/latest \
-    --dataset <hf_repo> \
-    --sim
-
-  # Real robot: GR00T-N1.5
-  python3 scripts/eval_policy.py \
-    --policy groot \
-    --groot-model nvidia/GR00T-N1.5-3B \
-    --robot-ip 172.18.134.136 \
-    --task "move forward"
+  python3 scripts/eval_policy.py --policy flow_matching --checkpoint /tmp/fm_real/final_policy.pt --episodes 10
+  python3 scripts/eval_policy.py --policy random --episodes 10
 """
 
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import argparse
-import sys
-import time
-from pathlib import Path
-
-import numpy as np
 import torch
-from PIL import Image
-
-sys.path.insert(0, str(Path.home() / "lerobot" / "src"))
-
-from lerobot.configs.types import FeatureType
-from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.feature_utils import dataset_to_policy_features
-from lerobot.policies.factory import get_policy_class, make_policy
-from lerobot.policies.multi_task_dit.configuration_multi_task_dit import MultiTaskDiTConfig
-from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
-from lerobot.policies.act.configuration_act import ACTConfig
-from lerobot.policies.groot.configuration_groot import GrootConfig
-from lerobot.policies.factory import make_pre_post_processors
+import torch.nn as nn
+import numpy as np
+from pathlib import Path
 
 from sim_lekiwi import LeKiwiSim
 
 
-def make_policy_for_lekiwi(policy_name, dataset_stats, device, checkpoint_path=None):
-    """Instantiate a LeRobot policy for LeKiwi (9-DOF)."""
+# ─── Policy Network (must match training architecture) ──────────────────────
 
-    # Standard LeKiwi feature shapes
-    input_features = {
-        "observation.images.primary": FeatureType.create("image", shape=(3, 224, 224)),
-        "observation.state":          FeatureType.create("state",  shape=(9,)),
-    }
-    output_features = {
-        "action": FeatureType.create("action", shape=(9,)),
-    }
-
-    if policy_name == "act":
-        cfg = ACTConfig(input_features=input_features, output_features=output_features)
-        cfg.chunk_size = 8
-        cfg.n_obs_steps = 2
-
-    elif policy_name == "diffusion":
-        cfg = DiffusionConfig(input_features=input_features, output_features=output_features)
-        cfg.n_obs_steps = 2
-        cfg.horizon = 16
-        cfg.n_action_steps = 8
-
-    elif policy_name == "multi_task_dit":
-        cfg = MultiTaskDiTConfig(
-            input_features=input_features,
-            output_features=output_features,
-            objective="flow_matching",
-            n_obs_steps=2,
-            horizon=16,
-            n_action_steps=8,
-            hidden_dim=512,
-            num_layers=6,
-            num_heads=8,
-            vision_encoder_name="openai/clip-vit-base-patch16",
-            image_crop_shape=[224, 224],
+class VisionEncoder(nn.Module):
+    def __init__(self, embed_dim=512):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(3, 32, 4, stride=2, padding=1),  nn.ReLU(),
+            nn.Conv2d(32, 64, 4, stride=2, padding=1), nn.ReLU(),
+            nn.Conv2d(64, 128, 4, stride=2, padding=1), nn.ReLU(),
+            nn.Conv2d(128, 256, 4, stride=2, padding=1), nn.ReLU(),
+            nn.AdaptiveAvgPool2d((7, 7)),
+            nn.Flatten(),
+            nn.Linear(256 * 7 * 7, embed_dim),
+            nn.SiLU(),
         )
-        cfg.drop_n_last_frames = 7
+    def forward(self, x):
+        return self.net(x)
 
-    elif policy_name == "groot":
-        cfg = GrootConfig(
-            input_features=input_features,
-            output_features=output_features,
-            base_model_path="nvidia/GR00T-N1.5-3B",
-            tune_llm=False,
-            tune_visual=False,
-            tune_projector=True,
-            tune_diffusion_model=True,
-            n_obs_steps=1,
-            chunk_size=50,
-            n_action_steps=50,
+
+class FlowMatchingMLP(nn.Module):
+    def __init__(self, vision_dim=512, state_dim=9, action_dim=9, hidden=512):
+        super().__init__()
+        self.time_mlp = nn.Sequential(nn.Linear(1, 64), nn.SiLU(), nn.Linear(64, 128))
+        self.net = nn.Sequential(
+            nn.Linear(vision_dim + state_dim + action_dim + 128, hidden),
+            nn.SiLU(), nn.LayerNorm(hidden),
+            nn.Linear(hidden, hidden), nn.SiLU(), nn.LayerNorm(hidden),
+            nn.Linear(hidden, hidden), nn.SiLU(), nn.LayerNorm(hidden),
+            nn.Linear(hidden, action_dim),
         )
+        self.skip = nn.Linear(action_dim, action_dim, bias=False)
 
-    elif policy_name == "smolvla":
-        from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
-        cfg = SmolVLAConfig(
-            input_features=input_features,
-            output_features=output_features,
-            action_dim=9,
-            state_dim=9,
-        )
-
-    else:
-        raise ValueError(f"Unknown policy: {policy_name}")
-
-    policy = make_policy(cfg)
-
-    if checkpoint_path:
-        print(f"  Loading checkpoint: {checkpoint_path}")
-        # LeRobot's from_pretrained pattern
-        if hasattr(policy, "from_pretrained"):
-            policy = policy.__class__.from_pretrained(checkpoint_path)
-        else:
-            state = torch.load(checkpoint_path, map_location="cpu")
-            policy.load_state_dict(state)
-
-    policy.to(device)
-    policy.eval()
-
-    # Attach dataset stats for normalization
-    _, postprocessor = make_pre_post_processors(cfg, dataset_stats=dataset_stats)
-
-    return policy, postprocessor
+    def forward(self, image_embed, state, noisy_action, timestep):
+        t_feat = self.time_mlp(timestep)
+        x = torch.cat([image_embed, state, noisy_action, t_feat], dim=-1)
+        return self.net(x) + self.skip(noisy_action)
 
 
-def normalize_01_to_lekiwi(action_01):
-    """Convert policy (-1..1) to LeKiwi native units."""
-    ARM_LIMITS = np.array([
-        [-3.14, 3.14], [-1.57, 1.57], [-1.57, 1.57],
-        [-1.57, 1.57], [-3.14, 3.14], [0.00, 0.04],
-    ], dtype=np.float32)
-    WHEEL_LIMITS = np.array([[-5.0, 5.0]] * 3, dtype=np.float32)
+class FlowMatchingPolicy(nn.Module):
+    def __init__(self, state_dim=9, action_dim=9, hidden=512):
+        super().__init__()
+        self.vision_encoder = VisionEncoder(embed_dim=hidden)
+        self.flow_mlp = FlowMatchingMLP(hidden, state_dim, action_dim, hidden)
+        self.state_dim = state_dim
+        self.action_dim = action_dim
 
-    arm   = action_01[:6]
-    wheel = action_01[6:9]
+    def forward(self, image, state, noisy_action, timestep):
+        vis = self.vision_encoder(image)
+        return self.flow_mlp(vis, state, noisy_action, timestep)
 
-    arm_n   = ARM_LIMITS[:,0] + (arm   + 1) / 2 * (ARM_LIMITS[:,1] - ARM_LIMITS[:,0])
-    wheel_n = WHEEL_LIMITS[:,0] + (wheel + 1) / 2 * (WHEEL_LIMITS[:,1] - WHEEL_LIMITS[:,0])
+    @torch.no_grad()
+    def infer(self, image, state, num_steps=4):
+        action = torch.randn(image.shape[0], self.action_dim, device=image.device)
+        dt = 1.0 / num_steps
+        for i in range(num_steps):
+            t = torch.full([image.shape[0], 1], 1.0 - i * dt, device=image.device)
+            vis = self.vision_encoder(image)
+            velocity = self.flow_mlp(vis, state, action, t)
+            action = action - dt * velocity
+        return action
 
-    return np.concatenate([arm_n, wheel_n]).astype(np.float32)
+
+class RandomPolicy:
+    """Baseline: random action uniformly in [-1, 1]."""
+    def __init__(self, action_dim=9):
+        self.action_dim = action_dim
+    def infer(self, image, state, num_steps=4):
+        return torch.rand(1, self.action_dim) * 2 - 1
 
 
-def run_sim_eval(policy, postprocessor, policy_name, num_steps=200):
-    """Run evaluation on LeKiwi simulation."""
-    from sim_lekiwi import LeKiwiSim
+# ─── Evaluation ──────────────────────────────────────────────────────────────
 
+def evaluate(policy, device, episodes=10, max_steps=200):
+    """Run episodes and collect metrics."""
     sim = LeKiwiSim()
-    sim.reset()
+    all_rewards = []
+    all_distances = []
 
-    print(f"\n{'='*60}")
-    print(f"  Sim Evaluation — {policy_name}")
-    print(f"{'='*60}")
+    for ep in range(episodes):
+        sim.reset()
+        total_reward = 0.0
+        start_pos = sim.data.qpos[6:9].copy()  # base position [x, y, theta]
 
-    total_reward = 0.0
-    device = next(policy.parameters()).device
+        for step in range(max_steps):
+            # Get observation
+            img_pil = sim.render()
+            img_np = np.array(img_pil.resize((224, 224)), dtype=np.float32) / 255.0
+            img_t  = torch.from_numpy(img_np.transpose(2, 0, 1)).unsqueeze(0).to(device)
 
-    for step in range(num_steps):
-        img = sim.render()
-        obs = sim._obs()
+            arm_pos  = sim.data.qpos[0:6]
+            wheel_v  = sim.data.qvel[0:3]
+            state_t  = torch.from_numpy(np.concatenate([arm_pos, wheel_v])).float().unsqueeze(0).to(device)
 
-        # Prepare observation dict
-        img_resized = img.resize((224, 224), Image.BILINEAR)
-        img_t = torch.from_numpy(np.array(img_resized).transpose(2,0,1)).float() / 255.0
-        state_t = torch.from_numpy(np.concatenate([
-            obs["arm_positions"], obs["wheel_velocities"]])).float()
+            # Get action
+            action = policy.infer(img_t, state_t, num_steps=4)
+            action_np = action.cpu().numpy()[0]
 
-        policy_obs = {
-            "observation.images.primary": img_t.unsqueeze(0).to(device),
-            "observation.state":          state_t.unsqueeze(0).to(device),
-        }
+            # Denormalize to [-1, 1] range (already in that range)
+            action_clipped = np.clip(action_np, -1, 1)
 
-        # Run policy
-        with torch.no_grad():
-            if policy_name in ("act", "diffusion", "multi_task_dit", "smolvla"):
-                output = policy(policy_obs)
-                if isinstance(output, dict):
-                    action_01 = output["action"].cpu().numpy()[0]
-                else:
-                    action_01 = output.cpu().numpy()[0]
-            elif policy_name == "groot":
-                output = policy(policy_obs)
-                action_01 = output.cpu().numpy()[0]
-            elif policy_name == "mock":
-                t = step / 50.0
-                action_01 = np.zeros(9, dtype=np.float32)
-                action_01[0] = 0.5 * np.sin(t * 2 * np.pi)
-                action_01[1] = 0.3 * np.sin(t * 4 * np.pi)
+            # Step — standalone sim returns dict with reward via get_reward()
+            sim.step(action_clipped)
+            reward = sim.get_reward()  # standalone: -dist - 0.01*effort
+            total_reward += reward
 
-        # Denormalize
-        action_lekiwi = normalize_01_to_lekiwi(action_01)
+        # Final distance
+        end_pos = sim.data.qpos[6:9]
+        dist = np.linalg.norm(end_pos[:2] - start_pos[:2])
 
-        # Step sim
-        obs_out = sim.step(action_lekiwi)
-        reward = sim.get_reward()
-        total_reward += reward
+        all_rewards.append(total_reward)
+        all_distances.append(dist)
+        print(f"  Episode {ep+1:2d}: reward={total_reward:+.3f}, distance={dist:.3f}m")
 
-        if step % 40 == 0:
-            print(f"  step {step:4d} | reward: {reward:+.3f} | "
-                  f"arm[0]: {action_lekiwi[0]:+.3f} | "
-                  f"base: ({obs_out['base_position'][0]:+.2f}, {obs_out['base_position'][1]:+.2f})")
+    return {
+        "mean_reward":  np.mean(all_rewards),
+        "std_reward":   np.std(all_rewards),
+        "mean_distance": np.mean(all_distances),
+        "std_distance":  np.std(all_distances),
+        "all_rewards":   all_rewards,
+    }
 
-    print(f"\n  Total reward: {total_reward:.3f}")
-    return total_reward
 
+# ─── Main ────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate LeKiwi policy")
-    parser.add_argument("--policy", required=True,
-                        choices=["act","diffusion","multi_task_dit","groot","smolvla","mock"])
-    parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Path to trained checkpoint")
-    parser.add_argument("--dataset", type=str, required=True,
-                        help="HuggingFace dataset repo ID")
-    parser.add_argument("--groot-model", type=str, default="nvidia/GR00T-N1.5-3B",
-                        help="GR00T model ID (only for groot policy)")
-    parser.add_argument("--steps", type=int, default=200)
-    parser.add_argument("--device", type=str, default=None)
-    parser.add_argument("--sim", action="store_true", help="Run in simulation")
-    parser.add_argument("--robot-ip", type=str, default="172.18.134.136",
-                        help="LeKiwi robot IP (for real robot)")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--policy",    type=str,   default="flow_matching")
+    parser.add_argument("--checkpoint",type=str,   default="/tmp/fm_real/final_policy.pt")
+    parser.add_argument("--episodes",  type=int,   default=10)
+    parser.add_argument("--device",    type=str,   default="mps")
+    parser.add_argument("--hidden",    type=int,   default=512)
     args = parser.parse_args()
 
-    device = torch.device(args.device) if args.device else (
-        "cuda" if torch.cuda.is_available() else "cpu")
+    print(f"=" * 60)
+    print(f"  Evaluating: {args.policy}")
+    print(f"  Episodes: {args.episodes} | Device: {args.device}")
+    print(f"=" * 60)
 
-    print(f"Policy: {args.policy} | Device: {device}")
-
-    # Load dataset stats
-    print("Loading dataset...")
-    dataset_meta = LeRobotDatasetMetadata(args.dataset)
-    stats = dataset_meta.stats
-
-    # Make policy
-    print("Loading policy...")
-    policy, postprocessor = make_policy_for_lekiwi(
-        args.policy, stats, device, args.checkpoint)
-
-    if args.sim:
-        run_sim_eval(policy, postprocessor, args.policy, args.steps)
+    # Load policy
+    if args.policy == "flow_matching":
+        print(f"\n[1] Loading trained policy from {args.checkpoint}...")
+        policy = FlowMatchingPolicy(state_dim=9, action_dim=9, hidden=args.hidden)
+        state_dict = torch.load(args.checkpoint, map_location=args.device, weights_only=True)
+        policy.load_state_dict(state_dict)
+        policy.to(args.device)
+        policy.eval()
+        print(f"  ✓ Loaded (device={args.device})")
+    elif args.policy == "random":
+        print(f"\n[1] Using random baseline policy")
+        policy = RandomPolicy(action_dim=9)
+        device = "cpu"
     else:
-        print("[Real robot mode] Connect to robot first, then run...")
-        print(f"  python3 -m lerobot.robots.lekiwi.lekiwi_host --robot.id=lekiwi")
-        print("  Then press ENTER to start evaluation...")
-        input()
+        raise ValueError(f"Unknown policy: {args.policy}")
 
+    # Evaluate
+    print(f"\n[2] Running {args.episodes} episodes...")
+    device = args.device if args.policy == "flow_matching" else "cpu"
+    metrics = evaluate(policy, device, episodes=args.episodes)
+
+    print(f"\n[3] Results:")
+    print(f"  Mean reward:    {metrics['mean_reward']:+.3f} ± {metrics['std_reward']:.3f}")
+    print(f"  Mean distance:  {metrics['mean_distance']:.3f} ± {metrics['std_distance']:.3f}m")
+    print(f"  Best reward:    {max(metrics['all_rewards']):+.3f}")
+    print(f"  Worst reward:   {min(metrics['all_rewards']):+.3f}")
+
+    print("\n✓ Evaluation complete")
 
 if __name__ == "__main__":
     main()
