@@ -305,15 +305,19 @@ class LeKiWiSimURDF:
               f"meshes={self.model.nmesh}, joints={self.model.njnt}, "
               f"geoms={self.model.ngeom}")
 
-    def _obs(self) -> np.ndarray:
+    def _obs(self) -> dict:
+        """Return observation as dict (compatible with LeKiWiSim._obs interface)."""
         d = self.data
-        return np.concatenate([
-            d.qpos[:3], d.qpos[3:7], d.qvel[:3], d.qvel[3:6],
-            np.array([d.qpos[self._jpos_idx[n]] for n in ARM_JOINTS]),
-            np.array([d.qvel[self._jvel_idx[n]] for n in WHEEL_JOINTS]),
-            [d.time],
-            self._target[:2] - d.qpos[:2],
-        ], dtype=np.float32)
+        return {
+            "arm_positions":        np.array([d.qpos[self._jpos_idx[n]] for n in ARM_JOINTS]),
+            "wheel_velocities":     np.array([d.qvel[self._jvel_idx[n]] for n in WHEEL_JOINTS]),
+            "arm_velocities":       np.array([d.qvel[self._jvel_idx[n]] for n in ARM_JOINTS]),
+            "base_position":        d.qpos[:3].copy(),
+            "base_quaternion":      d.qpos[3:7].copy(),
+            "base_linear_velocity": d.qvel[:3].copy(),
+            "base_angular_velocity": d.qvel[3:6].copy(),
+            "time": d.time,
+        }
 
     def _action_to_ctrl(self, action):
         arm   = np.clip(action[:6], -1, 1) * 3.14

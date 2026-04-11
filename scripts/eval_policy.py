@@ -180,7 +180,8 @@ def make_policy(arch, checkpoint, device):
     else:
         raise ValueError(f"Unknown arch: {arch}")
 
-    sd = torch.load(checkpoint, map_location=device, weights_only=True)
+    ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
+    sd = ckpt.get("policy_state_dict", ckpt)   # handle both raw sd and wrapped ckpt
     policy.load_state_dict(sd)
     policy.to(device)
     policy.eval()
