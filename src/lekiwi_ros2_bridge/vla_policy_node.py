@@ -238,18 +238,18 @@ def _make_clip_fm_policy(pretrained: Optional[str], device: str):
 
 def _normalize_state(state: np.ndarray) -> np.ndarray:
     """
-    Normalize LeKiWi state from native units to [-1,1] policy input.
-    state order: [arm*6, wheel*3]
+    CLIP-FM was trained with RAW (unnormalized) state — do NOT normalize.
+
+    Training data (lekiwi_urdf_5k.h5) uses raw native-unit state values:
+      states range: -3.7872 to +2.9817
+    The model never saw [-1,1] normalized inputs during training.
+
+    Normalizing state at inference time creates a SEVERE DISTRIBUTION MISMATCH
+    (e.g., j5 gripper raw=0.3 → normalized=1.0, but training saw raw=0.3).
+
+    Fix: pass raw state directly, matching lerobot_policy_inference.py L257-258.
     """
-    arm   = state[:6]
-    wheel = state[6:9]
-    arm_norm = np.clip((arm - LEKIWI_ARM_LIMITS[:, 0]) /
-                       (LEKIWI_ARM_LIMITS[:, 1] - LEKIWI_ARM_LIMITS[:, 0]) * 2 - 1,
-                       -1, 1)
-    wheel_norm = np.clip((wheel - LEKIWI_WHEEL_LIMITS[:, 0]) /
-                          (LEKIWI_WHEEL_LIMITS[:, 1] - LEKIWI_WHEEL_LIMITS[:, 0]) * 2 - 1,
-                          -1, 1)
-    return np.concatenate([arm_norm, wheel_norm]).astype(np.float32)
+    return np.asarray(state, dtype=np.float32)
 
 
 class CLIPFMPolicyRunner:
