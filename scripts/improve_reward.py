@@ -23,6 +23,7 @@ from pathlib import Path
 from PIL import Image
 
 from sim_lekiwi import LeKiwiSim
+from sim_lekiwi_urdf import LeKiWiSimURDF
 
 
 class TaskEvaluator:
@@ -73,7 +74,7 @@ class TaskEvaluator:
         action = self.policy.infer(img_t, state_t, num_steps=4)
         return np.clip(action.cpu().numpy()[0], -1, 1).astype(np.float32)
 
-    def reach_target(self, target=(0.5, 0.0), threshold=0.1, max_steps=200):
+    def reach_target(self, target=(0.5, 0.0), threshold=0.3, max_steps=300):
         """
         Task: Move the robot base to within `threshold` meters of target.
         Returns: (success: bool, steps_taken: int, final_dist: float)
@@ -147,14 +148,15 @@ class TaskEvaluator:
         return False, max_steps, final_dist
 
 
-def evaluate_policy(policy=None, device="cpu", episodes=20, task="reach", sim=None):
+def evaluate_policy(policy=None, device="cpu", episodes=20, task="reach", sim=None,
+                   threshold=0.3, max_steps=300):
     """Evaluate a policy on task-oriented metrics."""
     if sim is None:
         sim = LeKiwiSim()
     evaluator = TaskEvaluator(sim, policy=policy, device=device)
 
     if task == "reach":
-        results = [evaluator.reach_target() for _ in range(episodes)]
+        results = [evaluator.reach_target(threshold=threshold, max_steps=max_steps) for _ in range(episodes)]
         successes = sum(1 for r in results if r[0])
         avg_steps = np.mean([r[1] for r in results])
         avg_dist = np.mean([r[2] for r in results])
@@ -186,11 +188,33 @@ def main():
     parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--policy",  type=str, default=None, help="Path to policy checkpoint")
     parser.add_argument("--device",   type=str, default="cpu")
+    parser.add_argument("--sim_type", type=str, default="urdf",
+                        choices=["primitive", "urdf"],
+                        help="Simulation type: urdf=STL mesh (matches training), primitive=cylinders")
+    parser.add_argument("--threshold", type=float, default=None,
+                        help="Success threshold in meters (default: 0.1 for primitive, 0.3 for urdf)")
+    parser.add_argument("--max_steps", type=int, default=None,
+                        help="Max steps per episode (default: 200 for primitive, 300 for urdf)")
     args = parser.parse_args()
 
     print(f"\n{'='*60}")
     print(f"  Task-Oriented Evaluation | {args.task}")
+    print(f"  Sim: {args.sim_type} | Policy: {args.policy or 'random'}")
     print(f"{'='*60}")
+
+    # Create simulation (MUST match what was used during training)
+    if args.sim_type == "urdf":
+        sim = LeKiWiSimURDF()
+        default_threshold = 0.3
+        default_max_steps = 300
+    else:
+        sim = LeKiwiSim()
+        default_threshold = 0.1
+        default_max_steps = 200
+
+    threshold = args.threshold if args.threshold is not None else default_threshold
+    max_steps = args.max_steps if args.max_steps is not None else default_max_steps
+    print(f"  Threshold: {threshold}m | Max steps: {max_steps}")
 
     policy = None
     if args.policy:
@@ -202,7 +226,9 @@ def main():
         policy.eval()
         print(f"Loaded policy: {args.policy}")
 
-    evaluate_policy(policy=policy, device=args.device, episodes=args.episodes, task=args.task)
+    evaluate_policy(policy=policy, device=args.device, episodes=args.episodes,
+                    task=args.task, sim=sim,
+                    threshold=threshold, max_steps=max_steps)
 
 if __name__ == "__main__":
     main()
