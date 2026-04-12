@@ -11,10 +11,14 @@ Modes:
   sim_type : primitive | urdf
   policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm
 
-Recording:
+Recording + Replay:
+  # Record a trajectory (HDF5 at 20 Hz)
   ros2 launch lekiwi_ros2_bridge full.launch.py record:=true record_file:=/tmp/run.h5
   ros2 topic pub /lekiwi/record_control std_msgs/String "start"
   ros2 topic pub /lekiwi/record_control std_msgs/String "stop"
+
+  # Replay a recorded trajectory (plays joint_states + cmd_vel + image back)
+  ros2 launch lekiwi_ros2_bridge full.launch.py replay_file:=/tmp/run.h5
 
 Starts:
   1. lekiwi_ros2_bridge (bridge node) — ROS2 ↔ MuJoCo
@@ -32,8 +36,10 @@ Topics published by bridge:
 import os
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.substitutions import LaunchConfiguration, IfCondition
+from launch.launch_description_sources import PythonLaunchFileSource
+from launch.actions import ExecuteProcess
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -66,6 +72,14 @@ def generate_launch_description() -> LaunchDescription:
         "record_file", default_value="",
         description="Output HDF5 path for trajectory recording (default: auto-generated)",
     )
+    replay_file = DeclareLaunchArgument(
+        "replay_file", default_value="",
+        description="HDF5 trajectory file to replay (empty = no replay)",
+    )
+    replay_hz = DeclareLaunchArgument(
+        "replay_hz", default_value="20.0",
+        description="Replay frequency in Hz",
+    )
 
     bridge_node = Node(
         package="lekiwi_ros2_bridge",
@@ -97,6 +111,24 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
     )
 
+    # ── Replay node (conditional — only if replay_file is set) ───────────
+    replay_node = Node(
+        package="lekiwi_ros2_bridge",
+        executable="replay_node",
+        name="lekiwi_replay_node",
+        parameters=[{
+            "replay_file": LaunchConfiguration("replay_file"),
+            "replay_hz":   LaunchConfiguration("replay_hz"),
+        }],
+        remappings=[
+            # Replay publishes to the same topics as bridge
+            ("/lekiwi/joint_states", "/lekiwi/joint_states"),
+            ("/lekiwi/cmd_vel",     "/lekiwi/cmd_vel"),
+        ],
+        condition=IfCondition(LaunchConfiguration("replay_file")),
+        output="screen",
+    )
+
     return LaunchDescription([
         sim_type,
         mode,
@@ -105,6 +137,9 @@ def generate_launch_description() -> LaunchDescription:
         device,
         record,
         record_file,
+        replay_file,
+        replay_hz,
         bridge_node,
         vla_node,
+        replay_node,
     ])
