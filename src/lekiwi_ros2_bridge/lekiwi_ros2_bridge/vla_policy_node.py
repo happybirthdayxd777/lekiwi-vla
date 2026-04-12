@@ -238,18 +238,18 @@ def _make_clip_fm_policy(pretrained: Optional[str], device: str):
 
 def _normalize_state(state: np.ndarray) -> np.ndarray:
     """
-    Normalize LeKiWi state from native units to [-1,1] policy input.
-    state order: [arm*6, wheel*3]
+    CLIP-FM was trained with RAW (unnormalized) state — do NOT normalize.
+
+    Training data (lekiwi_urdf_5k.h5) uses raw native-unit state values:
+      states range: -3.7872 to +2.9817
+    The model never saw [-1,1] normalized inputs during training.
+
+    Normalizing state at inference time creates a SEVERE DISTRIBUTION MISMATCH
+    (e.g., j5 gripper raw=0.3 → normalized=1.0, but training saw raw=0.3).
+
+    Fix: pass raw state directly, matching lerobot_policy_inference.py L257-258.
     """
-    arm   = state[:6]
-    wheel = state[6:9]
-    arm_norm = np.clip((arm - LEKIWI_ARM_LIMITS[:, 0]) /
-                       (LEKIWI_ARM_LIMITS[:, 1] - LEKIWI_ARM_LIMITS[:, 0]) * 2 - 1,
-                       -1, 1)
-    wheel_norm = np.clip((wheel - LEKIWI_WHEEL_LIMITS[:, 0]) /
-                          (LEKIWI_WHEEL_LIMITS[:, 1] - LEKIWI_WHEEL_LIMITS[:, 0]) * 2 - 1,
-                          -1, 1)
-    return np.concatenate([arm_norm, wheel_norm]).astype(np.float32)
+    return np.asarray(state, dtype=np.float32)
 
 
 class CLIPFMPolicyRunner:
@@ -302,15 +302,43 @@ class CLIPFMPolicyRunner:
         pass
 
 
-def _make_clip_fm_policy_wrapper(pretrained: Optional[str], device: str):
-    raw = _make_clip_fm_policy(pretrained, device)
+def _make_task_oriented_policy(pretrained: Optional[str], device: str):
+    """
+    Load task-oriented policy trained via scripts/train_task_oriented.py.
+
+    Same CLIP-FM architecture but trained with reward-weighted sampling.
+    Checkpoint format: {'epoch': int, 'policy_state_dict': state_dict, ...}
+
+    Default checkpoint: results/task_oriented_50ep/checkpoint_epoch_30.pt
+    """
+    import torch
+    sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
+    from scripts.train_task_oriented import CLIPFlowMatchingPolicy as TOClipFlowMatchingPolicy
+
+    policy = TOClipFlowMatchingPolicy(state_dim=9, action_dim=9, hidden=512, device=device)
+
+    if pretrained:
+        ckpt_path = os.path.expanduser(pretrained)
+        if os.path.exists(ckpt_path):
+            ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+            sd = ckpt.get("policy_state_dict", ckpt)
+            missing, unexpected = policy.load_state_dict(sd, strict=False)
+            print(f"[task_oriented] Loaded checkpoint epoch={ckpt.get('epoch','?')} | "
+                  f"missing={missing} unexpected={len(unexpected)}")
+        else:
+            print(f"[task_oriented] WARNING: checkpoint not found: {ckpt_path}")
+    return policy
+
+
+def _make_task_oriented_wrapper(pretrained: Optional[str], device: str):
+    raw = _make_task_oriented_policy(pretrained, device)
     return CLIPFMPolicyRunner(raw, device)
 
 
 _POLICY_LOADERS = {
     "mock":          _make_mock_policy,
     "clip_fm":       _make_clip_fm_policy_wrapper,
-    "task_oriented": _make_clip_fm_policy_wrapper,   # reuses same CLIP-FM class + checkpoint format
+    "task_oriented": _make_task_oriented_wrapper,
 }
 
 

@@ -1,337 +1,814 @@
 #!/usr/bin/env python3
 """
-ROS2 ↔ LeKiWi-MuJoCo Bridge Node
+LeKiWi ROS2 ↔ MuJoCo Bridge Node
+================================
+Bridges ROS2 cmd_vel → MuJoCo sim, and MuJoCo sensor data → ROS2 joint_states.
 
-Bridges commands between ROS2 omni_controller and the LeKiWi MuJoCo simulator.
-Handles bidirectional conversion between ROS2 topics and MuJoCo physics state.
+Supports two simulation backends:
+  - LeKiWiSim      (sim_lekiwi.py)   — cylinder primitives, fast & stable
+  - LeKiWiSimURDF  (sim_lekiwi_urdf.py) — real STL meshes from lekiwi_modular
 
-ROS2 side:
-  - Subscribe: /lekiwi/cmd_vel (Twist)              → base + arm
-  - Publish:   /lekiwi/wheel_{i}/cmd_vel (Float64)  → wheel angular velocities
-  - Publish:   /lekiwi/odom (Odometry)               → simulated odometry
-  - Publish:   /lekiwi/joint_states (JointState)     → full joint state
-  - Publish:   /lekiwi/camera/image_raw (Image)      → front camera @ 4 Hz
-  - Publish:   /lekiwi/wrist_camera/image_raw (Image) → wrist camera @ 4 Hz (URDF mode)
+Topics:
+  Input  : /lekiwi/cmd_vel        (geometry_msgs/Twist)
+  Input  : /lekiwi/vla_action     (Float64MultiArray, arm*6 + wheel*3, native units)
+  Output : /lekiwi/joint_states   (sensor_msgs/JointState)
+  Output : /lekiwi/camera/image_raw (Image, 20 Hz, URDF model only)
+  Output : /lekiwi/wheel_N/cmd_vel (Float64, mirrors real robot)
 
-MuJoCo side (LeKiWiSim):
-  - action[0..5] = arm joint position targets (rad, clamped -3.14..3.14)
-  - action[6..9] = wheel angular velocities (rad/s, clamped -5..5)
-  - qpos[0:3]    = base position (free joint)
-  - qpos[3:7]    = base quaternion
-  - qvel[0:3]    = base linear velocity
-  - qvel[3:6]    = base angular velocity
+Architecture:
+  ROS2 /lekiwi/cmd_vel
+        ↓ (Twist → [vx, vy, wz])
+  BridgeNode._on_cmd_vel()
+        ↓
+  BridgeNode._on_vla_action()     ← NEW: arm override from VLA policy
+        ↓
+  LeKiWiSim.step(action=[arm*6, wheel_speeds*3])
+        ↓
+  BridgeNode._publish_joint_states()
+        ↓ (JointState ← MuJoCo obs)
+  ROS2 /lekiwi/joint_states  →  LeKiWiVLAPolicyNode → /lekiwi/vla_action  (closed loop)
 """
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
+
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState, Image
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import TransformStamped
 from std_msgs.msg import Float64
 from cv_bridge import CvBridge
+import tf2_ros
+
 import numpy as np
-import transforms3d
-from threading import Thread, Event
-import time as _time
+import sys
+import os
+import time
+
+# ── Simulation backend imports ─────────────────────────────────────────────────
+sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
+from sim_lekiwi import LeKiwiSim
+from sim_lekiwi_urdf import LeKiWiSimURDF
+from security_monitor import SecurityMonitor
+from policy_guardian import PolicyGuardian
+from trajectory_logger import TrajectoryRecorder
+
+# ── Joint name mapping: URDF Gazebo names → bridge canonical names ─────────────
+# From lekiwi.urdf Gazebo plugin joint list:
+#   wheel_0 → ST3215_Servo_Motor-v1_Revolute-64
+#   wheel_1 → ST3215_Servo_Motor-v1-1_Revolute-62
+#   wheel_2 → ST3215_Servo_Motor-v1-2_Revolute-60
+# Arm joints (from URDF Revolute joints):
+#   arm_j0 → ST3215_Servo_Motor-v1-1_Revolute-49  (first arm joint)
+#   arm_j1 → ST3215_Servo_Motor-v1-2_Revolute-51
+#   arm_j2 → ST3215_Servo_Motor-v1-3_Revolute-53
+#   arm_j3 → STS3215_03a_Wrist_Roll-v1_Revolute-55
+#   arm_j4 → STS3215_03a-v1-4_Revolute-57
+#   arm_j5 → (gripper slide — not in URDF Gazebo plugin)
+URDF_WHEEL_JOINT_NAMES = [
+    "ST3215_Servo_Motor-v1_Revolute-64",       # wheel_0 → w1 in bridge
+    "ST3215_Servo_Motor-v1-1_Revolute-62",     # wheel_1 → w2 in bridge
+    "ST3215_Servo_Motor-v1-2_Revolute-60",     # wheel_2 → w3 in bridge
+]
+URDF_ARM_JOINT_NAMES = [
+    "STS3215_03a-v1_Revolute-45",             # arm_j0 — shoulder pan (axis≈Z, range ±1.57)
+    "STS3215_03a-v1-1_Revolute-49",           # arm_j1 — shoulder lift (axis=[1,0,0], range -3.14..0)
+    "STS3215_03a-v1-2_Revolute-51",           # arm_j2 — elbow (axis=[1,0,0], range 0..3.14)
+    "STS3215_03a-v1-3_Revolute-53",           # arm_j3 — wrist pitch (axis=[1,0,0], range 0..3.14)
+    "STS3215_03a_Wrist_Roll-v1_Revolute-55", # arm_j4 — wrist roll (axis=[0,0.423,-0.906])
+    "STS3215_03a-v1-4_Revolute-57",          # arm_j5 — gripper slide (axis=[0,-0.906,-0.423], range ±1.57)
+]
 
 
-# MuJoCo joint name → ROS2 wheel index mapping
-MUJOCO_WHEEL_JOINTS = ["w1", "w2", "w3"]
-# MuJoCo arm joints (6 DOF)
-ARM_JOINTS = ["j0", "j1", "j2", "j3", "j4", "j5"]
+# ── Kinematics constants (from omni_controller.py) ──────────────────────────────
+WHEEL_RADIUS   = 0.05    # m
+WHEEL_POSITIONS = np.array([
+    [ 0.1732,  0.0,    0.0 ],   # wheel 0 — front
+    [-0.0866,  0.15,   0.0 ],   # wheel 1 — back-left
+    [-0.0866, -0.15,   0.0 ],   # wheel 2 — back-right
+], dtype=np.float64)
+
+# Roller axes extracted from LeKiWi.urdf (meters, already normalised)
+# Bridge wheel indices → URDF joint → MuJoCo/joint axis:
+#   wheel_0 → Revolute-64 → [-0.866025,  0, 0.5]    (back-right motor)
+#   wheel_1 → Revolute-62 → [ 0.866025,  0, 0.5]    (back-left motor)
+#   wheel_2 → Revolute-60 → [ 0,         0, -1.0]   (front motor — pure Z spin)
+# Note: wheel_2 axis=[0,0,-1] is the OMNI ROLLER axis (roller spins around Z to move forward/back).
+# Previous code had wheel_0 and wheel_2 axes swapped — fixed 2026-04-12.
+_JOINT_AXES = np.array([
+    [-0.866025,  0.0,  0.5      ],   # wheel_0 — Revolute-64
+    [ 0.866025,  0.0,  0.5      ],   # wheel_1 — Revolute-62
+    [ 0.0,       0.0, -1.0      ],   # wheel_2 — Revolute-60
+], dtype=np.float64)
+
+
+def twist_to_wheel_speeds(vx: float, vy: float, wz: float) -> np.ndarray:
+    """
+    Convert robot-level Twist (vx, vy, wz) into 3 wheel angular velocities.
+    Mirrors the exact kinematics from lekiwi_modular/omni_controller.py.
+    Returns shape (3,).
+    """
+    wheel_speeds = np.zeros(3, dtype=np.float64)
+    for i in range(3):
+        wheel_vel = np.array([
+            vx - wz * WHEEL_POSITIONS[i, 1],
+            vy + wz * WHEEL_POSITIONS[i, 0],
+            0.0,
+        ])
+        angular_speed = np.dot(wheel_vel, _JOINT_AXES[i]) / WHEEL_RADIUS
+        wheel_speeds[i] = angular_speed
+    return wheel_speeds
 
 
 class LeKiWiBridge(Node):
-    def __init__(self, sim, rate=50.0):
-        super().__init__('lekiwi_ros2_bridge')
-        self.sim = sim
-        self.dt = 1.0 / rate
-        self.rate = rate
+    """
+    ROS2 ↔ MuJoCo bridge for LeKiWi robot.
 
-        # MuJoCo joint index lookups (from sim)
-        self._jpos_idx = sim._jpos_idx
-        self._jvel_idx = sim._jvel_idx
+    Publishers:
+      /lekiwi/joint_states   — arm (6) + wheel (3) joint positions & velocities
 
-        # ROS2 parameters (match lekiwi_modular/omni_controller.py)
-        self.wheel_radius = 0.05
-        self.wheel_positions = [
-            np.array([0.1732, 0.0, 0.0]),
-            np.array([-0.0866, 0.15, 0.0]),
-            np.array([-0.0866, -0.15, 0.0]),
-        ]
-        # Omni-wheel joint axes — from lekiwi.urdf (verified empirically)
-        # wheel_0 (front-right, Revolute-64): [-0.866, 0, 0.5]
-        # wheel_1 (back-left,   Revolute-62): [ 0.866, 0, 0.5]
-        # wheel_2 (back,        Revolute-60): [ 0,     0, -1  ]
-        self.joint_axes = [
-            np.array([-0.866025, 0.0, 0.5]),
-            np.array([ 0.866025, 0.0, 0.5]),
-            np.array([ 0.0,      0.0, -1.0]),
-        ]
+    Subscribers:
+      /lekiwi/cmd_vel        — Twist (linear x/y, angular z)
+    """
 
-        # --- ROS2 Publishers ---
-        # Wheel velocity publishers (to feed omni_odometry)
+    # MuJoCo ctrl index layout (from sim_lekiwi.py):
+    #   ctrl[0:6]  = arm joints   (j0..j5, range ±3.14)
+    #   ctrl[6:9]  = wheel joints (w1..w3, range ±5.0)
+    ARM_CTRL_MIN  = -3.14
+    ARM_CTRL_MAX  =  3.14
+    WHEEL_CTRL_MIN = -5.0
+    WHEEL_CTRL_MAX =  5.0
+
+    ARM_NAMES  = ["j0", "j1", "j2", "j3", "j4", "j5"]
+    WHEEL_NAMES = ["w1", "w2", "w3"]
+
+    def __init__(self, sim_type: str = "primitive"):
+        """
+        Parameters
+        ----------
+        sim_type : str
+            "primitive" → LeKiWiSim (fast cylinders, stable)
+            "urdf"      → LeKiWiSimURDF (STL mesh geometry)
+        """
+        super().__init__("lekiwi_ros2_bridge")
+
+        # Declare and retrieve parameters (set via launch file)
+        self.declare_parameter("sim_type", "primitive")
+        self.declare_parameter("mode", "sim")
+        self.declare_parameter("record", False)
+        self.declare_parameter("record_file", "")
+        self.declare_parameter("enable_hmac", False)
+        self.declare_parameter("cmd_vel_secret", "")
+
+        p_enable_hmac = self.get_parameter("enable_hmac")
+        p_cmd_vel_secret = self.get_parameter("cmd_vel_secret")
+        enable_hmac = bool(p_enable_hmac.value) if p_enable_hmac.value else False
+        cmd_vel_secret = str(p_cmd_vel_secret.value) if p_cmd_vel_secret.value else ""
+        if cmd_vel_secret:
+            cmd_vel_secret_bytes = cmd_vel_secret.encode()
+        else:
+            cmd_vel_secret_bytes = None
+        p_sim = self.get_parameter("sim_type")
+        p_mode = self.get_parameter("mode")
+        p_record = self.get_parameter("record")
+        p_record_file = self.get_parameter("record_file")
+        sim_type = str(p_sim.value) if p_sim.value else "primitive"
+        self.mode = str(p_mode.value) if p_mode.value else "sim"
+        self._record = bool(p_record.value) if p_record.value else False
+        self._record_file = str(p_record_file.value) if p_record_file.value else ""
+
+        # ── Initialise simulation OR real hardware ────────────────────────
+        if self.mode == "real":
+            self.get_logger().info("Starting REAL HARDWARE mode (serial servos)…")
+            from real_hardware_adapter import RealHardwareAdapter, MockHardwareAdapter
+            # Try real hardware; fall back to mock if serial unavailable
+            self.hw: RealHardwareAdapter | MockHardwareAdapter = RealHardwareAdapter(
+                port="/dev/ttyUSB0",
+                baudrate=115200,
+                arm_servo_ids=[1, 2, 3, 4, 5],
+                wheel_servo_ids=[10, 11, 12],
+                arm_num_joints=5,
+                wheel_num_joints=3,
+            )
+            if not self.hw.connect():
+                self.get_logger().warn("Real hardware unavailable — using mock adapter")
+                self.hw = MockHardwareAdapter()
+                self.hw.connect()
+            self.sim = None
+            self.get_logger().info("Real hardware adapter ready.")
+        elif sim_type == "urdf":
+            self.get_logger().info("Starting LeKiWiSimURDF (STL mesh geometry)…")
+            self.sim: LeKiWiSim | LeKiWiSimURDF = LeKiWiSimURDF()
+            self.get_logger().info("URDF simulation initialised.")
+            self.hw = None
+        else:
+            self.get_logger().info("Starting LeKiWiSim (cylinder primitives)…")
+            self.sim = LeKiwiSim()
+            self.get_logger().info("Primitive simulation initialised.")
+            self.hw = None
+
+        # CTF security monitor
+        self.security_monitor = SecurityMonitor(
+            enable_hmac=enable_hmac,
+            cmd_vel_secret=cmd_vel_secret_bytes,
+        )
+        if enable_hmac:
+            self.get_logger().info("SecurityMonitor active with HMAC cmd_vel verification (Challenge 1 defense).")
+        else:
+            self.get_logger().info("SecurityMonitor active (raw cmd_vel anomaly detection).")
+
+        # Active policy guardian — blocks unknown policy fingerprints
+        self.policy_guardian = PolicyGuardian()
+        self.get_logger().info("PolicyGuardian active (Challenge 7 defense).")
+
+        # ── ROS2 QoS profile ──────────────────────────────────────────────────
+        qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE,
+            depth=10,
+        )
+
+        # Security alert publisher
+        from std_msgs.msg import String
+        self.alert_pub = self.create_publisher(String, "/lekiwi/security_alert", qos)
+        self.joint_state_pub = self.create_publisher(JointState, "/lekiwi/joint_states", qos)
+
+        # Odometry publisher (mirrors lekiwi_modular omni_odometry.py)
+        self.odom_pub = self.create_publisher(Odometry, "/lekiwi/odom", qos)
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+
+        # URDF-compatible joint states publisher (real URDF joint names)
+        self.joint_state_urdf_pub = self.create_publisher(
+            JointState, "/lekiwi/joint_states_urdf", qos
+        )
+
+        # Camera bridge: MuJoCo → ROS2 image
+        self.camera_pub  = self.create_publisher(Image, "/lekiwi/camera/image_raw",    qos)
+        self.wrist_cam_pub = self.create_publisher(Image, "/lekiwi/wrist_camera/image_raw", qos)
+        self.bridge = CvBridge()
+
+        # Separate publishers for each wheel (mirrors omni_controller output)
         self.wheel_pubs = [
-            self.create_publisher(Float64, f'/lekiwi/wheel_{i}/cmd_vel', 10)
+            self.create_publisher(Float64, f"/lekiwi/wheel_{i}/cmd_vel", qos)
             for i in range(3)
         ]
-        # Odometry publisher
-        self.odom_pub = self.create_publisher(Odometry, '/lekiwi/odom', 10)
-        # Full joint state publisher
-        self.joint_state_pub = self.create_publisher(
-            JointState, '/lekiwi/joint_states', 10
-        )
 
-        # ── Camera publishers (throttled to 4 Hz to avoid render overload) ──
-        self._cv_bridge = CvBridge()
-        self._camera_pub = self.create_publisher(Image, '/lekiwi/camera/image_raw', 5)
-        self._wrist_camera_pub = self.create_publisher(
-            Image, '/lekiwi/wrist_camera/image_raw', 5
-        ) if hasattr(sim, 'render_wrist') else None
-        self._last_camera_pub = 0.0
-        self._camera_pub_interval = 0.25   # 4 Hz = 0.25 s
-
-        # --- ROS2 Subscribers ---
-        # Base velocity command (from teleop or Nav2)
+        # ── ROS2 subscribers ───────────────────────────────────────────────────
         self.cmd_vel_sub = self.create_subscription(
-            Twist, '/lekiwi/cmd_vel', self._on_cmd_vel, 10
+            Twist, "/lekiwi/cmd_vel", self._on_cmd_vel, qos
         )
 
-        # Arm joint position commands (radians, one topic per joint)
-        self.arm_subs = []
-        for i, joint_name in enumerate(ARM_JOINTS):
-            sub = self.create_subscription(
-                Float64,
-                f'/lekiwi/arm_joint_{i}/cmd_pos',
-                lambda msg, idx=i: self._on_arm_cmd(idx, msg),
-                10
-            )
-            self.arm_subs.append(sub)
+        # VLA action subscriber: arm (6) + wheel (3) in native units from policy node
+        from std_msgs.msg import Float64MultiArray
+        self.vla_action_sub = self.create_subscription(
+            Float64MultiArray, "/lekiwi/vla_action", self._on_vla_action, qos
+        )
 
-        # --- State ---
-        self._cmd_vel = np.zeros(3)    # wheel angular speeds [w1, w2, w3] (rad/s)
-        self._arm_targets = np.zeros(6) # arm joint positions (rad)
-        self._running = Event()
-        self._spin_thread: Thread = None
+        # CTF Challenge 7: policy injection topic
+        from std_msgs.msg import ByteMultiArray
+        self.policy_sub = self.create_subscription(
+            ByteMultiArray, "/lekiwi/policy_input", self._on_policy_input, qos
+        )
+
+        # ── HMAC-signed cmd_vel subscriber (Challenge 1 defense) ─────────────
+        # Message format: bytes = struct.pack('d', timestamp) + struct.pack('ddd', vx, vy, wz) + mac_bytes(32)
+        # Total: 8 + 24 + 32 = 64 bytes
+        self.cmd_vel_hmac_sub = self.create_subscription(
+            ByteMultiArray, "/lekiwi/cmd_vel_hmac", self._on_cmd_vel_hmac, qos
+        )
+        self._blocked_count = 0
+
+        # ── Timer: step MuJoCo & publish at 20 Hz (camera is expensive) ────────
+        self.timer = self.create_timer(0.05, self._on_timer)   # 20 Hz
+
+        # ── State ───────────────────────────────────────────────────────────────
+        self._last_action = np.zeros(9, dtype=np.float64)   # [arm*6, wheel*3]
+        self._vla_action_fresh = False                       # set True when VLA writes action
+        self._frame_count = 0
+
+        # ── Watchdog timer for real hardware mode ──────────────────────────────
+        self._last_cmd_vel_time = self.get_clock().now()
+        self._watchdog_timer = self.create_timer(0.5, self._on_watchdog)   # 2 Hz check
+        self._watchdog_count = 0
+        # Odometry state (mirrors omni_odometry.py)
+        self._odom_x = 0.0
+        self._odom_y = 0.0
+        self._odom_theta = 0.0
+        self._last_odom_time = self.get_clock().now()
+
+        # ── Trajectory recording ──────────────────────────────────────────────
+        self._recorder = None
+        self._record_control_sub = None
+        if self._record:
+            if not self._record_file:
+                self._record_file = os.path.expanduser(
+                    f"~/hermes_research/lekiwi_vla/trajectories/run_{int(time.time())}.h5")
+            self._recorder = TrajectoryRecorder(self._record_file)
+            self._recorder.start()
+            self.get_logger().info(f"Recording trajectory → {self._record_file}")
+            # Record control subscriber
+            self._record_control_sub = self.create_subscription(
+                String, "/lekiwi/record_control", self._on_record_control, qos
+            )
 
         self.get_logger().info(
-            f"LeKiWi Bridge initialized (rate={rate}Hz, "
-            f"wheels={MUJOCO_WHEEL_JOINTS}, arm={ARM_JOINTS}, "
-            f"camera={'yes' if hasattr(sim, 'render_wrist') else 'front-only'})"
+            "LeKiWi ROS2 bridge ready.  Topics:\n"
+            "  /lekiwi/cmd_vel       ← subscribe\n"
+            "  /lekiwi/vla_action    ← subscribe (VLA arm override)\n"
+            "  /lekiwi/joint_states  → publish\n"
+            "  /lekiwi/odom          → publish (20 Hz)\n"
+            "  /lekiwi/camera/image_raw → publish (20 Hz)\n"
+            "  /lekiwi/wheel_N/cmd_vel → publish"
         )
 
-    # ─── Callbacks ────────────────────────────────────────────────────────────
+    # ── HMAC-signed cmd_vel callback (Challenge 1 defense) ─────────────────────
+
+    def _on_cmd_vel_hmac(self, msg) -> None:
+        """
+        Handle HMAC-authenticated cmd_vel commands.
+        Message: ByteMultiArray with 64 bytes:
+          bytes[0:8]   = struct.pack('d', timestamp)    — float64
+          bytes[8:32]  = struct.pack('ddd', vx,vy,wz)  — 3× float64
+          bytes[32:64] = HMAC-SHA256 signature         — 32 bytes
+
+        Forged commands (wrong HMAC key) are BLOCKED and logged.
+        Replay attacks (same command within window) are BLOCKED.
+        """
+        import struct
+        try:
+            data = bytes(msg.data)
+            if len(data) < 64:
+                self.get_logger().warn(f"HMAC cmd_vel too short: {len(data)} < 64 bytes")
+                return
+            stamp, = struct.unpack('d', data[0:8])
+            vx, vy, wz = struct.unpack('ddd', data[8:32])
+            mac = data[32:64]
+        except Exception as e:
+            self.get_logger().warn(f"HMAC cmd_vel parse error: {e}")
+            return
+
+        verdict = self.security_monitor.check_cmd_vel_hmac(vx, vy, wz, stamp, mac)
+        if verdict.blocked:
+            self._blocked_count += 1
+            self.get_logger().warn(
+                f"Blocked HMAC cmd_vel #{{}} {{}} severity={{}} vx={{:.3f}} vy={{:.3f}} wz={{:.3f}}".format(
+                    self._blocked_count, verdict.event_type, verdict.severity, vx, vy, wz),
+                throttle_duration_sec=2.0)
+            # Publish security alert
+            alert_msg = String()
+            alert_msg.data = json.dumps({
+                "type": verdict.event_type,
+                "severity": verdict.severity,
+                "details": verdict.details,
+                "ctf_flag": verdict.details.get("ctf_flag"),
+            })
+            self.alert_pub.publish(alert_msg)
+            return
+
+        # HMAC verified — reset watchdog and apply command
+        self._last_cmd_vel_time = self.get_clock().now()
+        wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
+        if self._recorder is not None:
+            self._recorder.record_cmd_vel(vx, vy, wz)
+        arm_action = self._last_action[0:6]
+        if self.mode == "real" and self.hw is not None:
+            self.hw.queue_arm_positions(list(arm_action[:self.hw.arm_num_joints]))
+            self.hw.queue_wheel_velocities(list(wheel_speeds))
+            self._last_action = np.concatenate([arm_action, wheel_speeds])
+            for i, speed in enumerate(wheel_speeds):
+                wm = Float64()
+                wm.data = float(speed)
+                self.wheel_pubs[i].publish(wm)
+            return
+        action = np.concatenate([arm_action, wheel_speeds]).astype(np.float64)
+        self.sim.step(action)
+        self._last_action = action
+        for i, speed in enumerate(wheel_speeds):
+            wm = Float64()
+            wm.data = float(speed)
+            self.wheel_pubs[i].publish(wm)
+
+    # ── cmd_vel callback ────────────────────────────────────────────────────────
 
     def _on_cmd_vel(self, msg: Twist):
-        """Convert Twist (vx, vy, wz) → wheel angular velocities.
-        
-        Matches the kinematics from lekiwi_modular/omni_controller.py.
         """
-        vx = msg.linear.x
-        vy = msg.linear.y
-        wz = msg.angular.z
+        Convert Twist → wheel speeds, combine with current arm action, step sim.
 
-        wheel_speeds = []
-        for i in range(3):
-            wheel_vel = np.array([
-                vx - wz * self.wheel_positions[i][1],
-                vy + wz * self.wheel_positions[i][0],
-                0.0
-            ])
-            angular_speed = np.dot(wheel_vel, self.joint_axes[i]) / self.wheel_radius
-            wheel_speeds.append(float(angular_speed))
+        When VLA is active (_vla_action_fresh=True), arm portion from _last_action
+        is preserved and only the wheel portion is overridden by cmd_vel.
+        When VLA is not active, arms stay at their last commanded position.
 
-        self._cmd_vel = np.array(wheel_speeds)
-        self.get_logger().debug(
-            f"cmd_vel → wheel speeds: {wheel_speeds}", throttle_duration_sec=1.0
-        )
-
-    def _on_arm_cmd(self, idx: int, msg: Float64):
-        """Receive arm joint position command (radians)."""
-        self._arm_targets[idx] = float(msg.data)
-
-    # ─── Apply commands to MuJoCo ────────────────────────────────────────────
-
-    def _apply_to_sim(self):
-        """Send current commands to MuJoCo simulator.
-        
-        LeKiWiSim action layout:
-          action[0..5] = arm joint positions (rad, clamped ±3.14 internally)
-          action[6..8] = wheel angular velocities (rad/s, clamped ±5 internally)
+        In real hardware mode, also resets the watchdog timer.
         """
-        # Build 9-D action: [arm(6), wheel(3)]
-        action = np.concatenate([self._arm_targets, self._cmd_vel])
-        # step() clamps internally; pass raw values
-        self.sim.step(action)
+        # Reset watchdog timer on any cmd_vel
+        self._last_cmd_vel_time = self.get_clock().now()
+        self._watchdog_count = 0
 
-    # ─── Read state from MuJoCo ───────────────────────────────────────────────
+        vx = float(msg.linear.x)
+        vy = float(msg.linear.y)
+        wz = float(msg.angular.z)
 
-    def _read_state(self) -> dict:
-        """Read current state from MuJoCo simulator."""
-        return {
-            "base_pos":    self.sim.data.qpos[:3].copy(),
-            "base_quat":   self.sim.data.qpos[3:7].copy(),
-            "base_linvel": self.sim.data.qvel[:3].copy(),
-            "base_angvel": self.sim.data.qvel[3:6].copy(),
-            "arm_pos":     np.array([
-                self.sim.data.qpos[self._jpos_idx[n]] for n in ARM_JOINTS
-            ]),
-            "arm_vel":     np.array([
-                self.sim.data.qvel[self._jvel_idx[n]] for n in ARM_JOINTS
-            ]),
-            "wheel_pos":   np.array([
-                self.sim.data.qpos[self._jpos_idx[n]] for n in MUJOCO_WHEEL_JOINTS
-            ]),
-            "wheel_vel":   np.array([
-                self.sim.data.qvel[self._jvel_idx[n]] for n in MUJOCO_WHEEL_JOINTS
-            ]),
-        }
-
-    # ─── Camera publishing (throttled to 4 Hz) ────────────────────────────────
-
-    def _publish_cameras(self):
-        """Render and publish front + wrist camera images at 4 Hz."""
-        now = _time.time()
-        if now - self._last_camera_pub < self._camera_pub_interval:
+        # CTF security check -- drop anomalous commands
+        stamp = self.get_clock().now().nanoseconds / 1e9
+        verdict = self.security_monitor.check_cmd_vel(vx, vy, wz, stamp)
+        if verdict.blocked:
+            self._blocked_count += 1
+            self.get_logger().warn(
+                "Blocked cmd_vel #{} {} severity={} vx={:.3f} vy={:.3f} wz={:.3f}".format(
+                    self._blocked_count, verdict.event_type, verdict.severity, vx, vy, wz),
+                throttle_duration_sec=2.0)
             return
-        self._last_camera_pub = now
 
-        stamp = self.get_clock().now().to_msg()
+        # Compute wheel angular velocities from kinematics
+        wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
 
-        # Front camera
-        front_img = self.sim.render()
-        if front_img is not None:
-            try:
-                msg = self._cv_bridge.cv2_to_imgmsg(front_img, encoding="rgb8")
-                msg.header.stamp = stamp
-                msg.header.frame_id = "front_camera"
-                self._camera_pub.publish(msg)
-            except Exception:
-                pass  # render may return None for non-visualized sims
+        # ── Trajectory recording: log cmd_vel ───────────────────────────────────
+        if self._recorder is not None:
+            self._recorder.record_cmd_vel(vx, vy, wz)
 
-        # Wrist camera (URDF mode only)
-        if self._wrist_camera_pub is not None:
-            wrist_img = self.sim.render_wrist()
-            if wrist_img is not None:
-                try:
-                    msg = self._cv_bridge.cv2_to_imgmsg(wrist_img, encoding="rgb8")
-                    msg.header.stamp = stamp
-                    msg.header.frame_id = "wrist_camera"
-                    self._wrist_camera_pub.publish(msg)
-                except Exception:
-                    pass
+        # If VLA has set an arm action, keep arms; otherwise keep last arm pos.
+        if self._vla_action_fresh:
+            arm_action = self._last_action[0:6]
+        else:
+            arm_action = self._last_action[0:6]
 
-    # ─── Publish ROS2 topics ──────────────────────────────────────────────────
+        # ── Real hardware mode: send commands to serial servos ───────────
+        if self.mode == "real" and self.hw is not None:
+            self.hw.queue_arm_positions(list(arm_action[:self.hw.arm_num_joints]))
+            self.hw.queue_wheel_velocities(list(wheel_speeds))
+            self._last_action = np.concatenate([arm_action, wheel_speeds])
+            # Republish wheel velocities (mirrors real robot)
+            for i, speed in enumerate(wheel_speeds):
+                wm = Float64()
+                wm.data = float(speed)
+                self.wheel_pubs[i].publish(wm)
+            return
 
-    def _publish_wheel_cmdvel(self, wheel_vels: np.ndarray):
-        """Publish wheel angular velocities (for omni_odometry)."""
-        for i, vel in enumerate(wheel_vels):
-            msg = Float64()
-            msg.data = float(vel)
-            self.wheel_pubs[i].publish(msg)
+        # ── Simulation mode: step MuJoCo ─────────────────────────────────
+        action = np.concatenate([arm_action, wheel_speeds]).astype(np.float64)
+        self.sim.step(action)
+        self._last_action = action
 
-    def _publish_odom(self, state: dict):
-        """Publish odometry (Odometry message)."""
-        msg = Odometry()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'odom'
-        msg.child_frame_id = 'base_link'
-        msg.pose.pose.position.x = float(state['base_pos'][0])
-        msg.pose.pose.position.y = float(state['base_pos'][1])
-        msg.pose.pose.position.z = float(state['base_pos'][2])
-        msg.pose.pose.orientation.x = float(state['base_quat'][0])
-        msg.pose.pose.orientation.y = float(state['base_quat'][1])
-        msg.pose.pose.orientation.z = float(state['base_quat'][2])
-        msg.pose.pose.orientation.w = float(state['base_quat'][3])
-        msg.twist.twist.linear.x = float(state['base_linvel'][0])
-        msg.twist.twist.linear.y = float(state['base_linvel'][1])
-        msg.twist.twist.linear.z = float(state['base_linvel'][2])
-        msg.twist.twist.angular.x = float(state['base_angvel'][0])
-        msg.twist.twist.angular.y = float(state['base_angvel'][1])
-        msg.twist.twist.angular.z = float(state['base_angvel'][2])
-        self.odom_pub.publish(msg)
+        # Also republish individual wheel velocities (mirrors real robot)
+        for i, speed in enumerate(wheel_speeds):
+            wm = Float64()
+            wm.data = float(speed)
+            self.wheel_pubs[i].publish(wm)
 
-    def _publish_joint_states(self, state: dict):
-        """Publish full joint state (sensor_msgs/JointState)."""
+    # ── Trajectory recording control ──────────────────────────────────────────
+
+    def _on_record_control(self, msg: String):
+        """
+        Control recording via topic:
+          "start"  — begin recording (or restart if already recording)
+          "stop"   — stop recording and flush to disk
+          "status" — log current recording status
+        """
+        cmd = msg.data.strip().lower()
+        if cmd == "start":
+            if self._recorder is None:
+                self.get_logger().warn("Recording not enabled — set record:=true in launch file")
+                return
+            self._recorder.start()
+            self.get_logger().info("Trajectory recording: START")
+        elif cmd == "stop":
+            if self._recorder is None:
+                return
+            self._recorder.stop()
+            self._recorder.flush()
+            self.get_logger().info(
+                f"Trajectory recording: STOP — {self._recorder.num_frames} frames saved"
+            )
+        elif cmd == "status":
+            if self._recorder is None:
+                self.get_logger().info("Recording: DISABLED")
+            else:
+                self.get_logger().info(
+                    f"Recording: {'ACTIVE' if self._recorder.is_recording else 'IDLE'} — "
+                    f"{self._recorder.num_frames} frames buffered"
+                )
+        else:
+            self.get_logger().warn(f"Unknown record control: {cmd} (use: start, stop, status)")
+
+    # ── VLA action callback ────────────────────────────────────────────────────
+
+    def _on_vla_action(self, msg):
+        """
+        Receive VLA policy action (arm*6 + wheel*3 in native units).
+        Arms override whatever _on_cmd_vel set for the arm portion.
+        VLA action always wins for arm joints to enable closed-loop control.
+        """
+        try:
+            action = np.array(msg.data, dtype=np.float64)
+            if action.shape != (9,):
+                self.get_logger().warn(f"VLA action shape {action.shape} != (9,), ignoring", once=True)
+                return
+            # VLA action = native units; clamp to safe limits
+            action[:6] = np.clip(action[:6], self.ARM_CTRL_MIN,  self.ARM_CTRL_MAX)
+            action[6:] = np.clip(action[6:], self.WHEEL_CTRL_MIN, self.WHEEL_CTRL_MAX)
+            self._last_action = action
+            self._vla_action_fresh = True
+        except Exception as e:
+            self.get_logger().warn(f"VLA action parse error: {e}", once=True)
+
+    # ── Timer callback ─────────────────────────────────────────────────────────
+
+    def _on_timer(self):
+        """Publish state as JointState + Odometry + camera Image."""
+        now = self.get_clock().now()
+
+        # ── Real hardware mode: read from serial servos ─────────────────
+        if self.mode == "real" and self.hw is not None:
+            obs = self.hw.get_state()
+            wheel_vel = obs["wheel_velocities"]
+            dt = 0.05
+            # Accumulate wheel positions
+            self._wheel_posAccum = getattr(self, '_wheel_posAccum', np.zeros(3)) + wheel_vel * dt
+
+            # Odometry from wheel velocities
+            vx_total = 0.0
+            vy_total = 0.0
+            wz_total = 0.0
+            wheel_base = 0.1732
+            for i in range(3):
+                angular_speed = wheel_vel[i]
+                wheel_vel_world = angular_speed * WHEEL_RADIUS * _JOINT_AXES[i]
+                vx_total += wheel_vel_world[0] / 3.0
+                vy_total += wheel_vel_world[1] / 3.0
+                wz_total += np.cross(WHEEL_POSITIONS[i], wheel_vel_world)[2] / (3.0 * wheel_base)
+
+            self._odom_theta += wz_total * dt
+            self._odom_x += (vx_total * np.cos(self._odom_theta) - vy_total * np.sin(self._odom_theta)) * dt
+            self._odom_y += (vx_total * np.sin(self._odom_theta) + vy_total * np.cos(self._odom_theta)) * dt
+
+            # Publish /lekiwi/odom
+            odom_msg = Odometry()
+            odom_msg.header.stamp = now.to_msg()
+            odom_msg.header.frame_id = "odom"
+            odom_msg.child_frame_id = "base_link"
+            odom_msg.pose.pose.position.x = self._odom_x
+            odom_msg.pose.pose.position.y = self._odom_y
+            odom_msg.pose.pose.orientation.z = np.sin(self._odom_theta / 2.0)
+            odom_msg.pose.pose.orientation.w = np.cos(self._odom_theta / 2.0)
+            odom_msg.twist.twist.linear.x = vx_total
+            odom_msg.twist.twist.linear.y = vy_total
+            odom_msg.twist.twist.angular.z = wz_total
+            self.odom_pub.publish(odom_msg)
+
+            # Publish TF
+            tf_msg = TransformStamped()
+            tf_msg.header.stamp = now.to_msg()
+            tf_msg.header.frame_id = "odom"
+            tf_msg.child_frame_id = "base_link"
+            tf_msg.transform.translation.x = self._odom_x
+            tf_msg.transform.translation.y = self._odom_y
+            tf_msg.transform.rotation.z = np.sin(self._odom_theta / 2.0)
+            tf_msg.transform.rotation.w = np.cos(self._odom_theta / 2.0)
+            self.tf_broadcaster.sendTransform(tf_msg)
+
+            # JointState (canonical names)
+            wheel_pos = list(self._wheel_posAccum)
+            arm_pos = list(obs["arm_positions"][:6])
+            arm_vel = list(obs["arm_velocities"][:6])
+            msg = JointState()
+            msg.header.stamp = now.to_msg()
+            msg.name = self.ARM_NAMES + self.WHEEL_NAMES
+            msg.position = arm_pos + wheel_pos
+            msg.velocity = arm_vel + list(wheel_vel)
+            self.joint_state_pub.publish(msg)
+
+            # URDF-compatible JointState
+            urdf_msg = JointState()
+            urdf_msg.header.stamp = now.to_msg()
+            urdf_msg.name = URDF_ARM_JOINT_NAMES + URDF_WHEEL_JOINT_NAMES
+            urdf_msg.position = arm_pos + wheel_pos
+            urdf_msg.velocity = arm_vel + list(wheel_vel)
+            self.joint_state_urdf_pub.publish(urdf_msg)
+
+            # Clear VLA freshness
+            self._vla_action_fresh = False
+            return
+
+        # ── Simulation mode: read from MuJoCo ───────────────────────────
+        obs = self.sim._obs()
+        dt = 0.05   # matches timer period
+
+        # ── Odometry ─────────────────────────────────────────────────────────
+        wheel_vel = obs.get("wheel_velocities", np.zeros(3))
+        # Compute vx, vy, wz from wheel velocities using same kinematics as omni_odometry.py
+        vx_total = 0.0
+        vy_total = 0.0
+        wz_total = 0.0
+        wheel_base = 0.1732
+        for i in range(3):
+            angular_speed = wheel_vel[i]
+            wheel_vel_world = angular_speed * WHEEL_RADIUS * _JOINT_AXES[i]
+            vx_total += wheel_vel_world[0] / 3.0
+            vy_total += wheel_vel_world[1] / 3.0
+            wz_total += np.cross(WHEEL_POSITIONS[i], wheel_vel_world)[2] / (3.0 * wheel_base)
+
+        # Integrate position
+        self._odom_theta += wz_total * dt
+        self._odom_x += (vx_total * np.cos(self._odom_theta) - vy_total * np.sin(self._odom_theta)) * dt
+        self._odom_y += (vx_total * np.sin(self._odom_theta) + vy_total * np.cos(self._odom_theta)) * dt
+
+        # Publish /lekiwi/odom
+        odom_msg = Odometry()
+        odom_msg.header.stamp = now.to_msg()
+        odom_msg.header.frame_id = "odom"
+        odom_msg.child_frame_id = "base_link"
+        odom_msg.pose.pose.position.x = self._odom_x
+        odom_msg.pose.pose.position.y = self._odom_y
+        odom_msg.pose.pose.orientation.z = np.sin(self._odom_theta / 2.0)
+        odom_msg.pose.pose.orientation.w = np.cos(self._odom_theta / 2.0)
+        odom_msg.twist.twist.linear.x = vx_total
+        odom_msg.twist.twist.linear.y = vy_total
+        odom_msg.twist.twist.angular.z = wz_total
+        self.odom_pub.publish(odom_msg)
+
+        # Publish TF odom → base_link
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp = now.to_msg()
+        tf_msg.header.frame_id = "odom"
+        tf_msg.child_frame_id = "base_link"
+        tf_msg.transform.translation.x = self._odom_x
+        tf_msg.transform.translation.y = self._odom_y
+        tf_msg.transform.rotation.z = np.sin(self._odom_theta / 2.0)
+        tf_msg.transform.rotation.w = np.cos(self._odom_theta / 2.0)
+        self.tf_broadcaster.sendTransform(tf_msg)
+
+        # ── JointState ──────────────────────────────────────────────────────
         msg = JointState()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.name = list(ARM_JOINTS) + list(MUJOCO_WHEEL_JOINTS)
-        msg.position = list(state['arm_pos']) + list(state['wheel_pos'])
-        msg.velocity = list(state['arm_vel']) + list(state['wheel_vel'])
+        msg.header.stamp = now.to_msg()
+        msg.name = self.ARM_NAMES + self.WHEEL_NAMES
+
+        # Arm positions (6) + integrate wheel velocities → positions (3)
+        arm_pos = list(obs.get("arm_positions", np.zeros(6)))
+        # Accumulate wheel positions from velocity integration
+        self._wheel_posAccum = getattr(self, '_wheel_posAccum', np.zeros(3)) + wheel_vel * dt
+        wheel_pos = list(self._wheel_posAccum)
+
+        msg.position = arm_pos + wheel_pos
+        msg.velocity = list(obs.get("arm_velocities", np.zeros(6))) + list(wheel_vel)
+
         self.joint_state_pub.publish(msg)
 
-    # ─── Control loop ─────────────────────────────────────────────────────────
+        # ── Trajectory recording (simulation mode) ───────────────────────────
+        if self._recorder is not None:
+            ts = now.seconds_nanoseconds()
+            timestamp = ts[0] + ts[1] * 1e-9
+            self._recorder.record_joint_state(
+                arm_positions=arm_pos,
+                arm_velocities=list(obs.get("arm_velocities", np.zeros(6))),
+                wheel_positions=wheel_pos,
+                wheel_velocities=list(wheel_vel),
+                timestamp=timestamp,
+            )
 
-    def start(self):
-        """Start the bridge spin loop in a background thread."""
-        self._running.set()
-        self._spin_thread = Thread(target=self._run, daemon=True)
-        self._spin_thread.start()
-        self.get_logger().info("Bridge spin loop started")
+        # ── URDF-compatible JointState (real joint names from lekiwi.urdf) ────
+        # Maps bridge canonical names → URDF Gazebo plugin joint names
+        urdf_msg = JointState()
+        urdf_msg.header.stamp = now.to_msg()
+        # Arm: bridge arm_names → URDF arm joint names (all 6, including gripper j5)
+        urdf_arm_names = URDF_ARM_JOINT_NAMES   # 6 joints
+        urdf_wheel_names = URDF_WHEEL_JOINT_NAMES
+        urdf_msg.name = urdf_arm_names + urdf_wheel_names
+        # arm_positions[0:6] includes j5/gripper (slide joint)
+        urdf_msg.position = list(obs.get("arm_positions", np.zeros(6))) + wheel_pos
+        urdf_msg.velocity = list(obs.get("arm_velocities", np.zeros(6))) + list(wheel_vel)
+        self.joint_state_urdf_pub.publish(urdf_msg)
 
-    def stop(self):
-        """Stop the bridge spin loop."""
-        self._running.clear()
-        if self._spin_thread:
-            self._spin_thread.join(timeout=2.0)
-        self.get_logger().info("Bridge spin loop stopped")
+        # ── Camera Images (throttled to 4 Hz to avoid URDF render overhead) ────
+        self._frame_count += 1
+        if self._frame_count % 5 == 0:   # publish every 5th frame (4 Hz @ 20 Hz timer)
+            try:
+                # Front camera
+                img_pil = self.sim.render(640, 480)
+                img_np  = np.asarray(img_pil)
+                ros_img = self.bridge.cv2_to_imgmsg(img_np, encoding="rgb8")
+                ros_img.header.stamp = msg.header.stamp
+                ros_img.header.frame_id = "lekiwi_camera"
+                self.camera_pub.publish(ros_img)
 
-    def _run(self):
-        """Main loop: apply commands → step sim → publish state."""
-        publish_counter = 0
-        publish_every = max(1, int(self.rate / 20))  # publish at ~20Hz
+                # Wrist camera (URDF model only)
+                if hasattr(self.sim, 'render_wrist'):
+                    wrist_pil = self.sim.render_wrist()
+                    wrist_np  = np.asarray(wrist_pil)
+                    wrist_ros = self.bridge.cv2_to_imgmsg(wrist_np, encoding="rgb8")
+                    wrist_ros.header.stamp = msg.header.stamp
+                    wrist_ros.header.frame_id = "wrist_camera"
+                    self.wrist_cam_pub.publish(wrist_ros)
+            except Exception as e:
+                self.get_logger().warn(f"Camera render failed: {e}", once=True)
 
-        while rclpy.ok() and self._running.is_set():
-            loop_start = self.get_clock().now()
+        # Clear VLA freshness flag at end of each tick so stale VLA actions
+        # (e.g., if the VLA node crashes) are automatically ignored.
+        self._vla_action_fresh = False
 
-            # 1. Apply commands to MuJoCo
-            self._apply_to_sim()
+    # ── Watchdog ─────────────────────────────────────────────────────────────────
 
-            # 2. Read state (state is available after step())
-            state = self._read_state()
+    def _on_watchdog(self):
+        """
+        Hardware safety watchdog: if no cmd_vel received in >1s, halt servos.
+        Only active in real hardware mode.
+        """
+        if self.mode != "real":
+            return
+        now = self.get_clock().now()
+        dt = (now - self._last_cmd_vel_time).nanoseconds / 1e9
+        if dt > 1.0:
+            self._watchdog_count += 1
+            if self._watchdog_count == 1:
+                self.get_logger().warn(
+                    f"⚠️ cmd_vel watchdog timeout ({dt:.1f}s) — halting servos",
+                    throttle_duration_sec=5.0)
+            # Send zero velocity to all servos (emergency stop)
+            if self.hw is not None:
+                zero_arm  = [0.0] * self.hw.arm_num_joints
+                zero_wheel = [0.0] * self.hw.wheel_num_joints
+                self.hw.queue_arm_positions(zero_arm, speed_rpm=10.0)
+                self.hw.queue_wheel_velocities(zero_wheel)
 
-            # 3. Publish ROS2 topics (throttled to ~20Hz)
-            publish_counter += 1
-            if publish_counter >= publish_every:
-                publish_counter = 0
-                self._publish_wheel_cmdvel(state['wheel_vel'])
-                self._publish_odom(state)
-                self._publish_joint_states(state)
+    # ── Helpers ─────────────────────────────────────────────────────────────────
 
-            # 4. Publish camera images (throttled to 4 Hz, independent)
-            self._publish_cameras()
+    def apply_arm_action(self, arm_pos: np.ndarray):
+        """
+        Directly set arm joint targets.
+        arm_pos: shape (6,) in radians.
+        Used by external VLA policy nodes.
+        """
+        arm_pos = np.clip(arm_pos, self.ARM_CTRL_MIN, self.ARM_CTRL_MAX)
+        self._last_action[0:6] = arm_pos
 
-            # 5. Sleep to maintain rate
-            elapsed = (self.get_clock().now() - loop_start).nanoseconds * 1e-9
-            sleep_time = max(0.001, self.dt - elapsed)
-            rclpy.sleep(sleep_time)
+
+    # ── Policy input callback (CTF Challenge 7) ───────────────────────────
+    def _on_policy_input(self, msg):
+        from std_msgs.msg import ByteMultiArray
+        policy_bytes = bytes(msg.data)
+        stamp = self.get_clock().now().nanoseconds / 1e9
+
+        # ── Layer 1: Passive SecurityMonitor (log-only, backward compat) ────
+        sec_verdict = self.security_monitor.check_policy(policy_bytes, stamp)
+
+        # ── Layer 2: Active PolicyGuardian (blocks, alerts, rolls back) ────
+        guardian_verdict = self.policy_guardian.check_and_guard(policy_bytes, stamp)
+
+        # Publish security alert to /lekiwi/security_alert
+        alert_msg = String()
+        if guardian_verdict.action in ("block", "rollback"):
+            import json
+            alert_payload = {
+                "type": guardian_verdict.reason,
+                "severity": guardian_verdict.severity,
+                "fingerprint": guardian_verdict.details.get("fingerprint", "?"),
+                "ctf_flag": guardian_verdict.ctf_flag,
+                "action": guardian_verdict.action,
+            }
+            alert_msg.data = json.dumps(alert_payload)
+            self.alert_pub.publish(alert_msg)
+            self.get_logger().error(
+                "⚔️ POLICY BLOCKED [%s] %s  fingerprint=%s  flag=%s".format(
+                    guardian_verdict.severity.upper(),
+                    guardian_verdict.reason,
+                    guardian_verdict.details.get("fingerprint", "?"),
+                    guardian_verdict.ctf_flag or ""))
+        else:
+            # Silent allow — publish a heartbeat so monitoring can see it
+            alert_payload = {
+                "type": "policy_allowed",
+                "severity": "low",
+                "fingerprint": guardian_verdict.details.get("fingerprint", "?"),
+            }
+            alert_msg.data = json.dumps(alert_payload)
+            self.alert_pub.publish(alert_msg)
+
+        # Flush both monitors
+        self.security_monitor.flush()
+        self.policy_guardian.flush()
+
+    def destroy_node(self):
+        """Flush trajectory recording on shutdown."""
+        if self._recorder is not None and self._recorder.num_frames > 0:
+            self._recorder.stop()
+            self._recorder.flush()
+            self.get_logger().info(
+                f"TrajectoryRecorder: flushed {self._recorder.num_frames} frames on shutdown"
+            )
+        super().destroy_node()
 
 
 def main(args=None):
-    import sys
-    from lekiwi_sim_loader import load_lekiwi_sim
     rclpy.init(args=args)
-    params = {}
-    for arg in sys.argv[1:]:
-        if ':=' in arg:
-            key, val = arg.split(':=', 1)
-            params[key.lstrip('-')] = val
-
-    sim = load_lekiwi_sim(
-        sim_type=params.get('sim_type', 'urdf'),
-        mode=params.get('mode', 'sim'),
-        render=params.get('render', 'false').lower() == 'true',
-    )
-    node = LeKiWiBridge(sim, rate=float(params.get('rate', '50.0')))
+    node = LeKiWiBridge()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info("LeKiWi bridge interrupted.")
     finally:
-        node.stop()
         node.destroy_node()
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
