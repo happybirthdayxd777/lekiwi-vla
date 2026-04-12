@@ -1,11 +1,10 @@
 """
 Unified LeKiWi Launch — Full Platform
 ======================================
-One launch file to rule them all:
+One launch file to rule them all (defaults use CLIP-FM with trained checkpoint):
 
-  ros2 launch lekiwi_ros2_bridge full.launch.py \
-    sim_type:=urdf \
-    policy:=clip_fm
+  ros2 launch lekiwi_ros2_bridge full.launch.py           # CLIP-FM + URDF (no extra args needed)
+  ros2 launch lekiwi_ros2_bridge full.launch.py sim_type:=urdf  # explicit URDF mode
 
 Modes:
   sim_type : primitive | urdf
@@ -57,11 +56,11 @@ def generate_launch_description() -> LaunchDescription:
         description="Device for VLA inference: cpu, cuda, mps",
     )
     policy = DeclareLaunchArgument(
-        "policy", default_value="mock",
+        "policy", default_value="clip_fm",
         description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm",
     )
     pretrained = DeclareLaunchArgument(
-        "pretrained", default_value="",
+        "pretrained", default_value="~/hermes_research/lekiwi_vla/results/fresh_train_5k/final_policy.pt",
         description="Path to pretrained policy checkpoint (LeRobot or clip_fm .pt)",
     )
     record = DeclareLaunchArgument(

@@ -35,12 +35,12 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description() -> LaunchDescription:
 
     policy_arg = DeclareLaunchArgument(
-        "policy", default_value="mock",
+        "policy", default_value="clip_fm",
         description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm",
     )
     pretrained_arg = DeclareLaunchArgument(
-        "pretrained", default_value="",
-        description="Path to pretrained LeRobot policy checkpoint",
+        "pretrained", default_value="~/hermes_research/lekiwi_vla/results/fresh_train_5k/final_policy.pt",
+        description="Path to pretrained policy checkpoint (CLIP-FM .pt or LeRobot)",
     )
     device_arg = DeclareLaunchArgument(
         "device", default_value="cpu",
