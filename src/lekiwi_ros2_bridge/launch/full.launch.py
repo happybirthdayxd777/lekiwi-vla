@@ -35,6 +35,10 @@ def generate_launch_description() -> LaunchDescription:
         "sim_type", default_value="primitive",
         description="primitive=fast cylinders, urdf=STL mesh geometry",
     )
+    mode = DeclareLaunchArgument(
+        "mode", default_value="sim",
+        description="sim=MuJoCo, real=real hardware",
+    )
     policy = DeclareLaunchArgument(
         "policy", default_value="mock",
         description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm",
@@ -54,6 +58,7 @@ def generate_launch_description() -> LaunchDescription:
         name="lekiwi_ros2_bridge",
         parameters=[{
             "sim_type": LaunchConfiguration("sim_type"),
+            "mode": LaunchConfiguration("mode"),
         }],
         output="screen",
     )
@@ -77,6 +82,7 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription([
         sim_type,
+        mode,
         policy,
         pretrained,
         device,

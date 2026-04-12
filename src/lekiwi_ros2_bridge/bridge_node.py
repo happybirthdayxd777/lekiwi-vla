@@ -47,7 +47,7 @@ import os
 
 # ── Simulation backend imports ─────────────────────────────────────────────────
 sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
-from sim_lekiwi import LeKiWiSim
+from sim_lekiwi import LeKiwiSim
 from sim_lekiwi_urdf import LeKiWiSimURDF
 from security_monitor import SecurityMonitor
 from policy_guardian import PolicyGuardian
@@ -185,7 +185,7 @@ class LeKiWiBridge(Node):
             self.hw = None
         else:
             self.get_logger().info("Starting LeKiWiSim (cylinder primitives)…")
-            self.sim = LeKiWiSim()
+            self.sim = LeKiwiSim()
             self.get_logger().info("Primitive simulation initialised.")
             self.hw = None
 
