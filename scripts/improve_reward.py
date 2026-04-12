@@ -136,7 +136,7 @@ class TaskEvaluator:
 def evaluate_policy(policy=None, device="cpu", episodes=20, task="reach", sim=None):
     """Evaluate a policy on task-oriented metrics."""
     if sim is None:
-        sim = LeKiWiSim()
+        sim = LeKiwiSim()
     evaluator = TaskEvaluator(sim, policy=policy, device=device)
 
     if task == "reach":
@@ -180,10 +180,10 @@ def main():
 
     policy = None
     if args.policy:
-        from eval_policy import FlowMatchingPolicy
-        policy = FlowMatchingPolicy()
-        state_dict = torch.load(args.policy, map_location=args.device, weights_only=True)
-        policy.load_state_dict(state_dict)
+        from scripts.train_task_oriented import CLIPFlowMatchingPolicy
+        policy = CLIPFlowMatchingPolicy(state_dim=9, action_dim=9, hidden=512, device=args.device)
+        state_dict = torch.load(args.policy, map_location=args.device, weights_only=False)
+        policy.load_state_dict(state_dict.get("policy_state_dict", state_dict), strict=False)
         policy.to(args.device)
         policy.eval()
         print(f"Loaded policy: {args.policy}")
