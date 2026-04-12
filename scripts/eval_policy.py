@@ -202,15 +202,18 @@ def evaluate(policy, device, episodes=10, max_steps=200, verbose=True):
     for ep in range(episodes):
         sim.reset()
         total_reward = 0.0
-        start_pos = sim.data.qpos[6:9].copy()
+        start_pos = sim.data.qpos[:2].copy()
 
         for step in range(max_steps):
             img_pil = sim.render()
             img_np  = np.array(img_pil.resize((224, 224)), dtype=np.float32) / 255.0
             img_t   = torch.from_numpy(img_np.transpose(2, 0, 1)).unsqueeze(0).to(device)
 
-            arm_pos = sim.data.qpos[0:6]
-            wheel_v = sim.data.qvel[0:3]
+            # Use correct joint indices via _jpos_idx / _jvel_idx lookup
+            # qpos layout: [freejoint_base(6), arm_joints(6), wheel_joints(3)]
+            # arm j0..j5 → qpos[4:10], wheel w1..w3 → qvel[1:4]
+            arm_pos = sim.data.qpos[7:13]
+            wheel_v = sim.data.qvel[1:4]
             state_t = torch.from_numpy(np.concatenate([arm_pos, wheel_v])).float().unsqueeze(0).to(device)
 
             action = policy.infer(img_t, state_t, num_steps=4)
@@ -220,7 +223,7 @@ def evaluate(policy, device, episodes=10, max_steps=200, verbose=True):
             reward = sim.get_reward()
             total_reward += reward
 
-        end_pos = sim.data.qpos[6:9]
+        end_pos = sim.data.qpos[:2]
         dist = np.linalg.norm(end_pos[:2] - start_pos[:2])
         all_rewards.append(total_reward)
         all_distances.append(dist)
