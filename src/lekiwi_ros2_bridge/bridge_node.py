@@ -588,9 +588,9 @@ class LeKiWiBridge(Node):
         urdf_msg.velocity = list(obs.get("arm_velocities", np.zeros(6))) + list(wheel_vel)
         self.joint_state_urdf_pub.publish(urdf_msg)
 
-        # ── Camera Images ────────────────────────────────────────────────────
+        # ── Camera Images (throttled to 4 Hz to avoid URDF render overhead) ────
         self._frame_count += 1
-        if self._frame_count % 1 == 0:   # publish every frame (20 Hz)
+        if self._frame_count % 5 == 0:   # publish every 5th frame (4 Hz @ 20 Hz timer)
             try:
                 # Front camera
                 img_pil = self.sim.render(640, 480)
