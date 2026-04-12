@@ -69,8 +69,13 @@ def collect_episode(sim, max_steps=200, record_wrist=False):
         img_arr = np.array(img_pil, dtype=np.uint8)
 
         # State: arm positions + wheel velocities (matches training format)
-        arm_pos = sim.data.qpos[0:6] if hasattr(sim.data, 'qpos') else np.zeros(6)
-        wheel_vel = sim.data.qvel[0:3] if hasattr(sim.data, 'qvel') else np.zeros(3)
+        # CRITICAL FIX (2026-04-13): Use sim._obs() for correct joint-level extraction.
+        # LeKiWiSim (primitive):  qpos[0:6]=arm joints, qpos[6:9]=wheel (coincident by design)
+        # LeKiWiSimURDF (mesh):  qpos[0:7]=base_free(xyz+quat), qpos[7:13]=arm joints
+        # The old code used qpos[0:6] + qvel[0:3] which gave WRONG base pos + base vel!
+        obs = sim._obs()
+        arm_pos = obs["arm_positions"]
+        wheel_vel = obs["wheel_velocities"]
         state = np.concatenate([arm_pos, wheel_vel]).astype(np.float32)
 
         # Random-walk action: small random delta, clamped to [-1,1]

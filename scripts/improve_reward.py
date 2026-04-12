@@ -52,9 +52,23 @@ class TaskEvaluator:
         # Normalize image
         img_np = np.array(img_pil.resize((224, 224)), dtype=np.float32) / 255.0
         img_t = torch.from_numpy(img_np.transpose(2, 0, 1)).unsqueeze(0).to(self.device)
-        # State: arm_pos(6) + wheel_vel(3) — must match the qpos/qvel layout of the sim
-        arm_pos = self.sim.data.qpos[0:6]
-        wheel_v = self.sim.data.qvel[0:3]
+        # State: arm_pos(6) + wheel_vel(3) — MUST match the sim's joint layout.
+        #
+        # LeKiWiSim (primitive):     qpos[0:6]=arm_joints, qpos[6:9]=wheel_pos, qvel same
+        # LeKiWiSimURDF (STL mesh): qpos[0:7]=base_free(xyz+quat), qpos[7:13]=arm_joints,
+        #                            qvel[0:6]=base_linang, qvel[6:9]=arm_vel, qvel[9:12]=wheel_vel
+        # CRITICAL BUG FIX (2026-04-13): the old code used qpos[0:6] + qvel[0:3]
+        # which gave BASE position (x,y,z,qw,qx,qy) + BASE velocity (vx,vy,vz)!
+        # This caused the policy to receive meaningless state and fail at navigation.
+        from sim_lekiwi_urdf import LeKiWiSimURDF
+        if isinstance(self.sim, LeKiWiSimURDF):
+            arm_pos = np.array([self.sim.data.qpos[self.sim._jpos_idx[n]]
+                                for n in ['j0','j1','j2','j3','j4','j5']])
+            wheel_v = np.array([self.sim.data.qvel[self.sim._jvel_idx[n]]
+                                for n in ['w1','w2','w3']])
+        else:
+            arm_pos = self.sim.data.qpos[0:6]
+            wheel_v = self.sim.data.qvel[6:9]
         state_t = torch.from_numpy(np.concatenate([arm_pos, wheel_v])).float().unsqueeze(0).to(self.device)
         action = self.policy.infer(img_t, state_t, num_steps=4)
         return np.clip(action.cpu().numpy()[0], -1, 1).astype(np.float32)

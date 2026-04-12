@@ -265,15 +265,20 @@ def collect_episode_goal_directed(sim, max_steps=200,
         img_arr = np.array(img_pil, dtype=np.uint8)
         
         # ── State: arm positions + wheel velocities ─────────────────────
-        arm_pos = sim.data.qpos[0:6] if hasattr(sim.data, 'qpos') else np.zeros(6)
-        wheel_vel = sim.data.qvel[0:3] if hasattr(sim.data, 'qvel') else np.zeros(3)
+        # CRITICAL FIX (2026-04-13): Use sim._obs() for correct joint-level extraction.
+        # LeKiWiSim (primitive):  qpos[0:6]=arm joints, qpos[6:9]=wheel (coincident by design)
+        # LeKiWiSimURDF (mesh):  qpos[0:7]=base_free(xyz+quat), qpos[7:13]=arm joints
+        # The old code used qpos[0:6] + qvel[0:3] which gave WRONG base pos + base vel!
+        obs = sim._obs()
+        arm_pos = obs["arm_positions"]
+        wheel_vel = obs["wheel_velocities"]
         state = np.concatenate([arm_pos, wheel_vel]).astype(np.float32)
-        
+
         # ── Base position for reward ────────────────────────────────────
         base_pos = sim.data.qpos[:2].copy() if hasattr(sim.data, 'qpos') else np.zeros(2)
-        
+
         # ── P-controller for wheel action (goal-directed) ───────────────
-        base_yaw = sim.data.qpos[2] if hasattr(sim.data, 'qpos') else 0.0
+        base_yaw = sim.data.qpos[3] if hasattr(sim.data, 'qpos') else 0.0  # qw quaternion
         wheel_cmd = controller.compute_wheel_velocities(base_pos, goal_pos, base_yaw)
         
         # Add exploration noise to wheel actions (Gaussian, small)
