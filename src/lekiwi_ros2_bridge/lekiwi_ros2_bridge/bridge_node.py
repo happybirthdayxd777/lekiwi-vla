@@ -305,3 +305,33 @@ class LeKiWiBridge(Node):
             elapsed = (self.get_clock().now() - loop_start).nanoseconds * 1e-9
             sleep_time = max(0.001, self.dt - elapsed)
             rclpy.sleep(sleep_time)
+
+
+def main(args=None):
+    import sys
+    from lekiwi_sim_loader import load_lekiwi_sim
+    rclpy.init(args=args)
+    params = {}
+    for arg in sys.argv[1:]:
+        if ':=' in arg:
+            key, val = arg.split(':=', 1)
+            params[key.lstrip('-')] = val
+
+    sim = load_lekiwi_sim(
+        sim_type=params.get('sim_type', 'urdf'),
+        mode=params.get('mode', 'sim'),
+        render=params.get('render', 'false').lower() == 'true',
+    )
+    node = LeKiWiBridge(sim, rate=float(params.get('rate', '50.0')))
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.stop()
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

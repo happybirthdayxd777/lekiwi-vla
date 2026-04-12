@@ -8,6 +8,12 @@ setup(
         ('share/ament_index/resource_index/packages',
          ['resource/lekiwi_ros2_bridge']),
         ('share/lekiwi_ros2_bridge', ['package.xml']),
+        ('share/lekiwi_ros2_bridge/launch', [
+            'launch/bridge.launch.py',
+            'launch/full.launch.py',
+            'launch/vla.launch.py',
+            'launch/real_mode.launch.py',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
