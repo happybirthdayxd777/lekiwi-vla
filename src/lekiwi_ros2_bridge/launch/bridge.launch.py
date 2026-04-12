@@ -1,46 +1,66 @@
 """
-Unified LeKiWi Launch — Simulation mode switch
-===============================================
+bridge.launch.py — Unified launch for LeKiWi ROS2-MuJoCo bridge
 
 Usage:
-  # Primitive cylinders (fast, stable)
-  ros2 launch lekiwi_ros2_bridge bridge.launch.py sim_type:=primitive
+  ros2 launch lekiwi_ros2_bridge bridge.launch.py
 
-  # Real STL mesh geometry (from lekiwi_modular URDF)
-  ros2 launch lekiwi_ros2_bridge bridge.launch.py sim_type:=urdf
-
-The bridge node subscribes to /lekiwi/cmd_vel and publishes:
-  /lekiwi/joint_states           — joint positions + velocities
-  /lekiwi/camera/image_raw       — front camera image (20 Hz)
-  /lekiwi/wrist_camera/image_raw — wrist camera image (20 Hz, URDF mode only)
-  /lekiwi/wheel_N/cmd_vel       — wheel velocity commands
+Topics bridged:
+  /lekiwi/cmd_vel         (Twist)      ← input: teleop/Nav2 base commands
+  /lekiwi/arm_joint_i/cmd_pos (Float64) ← input: arm joint position (radians)
+  /lekiwi/wheel_i/cmd_vel (Float64)    ← output: wheel angular velocities
+  /lekiwi/odom            (Odometry)   ← output: simulated odometry
+  /lekiwi/joint_states    (JointState) ← output: full joint state
 """
 
-import launch
-from launch_ros.actions import Node
 from launch import LaunchDescription
+from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 
 
-def generate_launch_description() -> LaunchDescription:
-    sim_type_arg = DeclareLaunchArgument(
-        "sim_type",
-        default_value="primitive",
-        description=(
-            "Simulation type: 'primitive' (fast cylinders) "
-            "or 'urdf' (real STL meshes from lekiwi_modular)"
-        ),
+def generate_launch_description():
+    # Arguments
+    rate = DeclareLaunchArgument(
+        'rate', default_value='50.0',
+        description='Bridge loop rate (Hz)'
     )
-    sim_type = LaunchConfiguration("sim_type")
+    render = DeclareLaunchArgument(
+        'render', default_value='false',
+        description='Enable MuJoCo rendering (true/false)'
+    )
 
     bridge_node = Node(
-        package="lekiwi_ros2_bridge",
-        executable="bridge_node",
-        name="lekiwi_ros2_bridge",
-        output="screen",
-        parameters=[{"sim_type": sim_type}],
+        package='lekiwi_ros2_bridge',
+        executable='bridge_node',
+        name='lekiwi_ros2_bridge',
+        output='screen',
+        parameters=[{
+            'rate': LaunchConfiguration('rate'),
+            'render': LaunchConfiguration('render'),
+        }],
+        remappings=[
+            # Base velocity command (from teleop)
+            ('/lekiwi/cmd_vel', '/lekiwi/cmd_vel'),
+            # Arm joint commands (Float64 per joint, radians)
+            ('/lekiwi/arm_joint_0/cmd_pos', '/lekiwi/arm_joint_0/cmd_pos'),
+            ('/lekiwi/arm_joint_1/cmd_pos', '/lekiwi/arm_joint_1/cmd_pos'),
+            ('/lekiwi/arm_joint_2/cmd_pos', '/lekiwi/arm_joint_2/cmd_pos'),
+            ('/lekiwi/arm_joint_3/cmd_pos', '/lekiwi/arm_joint_3/cmd_pos'),
+            ('/lekiwi/arm_joint_4/cmd_pos', '/lekiwi/arm_joint_4/cmd_pos'),
+            ('/lekiwi/arm_joint_5/cmd_pos', '/lekiwi/arm_joint_5/cmd_pos'),
+            # Wheel velocity outputs
+            ('/lekiwi/wheel_0/cmd_vel', '/lekiwi/wheel_0/cmd_vel'),
+            ('/lekiwi/wheel_1/cmd_vel', '/lekiwi/wheel_1/cmd_vel'),
+            ('/lekiwi/wheel_2/cmd_vel', '/lekiwi/wheel_2/cmd_vel'),
+            # Odometry output
+            ('/lekiwi/odom', '/lekiwi/odom'),
+            # Joint state output
+            ('/lekiwi/joint_states', '/lekiwi/joint_states'),
+        ],
     )
 
-    ld = LaunchDescription([sim_type_arg, bridge_node])
-    return ld
+    return LaunchDescription([
+        rate,
+        render,
+        bridge_node,
+    ])

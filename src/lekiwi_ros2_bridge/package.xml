@@ -1,24 +1,27 @@
 <?xml version="1.0"?>
-<?xml-model href="http://download.ros.org/schema/package-format3.xsd" ?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>lekiwi_ros2_bridge</name>
   <version>0.1.0</version>
-  <description>ROS2 ↔ MuJoCo bridge node for LeKiWi VLA research platform</description>
-  <maintainer email="research@lekiwi.local">LeKiWi Research</maintainer>
+  <description>ROS2 ↔ LeKiWi-MuJoCo Bridge Node</description>
+  <maintainer email="i_am_ai@example.com">LeKiWi Researcher</maintainer>
   <license>MIT</license>
 
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>nav_msgs</exec_depend>
+  <buildtool_depend>ament_python</buildtool_depend>
 
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
-  <depend>cv_bridge</depend>
-  <depend>image_transport</depend>
 
-  <export></export>
+  <exec_depend>transforms3d</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
 </package>
