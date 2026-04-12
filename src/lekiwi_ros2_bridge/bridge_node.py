@@ -87,13 +87,17 @@ WHEEL_POSITIONS = np.array([
     [-0.0866, -0.15,   0.0 ],   # wheel 2 — back-right
 ], dtype=np.float64)
 
-# Roller axes from URDF (how each wheel contacts the ground)
-# Wheel 0: pure rotation around Z; Wheel 1/2: 30° offset + 26.6° roller tilt
-# (Corrected from omni_controller_fixed.py analysis)
+# Roller axes extracted from LeKiWi.urdf (meters, already normalised)
+# Bridge wheel indices → URDF joint → MuJoCo/joint axis:
+#   wheel_0 → Revolute-64 → [-0.866025,  0, 0.5]    (back-right motor)
+#   wheel_1 → Revolute-62 → [ 0.866025,  0, 0.5]    (back-left motor)
+#   wheel_2 → Revolute-60 → [ 0,         0, -1.0]   (front motor — pure Z spin)
+# Note: wheel_2 axis=[0,0,-1] is the OMNI ROLLER axis (roller spins around Z to move forward/back).
+# Previous code had wheel_0 and wheel_2 axes swapped — fixed 2026-04-12.
 _JOINT_AXES = np.array([
-    [0.0,        0.0, -1.0      ],   # wheel 0 — front
-    [0.866025,   0.0,  0.5      ],   # wheel 1 — back-left
-    [-0.866025,  0.0,  0.5      ],   # wheel 2 — back-right
+    [-0.866025,  0.0,  0.5      ],   # wheel_0 — Revolute-64
+    [ 0.866025,  0.0,  0.5      ],   # wheel_1 — Revolute-62
+    [ 0.0,       0.0, -1.0      ],   # wheel_2 — Revolute-60
 ], dtype=np.float64)
 
 
