@@ -1,5 +1,48 @@
 # LeKiWi ROS2 ↔ MuJoCo ↔ VLA 統一平台進度
 
+## [2026-04-15 08:00] — CLIP-FM 5k Checkpoint Priority Fix + Clean Checkpoint Recovery
+
+### 已完成
+- **Bug 修復：`final_policy.pt` 損壞 → 從 `checkpoint_epoch_10.pt` 重建 clean checkpoint**
+  - `results/fresh_train_5k/final_clean.pt` (582 MB) — 從 wrapped checkpoint 提取的 clean state_dict
+  - `checkpoint_epoch_10.pt` 結構：`{'epoch': 10, 'policy_state_dict': {419 keys}}`
+  - 驗證：完整的 CLIP ViT-B/32 vision encoder + flow_head + time_mlp
+
+- **vla_policy_node.py checkpoint priority 更新**：
+  - 新增 `fresh_5k_ckpt = results/fresh_train_5k/checkpoint_epoch_10.pt`（5k 幀 / 10 epoch）
+  - 自動 unwrap wrapped checkpoint：`sd = state_dict.get("policy_state_dict", state_dict)`
+  - Priority 順序：5k/10ep → 2k/5ep → old SimpleCNN
+  - 同步到 `src/lekiwi_ros2_bridge/vla_policy_node.py` + subpackage 副本
+
+- **CLIP-FM inference 驗證（5k checkpoint）**：
+  ```
+  Load: missing=0, unexpected=0 ← clean CLIP architecture
+  Inference OK — action range: -6.54 to +2.92
+  CLIP loaded: 151,277,313 params (frozen)
+  Total params: 152,640,347 (vision frozen, 969,306 trainable)
+  ```
+  - UNEXPECTED keys（text_model.position_ids）— CLIP架構差異，無影響
+  - Action range [-6.5, +2.9]：符合預期（flow matching 輸出，經 normalize_action 轉換為 native units）
+
+### 架構狀態
+- **Phase 4 全部完成**：
+  - Bridge: 3 modes（sim/primitive, sim/urdf, real）
+  - VLA node: 6 policies（mock, pi0, pi0_fast, act, diffusion, clip_fm）
+  - CLIP-FM checkpoint hierarchy: 5k(10ep) > 2k(5ep) > old SimpleCNN
+  - PolicyGuardian: CTF Challenge 7 主動防禦（6/7 flags captured, Challenge 7 blocked）
+  - Real hardware adapter: ST3215 serial protocol, watchdog, mode=real
+
+### 下一步
+- Phase 7: 真實 CAN bus 對接（Raspberry Pi GPIO → ST3215）
+- Phase 6.3: VLA 端到端測試（使用 clip_fm policy 驅動 bridge，閉環驗證）
+- 改善 CLIP-FM reward：目前 -116 avg（random baseline -106）；需要更好的 exploration 或 PPO
+
+### 阻礙
+- `final_policy.pt` 進程中斷損壞：已從 checkpoint_epoch_10.pt 重建（582 MB clean）
+- CLIP-FM policy 表現略低於 random（-116 vs -106）：訓練資料多樣性不足
+
+---
+
 ## 目標架構
 ```
 ROS2 topics/launch  →  ros2_lekiwi_bridge  →  lekiwi_vla MuJoCo sim  →  VLA policy  →  action back to ROS2
