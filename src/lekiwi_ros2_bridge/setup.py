@@ -21,6 +21,7 @@ setup(
         "console_scripts": [
             "bridge_node = lekiwi_ros2_bridge.bridge_node:main",
             "vla_policy_node = lekiwi_ros2_bridge.vla_policy_node:main",
+            "replay_node = lekiwi_ros2_bridge.replay_node:main",
         ],
     },
 )

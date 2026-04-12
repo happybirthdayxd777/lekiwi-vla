@@ -44,6 +44,7 @@ import tf2_ros
 import numpy as np
 import sys
 import os
+import time
 
 # ── Simulation backend imports ─────────────────────────────────────────────────
 sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
@@ -51,6 +52,7 @@ from sim_lekiwi import LeKiwiSim
 from sim_lekiwi_urdf import LeKiWiSimURDF
 from security_monitor import SecurityMonitor
 from policy_guardian import PolicyGuardian
+from trajectory_logger import TrajectoryRecorder
 
 # ── Joint name mapping: URDF Gazebo names → bridge canonical names ─────────────
 # From lekiwi.urdf Gazebo plugin joint list:
@@ -154,10 +156,16 @@ class LeKiWiBridge(Node):
         # Declare and retrieve parameters (set via launch file)
         self.declare_parameter("sim_type", "primitive")
         self.declare_parameter("mode", "sim")
+        self.declare_parameter("record", False)
+        self.declare_parameter("record_file", "")
         p_sim = self.get_parameter("sim_type")
         p_mode = self.get_parameter("mode")
+        p_record = self.get_parameter("record")
+        p_record_file = self.get_parameter("record_file")
         sim_type = str(p_sim.value) if p_sim.value else "primitive"
         self.mode = str(p_mode.value) if p_mode.value else "sim"
+        self._record = bool(p_record.value) if p_record.value else False
+        self._record_file = str(p_record_file.value) if p_record_file.value else ""
 
         # ── Initialise simulation OR real hardware ────────────────────────
         if self.mode == "real":
@@ -264,6 +272,22 @@ class LeKiWiBridge(Node):
         self._odom_y = 0.0
         self._odom_theta = 0.0
         self._last_odom_time = self.get_clock().now()
+
+        # ── Trajectory recording ──────────────────────────────────────────────
+        self._recorder = None
+        self._record_control_sub = None
+        if self._record:
+            if not self._record_file:
+                self._record_file = os.path.expanduser(
+                    f"~/hermes_research/lekiwi_vla/trajectories/run_{int(time.time())}.h5")
+            self._recorder = TrajectoryRecorder(self._record_file)
+            self._recorder.start()
+            self.get_logger().info(f"Recording trajectory → {self._record_file}")
+            # Record control subscriber
+            self._record_control_sub = self.create_subscription(
+                String, "/lekiwi/record_control", self._on_record_control, qos
+            )
+
         self.get_logger().info(
             "LeKiWi ROS2 bridge ready.  Topics:\n"
             "  /lekiwi/cmd_vel       ← subscribe\n"
@@ -308,6 +332,10 @@ class LeKiWiBridge(Node):
         # Compute wheel angular velocities from kinematics
         wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
 
+        # ── Trajectory recording: log cmd_vel ───────────────────────────────────
+        if self._recorder is not None:
+            self._recorder.record_cmd_vel(vx, vy, wz)
+
         # If VLA has set an arm action, keep arms; otherwise keep last arm pos.
         if self._vla_action_fresh:
             arm_action = self._last_action[0:6]
@@ -336,6 +364,41 @@ class LeKiWiBridge(Node):
             wm = Float64()
             wm.data = float(speed)
             self.wheel_pubs[i].publish(wm)
+
+    # ── Trajectory recording control ──────────────────────────────────────────
+
+    def _on_record_control(self, msg: String):
+        """
+        Control recording via topic:
+          "start"  — begin recording (or restart if already recording)
+          "stop"   — stop recording and flush to disk
+          "status" — log current recording status
+        """
+        cmd = msg.data.strip().lower()
+        if cmd == "start":
+            if self._recorder is None:
+                self.get_logger().warn("Recording not enabled — set record:=true in launch file")
+                return
+            self._recorder.start()
+            self.get_logger().info("Trajectory recording: START")
+        elif cmd == "stop":
+            if self._recorder is None:
+                return
+            self._recorder.stop()
+            self._recorder.flush()
+            self.get_logger().info(
+                f"Trajectory recording: STOP — {self._recorder.num_frames} frames saved"
+            )
+        elif cmd == "status":
+            if self._recorder is None:
+                self.get_logger().info("Recording: DISABLED")
+            else:
+                self.get_logger().info(
+                    f"Recording: {'ACTIVE' if self._recorder.is_recording else 'IDLE'} — "
+                    f"{self._recorder.num_frames} frames buffered"
+                )
+        else:
+            self.get_logger().warn(f"Unknown record control: {cmd} (use: start, stop, status)")
 
     # ── VLA action callback ────────────────────────────────────────────────────
 
@@ -500,6 +563,18 @@ class LeKiWiBridge(Node):
 
         self.joint_state_pub.publish(msg)
 
+        # ── Trajectory recording (simulation mode) ───────────────────────────
+        if self._recorder is not None:
+            ts = now.seconds_nanoseconds()
+            timestamp = ts[0] + ts[1] * 1e-9
+            self._recorder.record_joint_state(
+                arm_positions=arm_pos,
+                arm_velocities=list(obs.get("arm_velocities", np.zeros(6))),
+                wheel_positions=wheel_pos,
+                wheel_velocities=list(wheel_vel),
+                timestamp=timestamp,
+            )
+
         # ── URDF-compatible JointState (real joint names from lekiwi.urdf) ────
         # Maps bridge canonical names → URDF Gazebo plugin joint names
         urdf_msg = JointState()
@@ -620,6 +695,16 @@ class LeKiWiBridge(Node):
         # Flush both monitors
         self.security_monitor.flush()
         self.policy_guardian.flush()
+
+    def destroy_node(self):
+        """Flush trajectory recording on shutdown."""
+        if self._recorder is not None and self._recorder.num_frames > 0:
+            self._recorder.stop()
+            self._recorder.flush()
+            self.get_logger().info(
+                f"TrajectoryRecorder: flushed {self._recorder.num_frames} frames on shutdown"
+            )
+        super().destroy_node()
 
 
 def main(args=None):
