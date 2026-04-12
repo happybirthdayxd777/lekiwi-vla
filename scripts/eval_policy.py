@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Evaluate trained policies on LeKiwi simulation.
+Evaluate trained policies on LeKiWi simulation.
 Supports both SimpleCNN-Flow Matching and CLIP-Flow Matching architectures.
 
 Usage:
@@ -12,12 +12,16 @@ Usage:
 
   # Random baseline
   python3 scripts/eval_policy.py --policy random --episodes 10
+
+  # Custom steps + JSON output
+  python3 scripts/eval_policy.py --arch clip_fm --checkpoint results/fresh_train_5k/checkpoint_epoch_10.pt --episodes 10 --max-steps 100 --eval-output data/clip_fm_eval.json
 """
 
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
+import json
 import torch
 import torch.nn as nn
 import numpy as np
@@ -188,7 +192,7 @@ def make_policy(arch, checkpoint, device):
     return policy
 
 
-def evaluate(policy, device, episodes=10, max_steps=200):
+def evaluate(policy, device, episodes=10, max_steps=200, verbose=True):
     """Run episodes and collect metrics."""
     from sim_lekiwi import LeKiwiSim
     sim = LeKiwiSim()
@@ -220,7 +224,8 @@ def evaluate(policy, device, episodes=10, max_steps=200):
         dist = np.linalg.norm(end_pos[:2] - start_pos[:2])
         all_rewards.append(total_reward)
         all_distances.append(dist)
-        print(f"  Episode {ep+1:2d}: reward={total_reward:+.3f}, distance={dist:.3f}m")
+        if verbose:
+            print(f"  Episode {ep+1:2d}: reward={total_reward:+.3f}, distance={dist:.3f}m")
 
     return {
         "mean_reward":    np.mean(all_rewards),
@@ -240,7 +245,11 @@ def main():
                         choices=["simple_cnn_fm", "clip_fm"])
     parser.add_argument("--checkpoint", type=str,   default=None)
     parser.add_argument("--episodes",   type=int,   default=10)
+    parser.add_argument("--max-steps",  type=int,   default=200,
+                        help="Max steps per episode (default: 200)")
     parser.add_argument("--device",     type=str,   default="mps")
+    parser.add_argument("--eval-output", type=str,  default=None,
+                        help="Path to save evaluation metrics as JSON (e.g., data/eval_results.json)")
     args = parser.parse_args()
 
     print(f"\n{'='*60}")
@@ -250,16 +259,17 @@ def main():
         device = "cpu"
     else:
         if not args.checkpoint:
-            raise ValueError("--checkpoint required for trained policies")
-        print(f"  Architecture: {args.arch}")
+            raise ValueError("--checkpoint required for trained policies (or use --policy random)")
+        arch_name = args.arch
+        print(f"  Architecture: {arch_name}")
         print(f"  Checkpoint:  {args.checkpoint}")
         policy = make_policy(args.arch, args.checkpoint, args.device)
         device = args.device
-    print(f"  Episodes: {args.episodes} | Device: {device}")
+    print(f"  Episodes: {args.episodes} | Steps/ep: {args.max_steps} | Device: {device}")
     print(f"{'='*60}\n")
 
     print(f"[Running {args.episodes} episodes...]")
-    metrics = evaluate(policy, device, episodes=args.episodes)
+    metrics = evaluate(policy, device, episodes=args.episodes, max_steps=args.max_steps)
 
     print(f"\n{'='*40}")
     print(f"  Mean reward:   {metrics['mean_reward']:+.3f} ± {metrics['std_reward']:.3f}")
@@ -268,6 +278,26 @@ def main():
     print(f"  Worst reward:  {min(metrics['all_rewards']):+.3f}")
     print(f"{'='*40}")
     print("✓ Evaluation complete")
+
+    # Save metrics to JSON
+    if args.eval_output:
+        out_path = Path(args.eval_output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        report = {
+            "policy":    args.policy if args.policy == "random" else args.arch,
+            "checkpoint": args.checkpoint or "n/a",
+            "device":    device,
+            "episodes":  args.episodes,
+            "max_steps": args.max_steps,
+            "mean_reward":   float(metrics["mean_reward"]),
+            "std_reward":    float(metrics["std_reward"]),
+            "mean_distance": float(metrics["mean_distance"]),
+            "std_distance":  float(metrics["std_distance"]),
+            "all_rewards":   [float(r) for r in metrics["all_rewards"]],
+        }
+        with open(out_path, "w") as f:
+            json.dump(report, f, indent=2)
+        print(f"  Report saved to: {out_path}")
 
 if __name__ == "__main__":
     main()
