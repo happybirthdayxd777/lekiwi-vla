@@ -566,7 +566,7 @@ def check_ros2_interfaces(base_path):
         all_pass = True
         for name, pattern in checks.items():
             import re
-            found = bool(re.search(pattern, content, re.IGNORECASE))
+            found = bool(re.search(pattern, content, re.IGNORECASE | re.DOTALL))
             interface_results[name] = found
             status = "✓" if found else "✗"
             if not found:
