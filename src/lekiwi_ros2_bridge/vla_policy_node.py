@@ -302,14 +302,43 @@ class CLIPFMPolicyRunner:
         pass
 
 
-def _make_clip_fm_policy_wrapper(pretrained: Optional[str], device: str):
-    raw = _make_clip_fm_policy(pretrained, device)
+def _make_task_oriented_policy(pretrained: Optional[str], device: str):
+    """
+    Load task-oriented policy trained via scripts/train_task_oriented.py.
+
+    Same CLIP-FM architecture but trained with reward-weighted sampling.
+    Checkpoint format: {'epoch': int, 'policy_state_dict': state_dict, ...}
+
+    Default checkpoint: results/task_oriented_50ep/checkpoint_epoch_30.pt
+    """
+    import torch
+    sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
+    from scripts.train_task_oriented import CLIPFlowMatchingPolicy as TOClipFlowMatchingPolicy
+
+    policy = TOClipFlowMatchingPolicy(state_dim=9, action_dim=9, hidden=512, device=device)
+
+    if pretrained:
+        ckpt_path = os.path.expanduser(pretrained)
+        if os.path.exists(ckpt_path):
+            ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+            sd = ckpt.get("policy_state_dict", ckpt)
+            missing, unexpected = policy.load_state_dict(sd, strict=False)
+            print(f"[task_oriented] Loaded checkpoint epoch={ckpt.get('epoch','?')} | "
+                  f"missing={missing} unexpected={len(unexpected)}")
+        else:
+            print(f"[task_oriented] WARNING: checkpoint not found: {ckpt_path}")
+    return policy
+
+
+def _make_task_oriented_wrapper(pretrained: Optional[str], device: str):
+    raw = _make_task_oriented_policy(pretrained, device)
     return CLIPFMPolicyRunner(raw, device)
 
 
 _POLICY_LOADERS = {
-    "mock":    _make_mock_policy,
-    "clip_fm": _make_clip_fm_policy_wrapper,
+    "mock":          _make_mock_policy,
+    "clip_fm":       _make_clip_fm_policy_wrapper,
+    "task_oriented": _make_task_oriented_wrapper,
 }
 
 

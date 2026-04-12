@@ -8,7 +8,12 @@ One launch file to rule them all (defaults use CLIP-FM with trained checkpoint):
 
 Modes:
   sim_type : primitive | urdf
-  policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm
+  policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm | task_oriented
+
+  # Default checkpoint for task_oriented is the 30-epoch run (best evaluated):
+  #   results/task_oriented_50ep/checkpoint_epoch_30.pt  (20% success @ 0.3m, 5 eps)
+  # For clip_fm (original CLIP-FM without reward weighting):
+  #   results/fresh_train_5k/final_policy.pt
 
 Recording + Replay:
   # Record a trajectory (HDF5 at 20 Hz)
@@ -57,7 +62,7 @@ def generate_launch_description() -> LaunchDescription:
     )
     policy = DeclareLaunchArgument(
         "policy", default_value="clip_fm",
-        description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm",
+        description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm, task_oriented",
     )
     pretrained = DeclareLaunchArgument(
         "pretrained", default_value="~/hermes_research/lekiwi_vla/results/fresh_train_5k/final_policy.pt",
