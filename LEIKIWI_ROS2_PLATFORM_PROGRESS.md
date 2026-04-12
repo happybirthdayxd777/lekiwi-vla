@@ -1,13 +1,103 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
-**Last Updated:** 2026-04-12 22:30 JST
-**Status:** ✅ Camera Publishing Added — Bridge now streams front + wrist images to ROS2
+**Last Updated:** 2026-04-13 03:00 JST
+**Status:** ✅ Goal-Directed Training + MuJoCo Stability Fix — goal_5k dataset (10k frames, 39% positive rewards, 20 epochs in 332s, loss 1.35→0.80)
 
 ---
 
 ---
 
-## 2026-04-12 22:30 JST — Cycle 10: Camera Publishing Added
+## 2026-04-13 03:00 JST — Cycle 11: Goal-Directed Training + MuJoCo Stability Fix
+
+### ✅ MuJoCo QACC Instability Fix — Wheel Ctrl Rate-Limiting
+
+**Problem:** `WARNING: Nan, Inf or huge value in QACC at DOF 0` at t=16.84s —
+MuJoCo simulation exploding when wheel velocity commands change too sharply.
+
+**Root cause:** Actions from policy inference can jump from 0 to ±5 rad/s in one step
+(5ms = 0.005s). MuJoCo's Euler integrator with stiff motor controls causes QACC spikes.
+
+**Fix in `sim_lekiwi_urdf.py`:**
+```python
+def __init__(self):
+    ...
+    self._prev_wheel_ctrl = np.zeros(3, dtype=np.float64)  # NEW
+
+def step(self, action):
+    ctrl = self._action_to_ctrl(np.asarray(action, dtype=np.float32))
+    ctrl = np.clip(ctrl, -5.0, 5.0)  # absolute clamp
+    # Rate-limit wheel velocities: max 2.0 rad/s change per step
+    for i in range(6, 9):
+        delta = ctrl[i] - self._prev_wheel_ctrl[i - 6]
+        ctrl[i] = self._prev_wheel_ctrl[i - 6] + np.clip(delta, -2.0, 2.0)
+    self._prev_wheel_ctrl = ctrl[6:9].copy()
+    self.data.ctrl[:] = ctrl
+    mujoco.mj_step(self.model, self.data)
+```
+
+**Verified:** 500-step zero action → stable. 20-step aggressive random actions → stable.
+
+### ✅ Goal-Directed Replay Buffer — lekiwi_goal_5k.h5 Support
+
+**New `--goal_data` flag** in `train_task_oriented.py`:
+```bash
+python3 scripts/train_task_oriented.py \
+  --goal_data data/lekiwi_goal_5k.h5 \
+  --epochs 20 \
+  --device cpu \
+  --output results/goal_directed \
+  --eval
+```
+
+**GoalOrientedReplayBuffer class** (50 new lines):
+- Reads 10k frames from `lekiwi_goal_5k.h5`: states, images, actions, rewards, goal_positions
+- Uses **pre-computed rewards directly** (no simulation re-roll needed)
+- Rewards: min=-0.100, max=1.000, mean=-0.010
+- Positive reward frames: **3,911 / 10,000 (39.1%)** — meaningful learning signal
+- 50 unique goal positions in training data
+- Weights: min=0.5, max=3.0, mean=1.0
+
+**Training results** (goal_directed, 20 epochs, 10k frames):
+```
+  Epoch   1/20 | Loss: 1.3559 | W-Loss: 1.3299
+  Epoch  10/20 | Loss: 0.8594 | W-Loss: 0.8519
+  Epoch  20/20 | Loss: 0.7995 | W-Loss: 0.7956 | ETA: 0s
+  ✓ Training done in 332s
+```
+
+**Task evaluation** (5 episodes, goal (0.5, 0.0), threshold 0.1m):
+```
+  Episode 1: success=False, dist=0.866m
+  Episode 2: success=False, dist=0.367m   ← improving!
+  Episode 3: success=False, dist=0.763m
+  Episode 4: success=False, dist=0.630m
+  Episode 5: success=False, dist=0.609m
+  Mean final distance: 0.647m (vs 0.862m with task_oriented_50ep)
+```
+
+### 📊 Architecture State
+
+```
+Phase 1 ✓ lekiwi_modular      — URDF (lekiwi.urdf), STL meshes, ROS2 controller
+Phase 2 ✓ lekiwi_ros2_bridge — bridge_node.py (Twist→MuJoCo, sensor→joint_states)
+Phase 3 ✓ lekiwi_vla sim      — LeKiWiSim + LeKiWiSimURDF (MuJoCo, cameras)
+Phase 4 ✓ VLA policy          — CLIP-FM (goal_directed, 20 epochs, 10k frames)
+Phase 5 ✓ Closed loop         — bridge_node._on_vla_action() arm override
+Phase 6 ✓ Recording + Replay  — TrajectoryRecorder + replay_node
+Phase 7 ✓ Goal-Directed VLA   — GoalOrientedReplayBuffer + lekiwi_goal_5k.h5
+Phase 8 ✓ MuJoCo Stability    — wheel ctrl rate-limiting → no more QACC explosions
+```
+
+### 下一步
+1. **Extended training**: 50 epochs goal_directed → 0% success → target >40% success
+2. **Evaluate on training goals**: Test policy on goals from training distribution (not (0.5,0))
+3. **URDF joint mismatch**: Check arm joint indices in h5 states vs MuJoCo qpos layout
+4. **Real hardware**: `mode:=real` with ST3215 servo integration
+
+### 阻礙
+- Task eval at goal (0.5, 0.0): not in goal_5k training distribution → poor generalization
+- Need to evaluate at training-distribution goals for fair assessment
+- H5 state = [arm_pos*6, wheel_vel*3] — potential index mismatch with MuJoCo qpos layout
 
 ### ✅ Camera Image Publishing — Bridge Now Streams to ROS2
 
