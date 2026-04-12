@@ -10,6 +10,8 @@ ROS2 side:
   - Publish:   /lekiwi/wheel_{i}/cmd_vel (Float64)  → wheel angular velocities
   - Publish:   /lekiwi/odom (Odometry)               → simulated odometry
   - Publish:   /lekiwi/joint_states (JointState)     → full joint state
+  - Publish:   /lekiwi/camera/image_raw (Image)      → front camera @ 4 Hz
+  - Publish:   /lekiwi/wrist_camera/image_raw (Image) → wrist camera @ 4 Hz (URDF mode)
 
 MuJoCo side (LeKiWiSim):
   - action[0..5] = arm joint position targets (rad, clamped -3.14..3.14)
@@ -24,11 +26,13 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, Image
 from std_msgs.msg import Float64
+from cv_bridge import CvBridge
 import numpy as np
 import transforms3d
 from threading import Thread, Event
+import time as _time
 
 
 # MuJoCo joint name → ROS2 wheel index mapping
@@ -78,6 +82,15 @@ class LeKiWiBridge(Node):
             JointState, '/lekiwi/joint_states', 10
         )
 
+        # ── Camera publishers (throttled to 4 Hz to avoid render overload) ──
+        self._cv_bridge = CvBridge()
+        self._camera_pub = self.create_publisher(Image, '/lekiwi/camera/image_raw', 5)
+        self._wrist_camera_pub = self.create_publisher(
+            Image, '/lekiwi/wrist_camera/image_raw', 5
+        ) if hasattr(sim, 'render_wrist') else None
+        self._last_camera_pub = 0.0
+        self._camera_pub_interval = 0.25   # 4 Hz = 0.25 s
+
         # --- ROS2 Subscribers ---
         # Base velocity command (from teleop or Nav2)
         self.cmd_vel_sub = self.create_subscription(
@@ -103,7 +116,8 @@ class LeKiWiBridge(Node):
 
         self.get_logger().info(
             f"LeKiWi Bridge initialized (rate={rate}Hz, "
-            f"wheels={MUJOCO_WHEEL_JOINTS}, arm={ARM_JOINTS})"
+            f"wheels={MUJOCO_WHEEL_JOINTS}, arm={ARM_JOINTS}, "
+            f"camera={'yes' if hasattr(sim, 'render_wrist') else 'front-only'})"
         )
 
     # ─── Callbacks ────────────────────────────────────────────────────────────
@@ -172,6 +186,40 @@ class LeKiWiBridge(Node):
                 self.sim.data.qvel[self._jvel_idx[n]] for n in MUJOCO_WHEEL_JOINTS
             ]),
         }
+
+    # ─── Camera publishing (throttled to 4 Hz) ────────────────────────────────
+
+    def _publish_cameras(self):
+        """Render and publish front + wrist camera images at 4 Hz."""
+        now = _time.time()
+        if now - self._last_camera_pub < self._camera_pub_interval:
+            return
+        self._last_camera_pub = now
+
+        stamp = self.get_clock().now().to_msg()
+
+        # Front camera
+        front_img = self.sim.render()
+        if front_img is not None:
+            try:
+                msg = self._cv_bridge.cv2_to_imgmsg(front_img, encoding="rgb8")
+                msg.header.stamp = stamp
+                msg.header.frame_id = "front_camera"
+                self._camera_pub.publish(msg)
+            except Exception:
+                pass  # render may return None for non-visualized sims
+
+        # Wrist camera (URDF mode only)
+        if self._wrist_camera_pub is not None:
+            wrist_img = self.sim.render_wrist()
+            if wrist_img is not None:
+                try:
+                    msg = self._cv_bridge.cv2_to_imgmsg(wrist_img, encoding="rgb8")
+                    msg.header.stamp = stamp
+                    msg.header.frame_id = "wrist_camera"
+                    self._wrist_camera_pub.publish(msg)
+                except Exception:
+                    pass
 
     # ─── Publish ROS2 topics ──────────────────────────────────────────────────
 
@@ -250,7 +298,10 @@ class LeKiWiBridge(Node):
                 self._publish_odom(state)
                 self._publish_joint_states(state)
 
-            # 4. Sleep to maintain rate
+            # 4. Publish camera images (throttled to 4 Hz, independent)
+            self._publish_cameras()
+
+            # 5. Sleep to maintain rate
             elapsed = (self.get_clock().now() - loop_start).nanoseconds * 1e-9
             sleep_time = max(0.001, self.dt - elapsed)
             rclpy.sleep(sleep_time)
