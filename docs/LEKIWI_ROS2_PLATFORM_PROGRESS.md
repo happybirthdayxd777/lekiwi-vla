@@ -1,5 +1,8 @@
 # LeKiWi ROS2-MuJoCo 研究平台進度
 
+**Last Updated:** 2026-04-12 12:00 JST
+**Status:** ✅ Kinematics Validation — primitive mode has simplified geometry, URDF mode correct
+
 ## 目標架構
 
 ```
