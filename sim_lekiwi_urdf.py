@@ -301,6 +301,7 @@ class LeKiWiSimURDF:
         self._jpos_idx = {n: _jid(self.model, n) for n in ALL_JOINTS}
         self._jvel_idx = {n: _jid(self.model, n) for n in ALL_JOINTS}
         self._target   = np.array([0.5, 0.0, 0.0])
+        self._prev_wheel_ctrl = np.zeros(3, dtype=np.float64)
         print(f"[LeKiWiSimURDF] bodies={self.model.nbody}, "
               f"meshes={self.model.nmesh}, joints={self.model.njnt}, "
               f"geoms={self.model.ngeom}")
@@ -331,7 +332,15 @@ class LeKiWiSimURDF:
         return self._obs()
 
     def step(self, action):
-        self.data.ctrl[:] = self._action_to_ctrl(np.asarray(action, dtype=np.float32))
+        ctrl = self._action_to_ctrl(np.asarray(action, dtype=np.float32))
+        # Safety: clamp absolute ctrl + rate-limit wheel ctrl to prevent MuJoCo instability
+        ctrl = np.clip(ctrl, -5.0, 5.0)
+        # Rate-limit wheel velocities: max 2.0 rad/s change per step (5ms = 0.005s → max 0.01 rad/s per step)
+        for i in range(6, 9):
+            delta = ctrl[i] - self._prev_wheel_ctrl[i - 6]
+            ctrl[i] = self._prev_wheel_ctrl[i - 6] + np.clip(delta, -2.0, 2.0)
+        self._prev_wheel_ctrl = ctrl[6:9].copy()
+        self.data.ctrl[:] = ctrl
         mujoco.mj_step(self.model, self.data)
         return self._obs(), float(self._reward()), bool(self.data.time > 60), {}
 

@@ -291,7 +291,52 @@ class TaskOrientedReplayBuffer:
         return imgs, states, actions, weights
 
 
-# ─── Task-Oriented Training ────────────────────────────────────────────────────
+class GoalOrientedReplayBuffer:
+    """
+    Replay buffer for goal-directed training using lekiwi_goal_5k.h5 dataset.
+    Each frame has its own goal position and pre-computed reward signal.
+    Uses the dataset's pre-computed rewards directly (no simulation re-roll needed).
+    """
+
+    def __init__(self, h5_path, batch_size=16, goal_threshold=0.1):
+        print(f"[INFO] Loading goal HDF5: {h5_path}")
+        with h5py.File(h5_path, "r") as f:
+            self.images       = f["images"][:]
+            self.states       = f["states"][:]
+            self.actions      = f["actions"][:]
+            self.rewards      = f["rewards"][:]
+            self.goal_positions = f["goal_positions"][:]
+
+        N = len(self.actions)
+        print(f"[INFO] {N:,} goal-directed frames loaded")
+        print(f"[INFO] Rewards: min={self.rewards.min():.3f}, max={self.rewards.max():.3f}, "
+              f"mean={self.rewards.mean():.3f}")
+        print(f"[INFO] Positive reward frames: {(self.rewards > 0).sum():,} / {N:,} "
+              f"({100*(self.rewards > 0).mean():.1f}%)")
+        print(f"[INFO] Goals: {len(np.unique(self.goal_positions, axis=0)):,} unique positions")
+
+        # Compute sample weights from pre-computed rewards
+        is_goals = (self.rewards >= 1.0)
+        self.weights = compute_sample_weights(self.rewards, is_goals)
+        print(f"[INFO] Weights: min={self.weights.min():.2f}, max={self.weights.max():.2f}, "
+              f"mean={self.weights.mean():.2f}")
+        print(f"[INFO] Goal frames: {is_goals.sum():,} / {N:,} ({100*is_goals.mean():.1f}%)")
+
+        self.N = N
+        self.bs = batch_size
+
+    def sample(self):
+        """Weighted sampling based on reward signal."""
+        idx = np.random.randint(0, self.N, size=self.bs)
+        sample_weights = self.weights[idx]
+
+        imgs = torch.from_numpy(self.images[idx].astype(np.float32) / 255.0)
+        imgs = imgs.permute(0, 3, 1, 2)
+        states  = torch.from_numpy(self.states[idx].astype(np.float32))
+        actions = torch.from_numpy(self.actions[idx].astype(np.float32))
+        weights = torch.from_numpy(sample_weights)
+
+        return imgs, states, actions, weights
 
 def train(policy, optimizer, replay, epochs=50, device="cpu", output_dir="results", start_epoch=0):
     output_dir = Path(output_dir)
@@ -415,6 +460,9 @@ def evaluate_task_success(policy, device="cpu", num_episodes=5, goal_pos=(0.5, 0
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data",           type=str,   default="data/lekiwi_urdf_5k.h5")
+    parser.add_argument("--goal_data",      type=str,   default="",
+                        help="Path to goal_5k.h5 dataset (with goal_positions). "
+                             "If set, uses per-frame goals instead of fixed --goal_x/--goal_y")
     parser.add_argument("--epochs",         type=int,   default=50)
     parser.add_argument("--batch-size",     type=int,   default=16)
     parser.add_argument("--lr",             type=float, default=1e-4)
@@ -436,19 +484,32 @@ def main():
     print(f"Device: {args.device}")
     print(f"Goal: ({args.goal_x}, {args.goal_y}) with threshold={args.goal_threshold}m")
 
+    from pathlib import Path  # imported early to avoid UnboundLocalError
     data_path = Path(args.data)
-    if not data_path.exists():
+    if not args.goal_data and not data_path.exists():
         print(f"ERROR: Data file not found: {data_path}")
         print("Run: python3 scripts/collect_data.py --sim_type urdf --episodes 50 --output data/lekiwi_urdf_5k.h5")
         sys.exit(1)
 
     print("\n[1] Loading task-oriented replay buffer...")
-    replay = TaskOrientedReplayBuffer(
-        str(data_path),
-        batch_size=args.batch_size,
-        goal_pos=(args.goal_x, args.goal_y),
-        goal_threshold=args.goal_threshold,
-    )
+    if args.goal_data:
+        print(f"[INFO] Loading goal-oriented dataset: {args.goal_data}")
+        goal_path = Path(args.goal_data)
+        if not goal_path.exists():
+            print(f"ERROR: goal_data not found: {goal_path}")
+            sys.exit(1)
+        replay = GoalOrientedReplayBuffer(
+            str(goal_path),
+            batch_size=args.batch_size,
+            goal_threshold=args.goal_threshold,
+        )
+    else:
+        replay = TaskOrientedReplayBuffer(
+            str(data_path),
+            batch_size=args.batch_size,
+            goal_pos=(args.goal_x, args.goal_y),
+            goal_threshold=args.goal_threshold,
+        )
 
     print("\n[2] Building CLIP-Flow Matching policy...")
     policy = CLIPFlowMatchingPolicy(
