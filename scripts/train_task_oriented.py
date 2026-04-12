@@ -80,7 +80,7 @@ def compute_shaped_reward(state_t, state_tp1, action, sim, goal_pos=(0.5, 0.0), 
     return reward + action_penalty, is_goal, dist_t, dist_tp1
 
 
-def compute_sample_weights(rewards, is_goals, base_threshold=0.5):
+def compute_sample_weights(rewards, is_goals, base_threshold=0.15):
     """
     Convert per-step rewards to per-sample loss weights for training.
 
@@ -88,10 +88,21 @@ def compute_sample_weights(rewards, is_goals, base_threshold=0.5):
     Steps that move toward goal get positive weights.
     Steps that don't move get neutral weights.
 
+    CRITICAL FIX (Cycle 21): base_threshold was declared but NEVER USED.
+    The OLD code ignored it entirely — all frames with rewards > 0 got positive
+    weight regardless of how close the robot already was to the goal.
+    This meant the policy learned coarse navigation to enter the 0.5m zone
+    but never refined precision within it.
+
+    NEW behavior: frames within base_threshold of goal get AT MOST 1.5× weight
+    (down from 2×). This forces the policy to focus on the TRANSITION region
+    (0.15m–0.5m) where precision refinement matters.
+
     Args:
       rewards:     (N,) float — shaped reward at each step
       is_goals:    (N,) bool  — whether step ends at goal
-      base_threshold: float — minimum distance to count as "moving toward goal"
+      base_threshold: float — frames closer than this get reduced positive weight
+                              (was 0.5, now 0.15 for precision navigation)
 
     Returns:
       weights: (N,) float — per-sample weight in [0.5, 3.0]
@@ -103,7 +114,15 @@ def compute_sample_weights(rewards, is_goals, base_threshold=0.5):
 
     # Positive-reward steps: up to 2× based on reward magnitude
     positive_mask = rewards > 0
-    weights[positive_mask] = 1.0 + np.clip(rewards[positive_mask] * 5, 0, 2.0)
+    # Cap positive weight at 1.5× for frames already close to goal
+    # to redirect learning toward the TRANSITION region (coarse→fine)
+    positive_rewards = rewards[positive_mask]
+    positive_weights = np.clip(positive_rewards * 5, 0, 2.0)
+    # Reduce weight for frames that are already near the goal
+    # (small positive reward = already close, not learning transition)
+    small_positive_mask = (positive_rewards > 0) & (positive_rewards < 0.05)
+    positive_weights[small_positive_mask] *= 0.5
+    weights[positive_mask] = 1.0 + positive_weights
 
     # Negative-reward steps: reduce to 0.5× (de-prioritize)
     negative_mask = rewards < -0.05
