@@ -3,17 +3,18 @@ Unified LeKiWi Launch — Full Platform
 ======================================
 One launch file to rule them all (defaults use CLIP-FM with trained checkpoint):
 
-  ros2 launch lekiwi_ros2_bridge full.launch.py           # CLIP-FM + URDF (no extra args needed)
+  ros2 launch lekiwi_ros2_bridge full.launch.py           # task_oriented policy + URDF (no extra args needed)
+  ros2 launch lekiwi_ros2_bridge full.launch.py policy:=clip_fm  # switch to CLIP-FM policy
   ros2 launch lekiwi_ros2_bridge full.launch.py sim_type:=urdf  # explicit URDF mode
 
 Modes:
   sim_type : primitive | urdf
   policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm | task_oriented
 
-  # Default checkpoint for task_oriented is the 30-epoch run (best evaluated):
-  #   results/task_oriented_50ep/checkpoint_epoch_30.pt  (20% success @ 0.3m, 5 eps)
-  # For clip_fm (original CLIP-FM without reward weighting):
-  #   results/fresh_train_5k/final_policy.pt
+  # Default policy is task_oriented (reward-weighted CLIP-FM, 20% success @ 0.3m)
+  #   checkpoint: results/task_oriented_goaldirected/checkpoint_epoch_30.pt
+  # For original CLIP-FM (no reward weighting):
+  #   results/fresh_train_5k/final_clean.pt
 
 Recording + Replay:
   # Record a trajectory (HDF5 at 20 Hz)
@@ -48,6 +49,14 @@ from launch.actions import ExecuteProcess
 
 def generate_launch_description() -> LaunchDescription:
 
+    render = DeclareLaunchArgument(
+        "render", default_value="false",
+        description="Enable MuJoCo rendering (true/false)",
+    )
+    rate = DeclareLaunchArgument(
+        "rate", default_value="50.0",
+        description="Bridge loop rate (Hz)",
+    )
     sim_type = DeclareLaunchArgument(
         "sim_type", default_value="urdf",
         description="urdf=STL mesh geometry (recommended), primitive=fast cylinders",
@@ -61,11 +70,11 @@ def generate_launch_description() -> LaunchDescription:
         description="Device for VLA inference: cpu, cuda, mps",
     )
     policy = DeclareLaunchArgument(
-        "policy", default_value="clip_fm",
+        "policy", default_value="task_oriented",
         description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm, task_oriented",
     )
     pretrained = DeclareLaunchArgument(
-        "pretrained", default_value="~/hermes_research/lekiwi_vla/results/fresh_train_5k/final_policy.pt",
+        "pretrained", default_value="~/hermes_research/lekiwi_vla/results/task_oriented_goaldirected/checkpoint_epoch_30.pt",
         description="Path to pretrained policy checkpoint (LeRobot or clip_fm .pt)",
     )
     record = DeclareLaunchArgument(
@@ -102,6 +111,8 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[{
             "sim_type": LaunchConfiguration("sim_type"),
             "mode": LaunchConfiguration("mode"),
+            "rate": LaunchConfiguration("rate"),
+            "render": LaunchConfiguration("render"),
             "record": LaunchConfiguration("record"),
             "record_file": LaunchConfiguration("record_file"),
             "enable_hmac": LaunchConfiguration("enable_hmac"),
@@ -146,6 +157,8 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     return LaunchDescription([
+        render,
+        rate,
         sim_type,
         mode,
         policy,
