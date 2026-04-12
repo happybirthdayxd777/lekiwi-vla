@@ -683,8 +683,8 @@ class LeKiWiBridge(Node):
         self._frame_count += 1
         if self._frame_count % 5 == 0:   # publish every 5th frame (4 Hz @ 20 Hz timer)
             try:
-                # Front camera
-                img_pil = self.sim.render(640, 480)
+                # Front camera (render() takes no args — resolution hardcoded in sim)
+                img_pil = self.sim.render()
                 img_np  = np.asarray(img_pil)
                 ros_img = self.bridge.cv2_to_imgmsg(img_np, encoding="rgb8")
                 ros_img.header.stamp = msg.header.stamp
