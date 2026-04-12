@@ -308,8 +308,9 @@ def _make_clip_fm_policy_wrapper(pretrained: Optional[str], device: str):
 
 
 _POLICY_LOADERS = {
-    "mock":    _make_mock_policy,
-    "clip_fm": _make_clip_fm_policy_wrapper,
+    "mock":          _make_mock_policy,
+    "clip_fm":       _make_clip_fm_policy_wrapper,
+    "task_oriented": _make_clip_fm_policy_wrapper,   # reuses same CLIP-FM class + checkpoint format
 }
 
 

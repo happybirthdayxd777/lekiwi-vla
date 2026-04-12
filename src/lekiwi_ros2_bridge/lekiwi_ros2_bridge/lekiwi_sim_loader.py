@@ -55,7 +55,9 @@ def load_lekiwi_sim(sim_type: str = 'urdf', mode: str = 'sim', render: bool = Fa
 
     # Default: URDF with STL meshes
     from sim_lekiwi_urdf import LeKiWiSimURDF
-    sim = LeKiWiSimURDF(render_mode='human' if render else None)
+    sim = LeKiWiSimURDF()
+    if render:
+        _launch_viewer(sim)
     return sim
 
 
