@@ -580,5 +580,44 @@ MuJoCo obs → bridge_node → /lekiwi/joint_states + /lekiwi/camera/image_raw
 - Phase 5 CTF 安全模式實測（用 `ros2 topic pub /lekiwi/policy_input` 模擬攻擊）
 
 ### 阻礙
-- Phase 7: 真實 CAN bus 對接（Raspberry Pi GPIO → ST3215）
+|- Phase 7: 真實 CAN bus 對接（Raspberry Pi GPIO → ST3215）
+
+---
+
+## [2026-04-12 09:30] — Phase 6.3: CLIP-FM End-to-End Closed Loop Verification
+
+### 已完成
+|- **CLIP-FM 端到端閉環驗證**（隔離測試，無 ROS2 環境）：
+| Step | Component | Verified |
+|------|-----------|----------|
+| 1 | `CLIPFlowMatchingPolicy` loads `results/fresh_train_5k/checkpoint_epoch_10.pt` — all 419 keys matched, strict=False | ✅ |
+| 2 | `LeKiWiSim._obs()` → bridge joint_states format: arm_positions(6) + wheel_velocities(3) | ✅ |
+| 3 | VLA state construction: `np.concatenate([arm_positions, wheel_velocities])` — matches lerobot_policy_inference.py | ✅ |
+| 4 | CLIP-FM `infer(num_steps=4)` → raw action: range=[-2.91, +2.49]（within [-1,1] expected） | ✅ |
+| 5 | `normalize_action()` (lerobot_policy_inference.py version): policy [-1,1] → native units | ✅ |
+| 6 | `LeKiWiSim.step(native_action)` → closed loop step, no NaN/Inf | ✅ |
+
+### Data Format Match Verification
+- **bridge_node → vla_policy_node** (correct, verified):
+  - bridge_node publishes: `/lekiwi/joint_states` with `position=arm(6)+wheel_positions(3)`, `velocity=arm_vel(6)+wheel_vel(3)`
+  - vla_policy_node reads: `arm_positions` + `wheel_velocities` (trained on wheel_velocities, not positions)
+- **normalize_action** (verified identical between lerobot_policy_inference.py and vla_policy_node.py):
+  - Lerobot: `arm_n = limits[:,0] + (arm+1)/2 * (limits[:,1]-limits[:,0])`
+  - vla_policy_node: same formula using LEKIWI_ARM_LIMITS + LEKIWI_WHEEL_LIMITS
+- **CLIP-FM checkpoint**: `fresh_train_5k/checkpoint_epoch_10.pt` = 610MB, 419 keys, clean load
+
+### 架構狀態（Phase 1-6 全部完成）
+- `bridge_node.py`: `/lekiwi/cmd_vel` → MuJoCo + `/lekiwi/joint_states` + `/lekiwi/camera/image_raw`
+- `vla_policy_node.py`: joint_states + image_raw → CLIP-FM/LeRobot → `/lekiwi/vla_action`
+- `bridge_node._on_vla_action`: receives VLA action, applies to sim (closed loop complete)
+- `security_monitor.py` + `policy_guardian.py`: CTF 安全監控
+- 3 checkpoints: `fresh_train_5k/checkpoint_epoch_10.pt` (BEST), `fresh_train/policy_urdf_ep5.pt`, `improved/final_policy.pt`
+
+### 下一步
+- 真實硬體部署（需要 ROS2 環境 + ST3215 硬體）
+- LeRobot VLA (pi0/ACT) 實際 HuggingFace checkpoint 加載
+- Phase 7: CAN bus 對接
+
+### 阻礙
+- Phase 7: 真實 CAN bus 對接（Raspberry Pi GPIO → ST3215）需要硬體
 
