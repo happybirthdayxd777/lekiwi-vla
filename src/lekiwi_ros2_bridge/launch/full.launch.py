@@ -44,8 +44,8 @@ from launch.actions import ExecuteProcess
 def generate_launch_description() -> LaunchDescription:
 
     sim_type = DeclareLaunchArgument(
-        "sim_type", default_value="primitive",
-        description="primitive=fast cylinders, urdf=STL mesh geometry",
+        "sim_type", default_value="urdf",
+        description="urdf=STL mesh geometry (recommended), primitive=fast cylinders",
     )
     mode = DeclareLaunchArgument(
         "mode", default_value="sim",

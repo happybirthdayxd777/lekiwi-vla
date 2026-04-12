@@ -24,6 +24,14 @@ def generate_launch_description():
         'rate', default_value='50.0',
         description='Bridge loop rate (Hz)'
     )
+    sim_type = DeclareLaunchArgument(
+        'sim_type', default_value='urdf',
+        description='urdf=STL mesh (recommended), primitive=fast cylinders'
+    )
+    mode = DeclareLaunchArgument(
+        'mode', default_value='sim',
+        description='sim=MuJoCo, real=real hardware'
+    )
     render = DeclareLaunchArgument(
         'render', default_value='false',
         description='Enable MuJoCo rendering (true/false)'
@@ -36,6 +44,8 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'rate': LaunchConfiguration('rate'),
+            'sim_type': LaunchConfiguration('sim_type'),
+            'mode': LaunchConfiguration('mode'),
             'render': LaunchConfiguration('render'),
         }],
         remappings=[
@@ -61,6 +71,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         rate,
+        sim_type,
+        mode,
         render,
         bridge_node,
     ])

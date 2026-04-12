@@ -55,11 +55,14 @@ class LeKiWiBridge(Node):
             np.array([-0.0866, 0.15, 0.0]),
             np.array([-0.0866, -0.15, 0.0]),
         ]
-        # Normalized omni-wheel joint axes (from omni_controller.py)
+        # Omni-wheel joint axes — from lekiwi.urdf (verified empirically)
+        # wheel_0 (front-right, Revolute-64): [-0.866, 0, 0.5]
+        # wheel_1 (back-left,   Revolute-62): [ 0.866, 0, 0.5]
+        # wheel_2 (back,        Revolute-60): [ 0,     0, -1  ]
         self.joint_axes = [
-            np.array([0.866025, 0.0, 0.5]) / np.linalg.norm([0.866025, 0.0, 0.5]),
-            np.array([0.866025, 0.0, 0.5]) / np.linalg.norm([0.866025, 0.0, 0.5]),
-            np.array([0.866025, 0.0, 0.5]) / np.linalg.norm([0.866025, 0.0, 0.5]),
+            np.array([-0.866025, 0.0, 0.5]),
+            np.array([ 0.866025, 0.0, 0.5]),
+            np.array([ 0.0,      0.0, -1.0]),
         ]
 
         # --- ROS2 Publishers ---
@@ -162,6 +165,9 @@ class LeKiWiBridge(Node):
             "arm_vel":     np.array([
                 self.sim.data.qvel[self._jvel_idx[n]] for n in ARM_JOINTS
             ]),
+            "wheel_pos":   np.array([
+                self.sim.data.qpos[self._jpos_idx[n]] for n in MUJOCO_WHEEL_JOINTS
+            ]),
             "wheel_vel":   np.array([
                 self.sim.data.qvel[self._jvel_idx[n]] for n in MUJOCO_WHEEL_JOINTS
             ]),
@@ -202,7 +208,7 @@ class LeKiWiBridge(Node):
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = list(ARM_JOINTS) + list(MUJOCO_WHEEL_JOINTS)
-        msg.position = list(state['arm_pos']) + list(state['wheel_vel'])
+        msg.position = list(state['arm_pos']) + list(state['wheel_pos'])
         msg.velocity = list(state['arm_vel']) + list(state['wheel_vel'])
         self.joint_state_pub.publish(msg)
 
