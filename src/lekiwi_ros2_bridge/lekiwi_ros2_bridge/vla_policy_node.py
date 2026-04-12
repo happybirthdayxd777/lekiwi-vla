@@ -161,17 +161,28 @@ def _make_clip_fm_policy(pretrained: Optional[str], device: str):
         ckpt_path = os.path.expanduser(pretrained)
         state_dict = torch.load(ckpt_path, map_location=device, weights_only=False)
     else:
-        # Priority: fresh URDF-trained checkpoint (clean CLIP architecture) >
+        # Priority: 5k-frame/10epoch URDF-trained checkpoint (clean CLIP, strict=True) >
+        # 2k-frame/5epoch URDF checkpoint >
         # old SimpleCNN checkpoint (requires key remapping)
+        fresh_5k_ckpt = os.path.expanduser(
+            "~/hermes_research/lekiwi_vla/results/fresh_train_5k/checkpoint_epoch_10.pt"
+        )
         fresh_ckpt = os.path.expanduser(
             "~/hermes_research/lekiwi_vla/results/fresh_train/policy_urdf_ep5.pt"
         )
         old_ckpt = os.path.expanduser(
             "~/hermes_research/lekiwi_vla/results/fm_50ep_improved/policy_ep10.pt"
         )
-        if os.path.exists(fresh_ckpt):
+        if os.path.exists(fresh_5k_ckpt):
+            state_dict = torch.load(fresh_5k_ckpt, map_location=device, weights_only=False)
+            sd = state_dict.get("policy_state_dict", state_dict)
+            policy.load_state_dict(sd, strict=False)
+            print(f"[CLIP-FM] Loading 5k/10ep checkpoint (clean CLIP, strict=False): {fresh_5k_ckpt}")
+        elif os.path.exists(fresh_ckpt):
             state_dict = torch.load(fresh_ckpt, map_location=device, weights_only=False)
-            print(f"[CLIP-FM] Loading fresh URDF-trained checkpoint: {fresh_ckpt}")
+            sd = state_dict.get("policy_state_dict", state_dict)
+            policy.load_state_dict(sd, strict=False)
+            print(f"[CLIP-FM] Loading 2k/5ep URDF checkpoint: {fresh_ckpt}")
         elif os.path.exists(old_ckpt):
             state_dict = torch.load(old_ckpt, map_location=device, weights_only=False)
             print(f"[CLIP-FM] Falling back to old checkpoint (requires key remapping): {old_ckpt}")
