@@ -393,7 +393,7 @@ def evaluate_task_success(policy, device="cpu", num_episodes=5, goal_pos=(0.5, 0
 
     policy.eval()
     sim = LeKiWiSimURDF()
-    evaluator = TaskEvaluator(sim)
+    evaluator = TaskEvaluator(sim, policy=policy, device=device)
 
     results = []
     for ep in range(num_episodes):

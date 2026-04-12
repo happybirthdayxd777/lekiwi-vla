@@ -26,10 +26,38 @@ from sim_lekiwi import LeKiwiSim
 
 
 class TaskEvaluator:
-    """Task-oriented evaluation for LeKiwi robot."""
+    """Task-oriented evaluation for LeKiWi robot."""
 
-    def __init__(self, sim):
+    def __init__(self, sim, policy=None, device="cpu"):
+        """
+        Args:
+            sim: LeKiWiSim or LeKiWiSimURDF instance
+            policy: Policy with .infer(image, state) method. If None → random baseline.
+            device: Device for policy inference (cpu/mps/cuda)
+        """
         self.sim = sim
+        self.policy = policy
+        self.device = device
+
+    def _get_action(self, img):
+        """Infer action from policy, or random if no policy."""
+        if self.policy is None:
+            return np.random.uniform(-1, 1, size=9).astype(np.float32)
+        # Handle both PIL Image (LeKiWiSim) and np.ndarray (LeKiWiSimURDF)
+        if isinstance(img, np.ndarray):
+            from PIL import Image as PILImage
+            img_pil = PILImage.fromarray(img.astype(np.uint8))
+        else:
+            img_pil = img
+        # Normalize image
+        img_np = np.array(img_pil.resize((224, 224)), dtype=np.float32) / 255.0
+        img_t = torch.from_numpy(img_np.transpose(2, 0, 1)).unsqueeze(0).to(self.device)
+        # State: arm_pos(6) + wheel_vel(3) — must match the qpos/qvel layout of the sim
+        arm_pos = self.sim.data.qpos[0:6]
+        wheel_v = self.sim.data.qvel[0:3]
+        state_t = torch.from_numpy(np.concatenate([arm_pos, wheel_v])).float().unsqueeze(0).to(self.device)
+        action = self.policy.infer(img_t, state_t, num_steps=4)
+        return np.clip(action.cpu().numpy()[0], -1, 1).astype(np.float32)
 
     def reach_target(self, target=(0.5, 0.0), threshold=0.1, max_steps=200):
         """
@@ -46,8 +74,9 @@ class TaskEvaluator:
             if dist < threshold:
                 return True, step, dist
 
-            # Policy action (random if no policy)
-            action = np.random.uniform(-1, 1, size=9).astype(np.float32)
+            # Render and get policy action
+            img_pil = self.sim.render()
+            action = self._get_action(img_pil)
             self.sim.step(action)
 
         final_dist = np.linalg.norm(self.sim.data.qpos[:2] - target)
@@ -72,7 +101,8 @@ class TaskEvaluator:
                     visited += 1
                     break
 
-                action = np.random.uniform(-1, 1, size=9).astype(np.float32)
+                img_pil = self.sim.render()
+                action = self._get_action(img_pil)
                 self.sim.step(action)
 
         return visited / len(waypoints), visited
@@ -95,7 +125,7 @@ class TaskEvaluator:
 
             # Arm-only action (wheels = 0)
             action = np.zeros(9, dtype=np.float32)
-            action[:6] = np.random.uniform(-1, 1, size=6)
+            action[:6] = self._get_action(self.sim.render())[:6]
             self.sim.step(action)
 
         final_tip = self.sim.data.qpos[3:6]
@@ -103,10 +133,11 @@ class TaskEvaluator:
         return False, max_steps, final_dist
 
 
-def evaluate_policy(policy=None, device="cpu", episodes=20, task="reach"):
+def evaluate_policy(policy=None, device="cpu", episodes=20, task="reach", sim=None):
     """Evaluate a policy on task-oriented metrics."""
-    sim = LeKiwiSim()
-    evaluator = TaskEvaluator(sim)
+    if sim is None:
+        sim = LeKiWiSim()
+    evaluator = TaskEvaluator(sim, policy=policy, device=device)
 
     if task == "reach":
         results = [evaluator.reach_target() for _ in range(episodes)]
@@ -115,7 +146,7 @@ def evaluate_policy(policy=None, device="cpu", episodes=20, task="reach"):
         avg_dist = np.mean([r[2] for r in results])
         print(f"\n=== Reach Target Task ({episodes} episodes) ===")
         print(f"  Success rate: {successes}/{episodes} ({100*successes/episodes:.0f}%)")
-        print(f"  Avg steps:   {avg_steps:.1f}")
+        print(f"  Avg steps:     {avg_steps:.1f}")
         print(f"  Avg final dist: {avg_dist:.3f}m")
 
     elif task == "waypoints":
