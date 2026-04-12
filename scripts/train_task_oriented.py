@@ -293,7 +293,7 @@ class TaskOrientedReplayBuffer:
 
 # ─── Task-Oriented Training ────────────────────────────────────────────────────
 
-def train(policy, optimizer, replay, epochs=50, device="cpu", output_dir="results"):
+def train(policy, optimizer, replay, epochs=50, device="cpu", output_dir="results", start_epoch=0):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -302,10 +302,10 @@ def train(policy, optimizer, replay, epochs=50, device="cpu", output_dir="result
     losses = []
     weighted_losses = []
 
-    print(f"\n[3] Task-Oriented Training on {replay.N:,} frames...")
+    print(f"\n[3] Task-Oriented Training on {replay.N:,} frames (resuming from epoch {start_epoch})...")
     t_start = time.time()
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         epoch_loss        = 0.0
         epoch_w_loss     = 0.0
         epoch_num_samples = 0
@@ -427,6 +427,8 @@ def main():
                         help="Goal X position (default: 0.5m)")
     parser.add_argument("--goal_y",         type=float, default=0.0,
                         help="Goal Y position (default: 0.0m)")
+    parser.add_argument("--resume",         type=str,   default="",
+                        help="Path to checkpoint to resume from (e.g. results/task_oriented/checkpoint_epoch_30.pt)")
     parser.add_argument("--eval",           action="store_true",
                         help="Run task evaluation after training")
     args = parser.parse_args()
@@ -453,6 +455,16 @@ def main():
         state_dim=9, action_dim=9,
         hidden=args.hidden, device=args.device
     )
+    start_epoch = 0
+    if args.resume:
+        resume_path = Path(args.resume)
+        if resume_path.exists():
+            ckpt = torch.load(resume_path, map_location=args.device, weights_only=False)
+            policy.load_state_dict(ckpt["policy_state_dict"], strict=False)
+            start_epoch = ckpt.get("epoch", -1) + 1
+            print(f"  Resumed from {resume_path} (epoch {start_epoch})")
+        else:
+            print(f"  WARNING: resume checkpoint not found: {resume_path}")
     optimizer = torch.optim.Adam(policy.flow_head.parameters(), lr=args.lr)
 
     train(
@@ -460,6 +472,7 @@ def main():
         epochs=args.epochs,
         device=args.device,
         output_dir=args.output,
+        start_epoch=start_epoch,
     )
 
     if args.eval:

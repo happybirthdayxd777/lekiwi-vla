@@ -80,6 +80,16 @@ def generate_launch_description() -> LaunchDescription:
         description="Replay frequency in Hz",
     )
 
+    enable_hmac = DeclareLaunchArgument(
+        "enable_hmac", default_value="false",
+        description="Enable HMAC cmd_vel verification (blocks forged/replay attacks)",
+    )
+
+    cmd_vel_secret = DeclareLaunchArgument(
+        "cmd_vel_secret", default_value="",
+        description="HMAC secret key for cmd_vel signing (required if enable_hmac=true)",
+    )
+
     bridge_node = Node(
         package="lekiwi_ros2_bridge",
         executable="bridge_node",
@@ -89,6 +99,8 @@ def generate_launch_description() -> LaunchDescription:
             "mode": LaunchConfiguration("mode"),
             "record": LaunchConfiguration("record"),
             "record_file": LaunchConfiguration("record_file"),
+            "enable_hmac": LaunchConfiguration("enable_hmac"),
+            "cmd_vel_secret": LaunchConfiguration("cmd_vel_secret"),
         }],
         output="screen",
     )
@@ -138,6 +150,8 @@ def generate_launch_description() -> LaunchDescription:
         record_file,
         replay_file,
         replay_hz,
+        enable_hmac,
+        cmd_vel_secret,
         bridge_node,
         vla_node,
         replay_node,

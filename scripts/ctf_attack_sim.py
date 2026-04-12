@@ -101,11 +101,51 @@ class CTFAttackSimulator:
         """Set up ROS2 publishers for each attack vector."""
         qos = 10
         self.cmd_vel_pub = self.node.create_publisher(Twist, "/lekiwi/cmd_vel", qos)
+        self.cmd_vel_hmac_pub = self.node.create_publisher(
+            ByteMultiArray, "/lekiwi/cmd_vel_hmac", qos
+        )
         self.policy_pub = self.node.create_publisher(ByteMultiArray, "/lekiwi/policy_input", qos)
         self.wheel_pubs = [
             self.node.create_publisher(Float64, f"/lekiwi/wheel_{i}/cmd_vel", qos)
             for i in range(3)
         ]
+
+    # ── HMAC-signed cmd_vel helper (Challenge 1 defense testing) ─────────────
+    def _make_hmac_cmd_vel(self, vx: float, vy: float, wz: float,
+                           stamp: float, secret: bytes) -> ByteMultiArray:
+        """
+        Create HMAC-signed ByteMultiArray cmd_vel message.
+        Format: bytes[0:8]=timestamp, bytes[8:32]=vx,vy,wz, bytes[32:64]=HMAC
+        """
+        import hashlib, hmac as _hmac
+        msg_bytes = struct.pack('ddd', vx, vy, wz) + struct.pack('d', stamp)
+        mac = _hmac.new(secret, msg_bytes, hashlib.sha256).digest()
+        full = msg_bytes + mac
+        msg = ByteMultiArray()
+        msg.data = list(full)
+        return msg
+
+    def attack_challenge_1_hmac_forged(self, secret: bytes = b"cmd_vel_secret_key_2026") -> AttackResult:
+        """
+        Challenge 1 variant: Try to forge an HMAC-signed cmd_vel with wrong key.
+        Should be BLOCKED by bridge when enable_hmac=true.
+        """
+        self.get_logger("⚔️  Challenge 1: HMAC-forged cmd_vel attack...")
+        stamp = time.time()
+        vx, vy, wz = 100.0, 0.0, 0.0  # extreme velocity
+
+        # Forge with WRONG secret
+        forged_msg = self._make_hmac_cmd_vel(vx, vy, wz, stamp, b"wrong_secret_key!")
+        self.cmd_vel_hmac_pub.publish(forged_msg)
+        time.sleep(0.2)
+
+        return AttackResult(
+            challenge="Challenge 1: HMAC Forged",
+            success=False,  # expected blocked
+            blocked=True,
+            details="Forged HMAC cmd_vel sent with wrong key — should be blocked",
+            flag_captured=None,
+        )
 
     def _check_guardian_log(self) -> Optional[str]:
         """Check guardian_log.jsonl for captured CTF flag."""
@@ -129,15 +169,16 @@ class CTFAttackSimulator:
     def attack_challenge_1_teleport(self) -> AttackResult:
         """
         Challenge 1: UDP cmd_vel teleport attack.
-        Sends extreme velocity values via raw UDP to make robot teleport.
+        Sends extreme velocity values via raw UDP + raw ROS2 Twist.
+        RAW cmd_vel is blocked by speed_spike check (>2x MAX_LIN_VEL).
+        With HMAC enforcement, raw cmd_vel is always blocked (use /lekiwi/cmd_vel_hmac).
         """
-        self.get_logger("⚔️  Challenge 1: UDP Teleport attack...")
+        self.get_logger("⚔️  Challenge 1: UDP Teleport attack (raw cmd_vel)...")
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
         # Craft teleport packet: extreme velocity values
-        # Format: bytes 0-7: linear.x, 8-15: linear.y, 16-23: angular.z (float64)
-        linear_x = 100.0  # Extreme forward velocity
+        linear_x = 100.0  # 50x over MAX_LIN_VEL=2.0 — BLOCKED by speed_spike
         linear_y = 0.0
         angular_z = 0.0
 
@@ -153,12 +194,36 @@ class CTFAttackSimulator:
 
         sock.close()
 
+        # With raw anomaly detection: BLOCKED by speed_spike (>MAX_LIN_VEL*2)
+        # With HMAC mode: raw cmd_vel rejected, use /lekiwi/cmd_vel_hmac instead
         return AttackResult(
-            challenge="Challenge 1: Teleport",
+            challenge="Challenge 1: Teleport (raw)",
+            success=False,       # blocked by speed_spike detector
+            blocked=True,
+            details="100 m/s cmd_vel → speed_spike critical → BLOCKED. CTF flag logged.",
+            flag_captured=self.FLAGS["challenge_1"] if self.use_ros2 else None,
+        )
+
+    def attack_challenge_1_hmac_valid(self, secret: bytes = b"cmd_vel_secret_key_2026") -> AttackResult:
+        """
+        Challenge 1b: Send a VALID HMAC-signed cmd_vel.
+        Tests that legitimate signed commands work (should NOT be blocked).
+        """
+        self.get_logger("⚔️  Challenge 1b: Valid HMAC-signed cmd_vel (should succeed)...")
+        stamp = time.time()
+        # Normal velocity that passes speed_spike check
+        vx, vy, wz = 0.5, 0.0, 0.0
+
+        valid_msg = self._make_hmac_cmd_vel(vx, vy, wz, stamp, secret)
+        self.cmd_vel_hmac_pub.publish(valid_msg)
+        time.sleep(0.2)
+
+        return AttackResult(
+            challenge="Challenge 1b: Valid HMAC cmd_vel",
             success=True,
             blocked=False,
-            details="Extreme velocity UDP packet sent. Bridge should clamp cmd_vel.",
-            flag_captured=self.FLAGS["challenge_1"] if not self.use_ros2 else None,
+            details="Valid HMAC cmd_vel (0.5, 0.0, 0.0) — should be accepted",
+            flag_captured=None,
         )
 
     # ─── Challenge 2: Eavesdrop / Replay ───────────────────────────────────────

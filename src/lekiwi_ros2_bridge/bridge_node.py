@@ -158,6 +158,17 @@ class LeKiWiBridge(Node):
         self.declare_parameter("mode", "sim")
         self.declare_parameter("record", False)
         self.declare_parameter("record_file", "")
+        self.declare_parameter("enable_hmac", False)
+        self.declare_parameter("cmd_vel_secret", "")
+
+        p_enable_hmac = self.get_parameter("enable_hmac")
+        p_cmd_vel_secret = self.get_parameter("cmd_vel_secret")
+        enable_hmac = bool(p_enable_hmac.value) if p_enable_hmac.value else False
+        cmd_vel_secret = str(p_cmd_vel_secret.value) if p_cmd_vel_secret.value else ""
+        if cmd_vel_secret:
+            cmd_vel_secret_bytes = cmd_vel_secret.encode()
+        else:
+            cmd_vel_secret_bytes = None
         p_sim = self.get_parameter("sim_type")
         p_mode = self.get_parameter("mode")
         p_record = self.get_parameter("record")
@@ -198,8 +209,14 @@ class LeKiWiBridge(Node):
             self.hw = None
 
         # CTF security monitor
-        self.security_monitor = SecurityMonitor()
-        self.get_logger().info("SecurityMonitor active (CTF mode).")
+        self.security_monitor = SecurityMonitor(
+            enable_hmac=enable_hmac,
+            cmd_vel_secret=cmd_vel_secret_bytes,
+        )
+        if enable_hmac:
+            self.get_logger().info("SecurityMonitor active with HMAC cmd_vel verification (Challenge 1 defense).")
+        else:
+            self.get_logger().info("SecurityMonitor active (raw cmd_vel anomaly detection).")
 
         # Active policy guardian — blocks unknown policy fingerprints
         self.policy_guardian = PolicyGuardian()
@@ -253,6 +270,13 @@ class LeKiWiBridge(Node):
         self.policy_sub = self.create_subscription(
             ByteMultiArray, "/lekiwi/policy_input", self._on_policy_input, qos
         )
+
+        # ── HMAC-signed cmd_vel subscriber (Challenge 1 defense) ─────────────
+        # Message format: bytes = struct.pack('d', timestamp) + struct.pack('ddd', vx, vy, wz) + mac_bytes(32)
+        # Total: 8 + 24 + 32 = 64 bytes
+        self.cmd_vel_hmac_sub = self.create_subscription(
+            ByteMultiArray, "/lekiwi/cmd_vel_hmac", self._on_cmd_vel_hmac, qos
+        )
         self._blocked_count = 0
 
         # ── Timer: step MuJoCo & publish at 20 Hz (camera is expensive) ────────
@@ -297,6 +321,73 @@ class LeKiWiBridge(Node):
             "  /lekiwi/camera/image_raw → publish (20 Hz)\n"
             "  /lekiwi/wheel_N/cmd_vel → publish"
         )
+
+    # ── HMAC-signed cmd_vel callback (Challenge 1 defense) ─────────────────────
+
+    def _on_cmd_vel_hmac(self, msg) -> None:
+        """
+        Handle HMAC-authenticated cmd_vel commands.
+        Message: ByteMultiArray with 64 bytes:
+          bytes[0:8]   = struct.pack('d', timestamp)    — float64
+          bytes[8:32]  = struct.pack('ddd', vx,vy,wz)  — 3× float64
+          bytes[32:64] = HMAC-SHA256 signature         — 32 bytes
+
+        Forged commands (wrong HMAC key) are BLOCKED and logged.
+        Replay attacks (same command within window) are BLOCKED.
+        """
+        import struct
+        try:
+            data = bytes(msg.data)
+            if len(data) < 64:
+                self.get_logger().warn(f"HMAC cmd_vel too short: {len(data)} < 64 bytes")
+                return
+            stamp, = struct.unpack('d', data[0:8])
+            vx, vy, wz = struct.unpack('ddd', data[8:32])
+            mac = data[32:64]
+        except Exception as e:
+            self.get_logger().warn(f"HMAC cmd_vel parse error: {e}")
+            return
+
+        verdict = self.security_monitor.check_cmd_vel_hmac(vx, vy, wz, stamp, mac)
+        if verdict.blocked:
+            self._blocked_count += 1
+            self.get_logger().warn(
+                f"Blocked HMAC cmd_vel #{{}} {{}} severity={{}} vx={{:.3f}} vy={{:.3f}} wz={{:.3f}}".format(
+                    self._blocked_count, verdict.event_type, verdict.severity, vx, vy, wz),
+                throttle_duration_sec=2.0)
+            # Publish security alert
+            alert_msg = String()
+            alert_msg.data = json.dumps({
+                "type": verdict.event_type,
+                "severity": verdict.severity,
+                "details": verdict.details,
+                "ctf_flag": verdict.details.get("ctf_flag"),
+            })
+            self.alert_pub.publish(alert_msg)
+            return
+
+        # HMAC verified — reset watchdog and apply command
+        self._last_cmd_vel_time = self.get_clock().now()
+        wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
+        if self._recorder is not None:
+            self._recorder.record_cmd_vel(vx, vy, wz)
+        arm_action = self._last_action[0:6]
+        if self.mode == "real" and self.hw is not None:
+            self.hw.queue_arm_positions(list(arm_action[:self.hw.arm_num_joints]))
+            self.hw.queue_wheel_velocities(list(wheel_speeds))
+            self._last_action = np.concatenate([arm_action, wheel_speeds])
+            for i, speed in enumerate(wheel_speeds):
+                wm = Float64()
+                wm.data = float(speed)
+                self.wheel_pubs[i].publish(wm)
+            return
+        action = np.concatenate([arm_action, wheel_speeds]).astype(np.float64)
+        self.sim.step(action)
+        self._last_action = action
+        for i, speed in enumerate(wheel_speeds):
+            wm = Float64()
+            wm.data = float(speed)
+            self.wheel_pubs[i].publish(wm)
 
     # ── cmd_vel callback ────────────────────────────────────────────────────────
 
