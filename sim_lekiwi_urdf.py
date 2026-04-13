@@ -132,38 +132,54 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
             <geom name="cam_m" type="mesh" mesh="base_cam_mount"
                   rgba="0.5 0.5 0.5 1" pos="0 0 0.08"/>
 
-            <!-- ══ Wheel 0: front-right ─ STL omni wheel mesh ══ -->
+            <!-- ══ Wheel 0: front-right ─ STL omni wheel mesh + contact cylinder ══ -->
             <body name="wheel0" pos="0.0866 0.10 -0.06">
                 <joint name="w1" type="hinge" axis="-0.866 0 0.5" damping="0.5"/>
-                <!-- STL omni wheel mesh: euler rotates mesh to align with joint axis -->
+                <!-- STL omni wheel mesh: visual only (euler removes rotation that would make contact fail) -->
                 <geom name="wheel0_geom" type="mesh" mesh="omni_wheel_mount-v5"
                       mass="0.15"
-                      contype="1" conaffinity="1"
-                      friction="0.9 0.05 0.01"
+                      contype="0" conaffinity="0"
                       rgba="0.15 0.15 0.15 1"
-                      euler="0 1.5708 0"/>
+                      euler="0 0 0"/>
+                <!-- Contact cylinder: plain cylinder (axis=Z), positioned at wheel bottom, touches ground -->
+                <geom name="wheel0_contact" type="cylinder"
+                      size="0.025 0.008"
+                      pos="0 0 -0.025"
+                      mass="0.01"
+                      contype="1" conaffinity="1"
+                      friction="0.9 0.05 0.01"/>
             </body>
 
-            <!-- ══ Wheel 1: back-left ─ STL omni wheel mesh ══ -->
+            <!-- ══ Wheel 1: back-left ─ STL omni wheel mesh + contact cylinder ══ -->
             <body name="wheel1" pos="-0.0866 0.10 -0.06">
                 <joint name="w2" type="hinge" axis="0.866 0 0.5" damping="0.5"/>
                 <geom name="wheel1_geom" type="mesh" mesh="omni_wheel_mount-v5-1"
                       mass="0.15"
-                      contype="1" conaffinity="1"
-                      friction="0.9 0.05 0.01"
+                      contype="0" conaffinity="0"
                       rgba="0.15 0.15 0.15 1"
-                      euler="0 1.5708 0"/>
+                      euler="0 0 0"/>
+                <geom name="wheel1_contact" type="cylinder"
+                      size="0.025 0.008"
+                      pos="0 0 -0.025"
+                      mass="0.01"
+                      contype="1" conaffinity="1"
+                      friction="0.9 0.05 0.01"/>
             </body>
 
-            <!-- ══ Wheel 2: back-right ─ STL omni wheel mesh ══ -->
+            <!-- ══ Wheel 2: back-right ─ STL omni wheel mesh + contact cylinder ══ -->
             <body name="wheel2" pos="-0.0866 -0.10 -0.06">
                 <joint name="w3" type="hinge" axis="0 0 -1" damping="0.5"/>
                 <geom name="wheel2_geom" type="mesh" mesh="omni_wheel_mount-v5-2"
                       mass="0.15"
-                      contype="1" conaffinity="1"
-                      friction="0.9 0.05 0.01"
+                      contype="0" conaffinity="0"
                       rgba="0.15 0.15 0.15 1"
-                      euler="0 1.5708 0"/>
+                      euler="0 0 0"/>
+                <geom name="wheel2_contact" type="cylinder"
+                      size="0.025 0.008"
+                      pos="0 0 -0.025"
+                      mass="0.01"
+                      contype="1" conaffinity="1"
+                      friction="0.9 0.05 0.01"/>
             </body>
 
             <!-- ══ Arm base ══ -->
