@@ -126,12 +126,59 @@ class ReplayNode(Node):
     # ── HDF5 loading ─────────────────────────────────────────────────────────
 
     def _load_trajectory(self):
+        """
+        Load HDF5 trajectory, supporting two formats:
+
+        Format A — TrajectoryLogger (18D):
+            /joint_states  (N, 18)  [arm_pos*6, arm_vel*6, wheel_pos*3, wheel_vel*3]
+            /cmd_vel      (N, 3)
+            /images       (N, H, W, 3)
+
+        Format B — Training data (9D):
+            /states       (N, 9)   [arm_pos*6, wheel_x, wheel_y, wheel_z]
+            /actions      (N, 9)
+            /images       (N, H, W, 3)
+            (no cmd_vel, no joint_states, no velocities)
+
+        For Format B we synthesise velocity by finite-difference and
+        pad wheel positions from the 'states' field.
+        """
         if not os.path.exists(self.replay_file):
             raise FileNotFoundError(f"Trajectory file not found: {self.replay_file}")
 
         self.get_logger().info(f"Loading trajectory: {self.replay_file}")
         with h5py.File(self.replay_file, "r") as f:
-            self._js_data    = f["joint_states"][:]   # (N, 18)
+            has_joint_states = "joint_states" in f
+            has_states       = "states" in f
+
+            if has_joint_states:
+                # Format A — full 18D joint_states from TrajectoryLogger
+                raw_js = f["joint_states"][:]
+                self._has_velocities = True
+                self._js_data = raw_js
+                self.get_logger().info(
+                    f"  Format A (joint_states, 18D): {raw_js.shape}"
+                )
+            elif has_states:
+                # Format B — 9D training data, no velocities
+                raw_states = f["states"][:]   # (N, 9)
+                n = len(raw_states)
+                # Synthesise 18D: [arm_pos(6), arm_vel(6), wheel_pos(3), wheel_vel(3)]
+                # We only have arm_pos + wheel positions; velocities → 0 (filled by caller)
+                arm_pos   = raw_states[:, 0:6]
+                wheel_pos = raw_states[:, 6:9]
+                arm_vel   = np.zeros_like(arm_pos)
+                wheel_vel = np.zeros((n, 3), dtype=np.float64)
+                self._js_data = np.concatenate([arm_pos, arm_vel, wheel_pos, wheel_vel], axis=1)
+                self._has_velocities = False
+                self.get_logger().info(
+                    f"  Format B (states, 9D → 18D padded): {self._js_data.shape}"
+                )
+            else:
+                raise KeyError(
+                    f"Neither 'joint_states' nor 'states' found in {self.replay_file}"
+                )
+
             self._has_cmd_vel = "cmd_vel" in f
             self._cmd_vel_data = f["cmd_vel"][:] if self._has_cmd_vel else None
             self._has_images   = "images" in f
