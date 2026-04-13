@@ -235,6 +235,13 @@ def collect_episode_goal_directed(sim, max_steps=200,
     radius = np.random.uniform(goal_min, goal_max)
     goal_pos = np.array([radius * np.cos(angle), radius * np.sin(angle)])
     
+    # CRITICAL FIX (Phase 15): Must set target BEFORE first render/observation.
+    # Previously set_target was called AFTER first render, causing image[0] to show
+    # the STALE default target (0.5, 0) while state/action matched the real goal.
+    # Now the rendered image always matches the current goal_pos.
+    if hasattr(sim, 'set_target'):
+        sim.set_target(goal_pos)
+    
     imgs, states, actions, rewards = [], [], [], []
     wrist_imgs = [] if record_wrist else None
     goal_positions = []

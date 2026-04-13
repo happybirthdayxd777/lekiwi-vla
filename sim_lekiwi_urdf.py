@@ -332,6 +332,10 @@ class LeKiWiSimURDF:
         self.data.qpos[self._jpos_idx["j2"]] = -0.3
         if target is not None:
             self.set_target(target)
+        else:
+            # CRITICAL FIX: sync xpos to hardcoded default goal immediately
+            # so render() shows the correct target from the first frame
+            self.set_target(self._target[:2])
         return self._obs()
 
     def set_target(self, pos):

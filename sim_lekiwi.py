@@ -326,12 +326,16 @@ class LeKiwiSim:
         self.data  = mujoco.MjData(self.model)
         self._jpos_idx = {n: _jid(self.model, n) for n in ALL_JOINTS}
         self._jvel_idx = {n: _jid(self.model, n) for n in ALL_JOINTS}
+        self._target = np.array([0.5, 0.0, 0.0])  # default goal (x, y, z)
         self.action_dim = 9
         self.reset()
 
     def reset(self):
         mujoco.mj_resetData(self.model, self.data)
         self.data.qpos[self._jpos_idx["j1"]] = 0.3
+        # Sync xpos to _target so render() shows correct goal from frame 0
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "target")
+        self.data.xpos[body_id] = self._target
 
     def set_target(self, pos):
         """Move the target marker to (x, y)."""
