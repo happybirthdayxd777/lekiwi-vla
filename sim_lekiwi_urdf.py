@@ -116,17 +116,33 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
               rgba="0.18 0.18 0.22 1"
               friction="1.0 0.1 0.02"/>
 
-        <!-- ══ Base (6-DOF freejoint) ══
-             Phase 23 FIX: Switched back to freejoint from slide joints.
-             Root cause: slide joints + base plate meshes with contype=1 created
-             massive ground friction drag (friction=0.6 on base plates), preventing
-             any base locomotion. Freejoint base (like LeKiWiSim primitive) allows
-             natural gravity-based wheel contact without base-ground friction.
-             qpos layout: freejoint [quat(4)+pos(3), then w1,w2,w3,j0..j5]
-        -->
+            <!-- ══ Base (6-DOF freejoint) ══
+                 Phase 23 FIX: Switched back to freejoint from slide joints.
+                 Root cause: slide joints + base plate meshes with contype=1 created
+                 massive ground friction drag (friction=0.6 on base plates), preventing
+                 any base locomotion. Freejoint base (like LeKiWiSim primitive) allows
+                 natural gravity-based wheel contact without base-ground friction.
+                 qpos layout: freejoint [quat(4)+pos(3), then w1,w2,w3,j0..j5]
+
+                 Phase 24 ADDITION: Chassis contact box (flat, at ground level).
+                 ROOT CAUSE: LeKiWiSim (primitive) achieves 0.688m/200steps because its
+                 FLAT CHASSIS BOX (type=box, size=[0.12, 0.04, 0.]) sits ON the ground
+                 with contype=1, providing reaction force for efficient wheel locomotion.
+                 Without this, wheel torques push against a free-floating base → poor response.
+                 Fix: Add a flat contact box at world z=0 (base bottom) with minimal friction.
+                 The chassis should barely touch ground (like a sled runner) to provide
+                 reaction force WITHOUT dragging. friction=0.001 prevents base-ground friction.
+            -->
         <body name="base" pos="0 0 0.075">
             <freejoint name="base_free"/>
             <inertial pos="0 0 0.01" mass="2.0" diaginertia="0.01 0.01 0.015"/>
+            <!-- Chassis contact: flat box at ground level, provides reaction force for wheel locomotion -->
+            <geom name="chassis_contact" type="box" size="0.12 0.10 0.002"
+                  pos="0 0 -0.075"
+                  mass="0.001"
+                  contype="1" conaffinity="1"
+                  friction="0.001 0.001 0.001"
+                  rgba="0 0 0.5 0.3"/>
             <!-- Base plate STL layers: visual only, no ground contact -->
             <geom name="base_p1" type="mesh" mesh="base_plate_1"
                   rgba="0 0 0.9 1" contype="0" conaffinity="0"/>
@@ -139,19 +155,33 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
             <geom name="cam_m" type="mesh" mesh="base_cam_mount"
                   rgba="0.5 0.5 0.5 1" pos="0 0 0.08" contype="0" conaffinity="0"/>
 
-            <!-- ══ Wheel 0: front-right ─ STL omni wheel mesh + contact cylinder ══ -->
+            <!-- ══ Wheel 0: front-right ─ STL omni wheel mesh + contact cylinder ══
+                 Phase 24 FIX: Corrected cylinder position AND motor gear.
+                 
+                 ROOT CAUSE OF POOR LOCOMOTION (Phase 23):
+                   1. Cylinder at local z=-0.025 was 3.3cm BELOW ground → no contact
+                   2. Motor gear=1.0 was 10x too small vs working LeKiWiSim (gear=10)
+                 
+                 CORRECT GEOMETRY:
+                   base qpos[2]=0.075 (freejoint base world z)
+                   wheel body local_z=-0.06 → wheel body COM world z = 0.015
+                   cylinder world_z = 0.0 (barely touches ground) → local_z = 0.0 - 0.015 = -0.015
+                   cylinder: radius=0.025, halflength=0.008 (total height=16mm), bottom at world z=-0.008
+                 
+                 Phase 24 ALSO: wheel motor gear 1.0→10.0 (matches LeKiWiSim primitive)
+            -->
             <body name="wheel0" pos="0.0866 0.10 -0.06">
                 <joint name="w1" type="hinge" axis="-0.866 0 0.5" damping="0.5"/>
-                <!-- STL omni wheel mesh: visual only (euler removes rotation that would make contact fail) -->
+                <!-- STL omni wheel mesh: visual only -->
                 <geom name="wheel0_geom" type="mesh" mesh="omni_wheel_mount-v5"
                       mass="0.15"
                       contype="0" conaffinity="0"
                       rgba="0.15 0.15 0.15 1"
                       euler="0 0 0"/>
-                <!-- Contact cylinder: plain cylinder (axis=Z), positioned at wheel bottom, touches ground -->
+                <!-- Contact cylinder: radius=0.025, height=16mm, bottom barely at ground (world z≈0) -->
                 <geom name="wheel0_contact" type="cylinder"
                       size="0.025 0.008"
-                      pos="0 0 -0.025"
+                      pos="0 0 -0.015"
                       mass="0.01"
                       contype="1" conaffinity="1"
                       friction="0.6 0.05 0.01"/>
@@ -167,7 +197,7 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       euler="0 0 0"/>
                 <geom name="wheel1_contact" type="cylinder"
                       size="0.025 0.008"
-                      pos="0 0 -0.025"
+                      pos="0 0 -0.015"
                       mass="0.01"
                       contype="1" conaffinity="1"
                       friction="0.6 0.05 0.01"/>
@@ -183,7 +213,7 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       euler="0 0 0"/>
                 <geom name="wheel2_contact" type="cylinder"
                       size="0.025 0.008"
-                      pos="0 0 -0.025"
+                      pos="0 0 -0.015"
                       mass="0.01"
                       contype="1" conaffinity="1"
                       friction="0.6 0.05 0.01"/>
@@ -300,10 +330,14 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
         <motor joint="j3" gear="5"/>
         <motor joint="j4" gear="5"/>
         <motor joint="j5" gear="3"/>
-        <!-- Omni wheel motors: torque applied to wheel hinge → contact → base motion -->
-        <motor name="wheel0_motor" joint="w1" gear="1.0"/>
-        <motor name="wheel1_motor" joint="w2" gear="1.0"/>
-        <motor name="wheel2_motor" joint="w3" gear="1.0"/>
+        <!-- Omni wheel motors: Phase 24 FIX gear 1.0→10.0
+             LeKiWiSim (primitive) uses gear=10 for wheel motors and achieves 0.688m/200steps.
+             With gear=1.0, motor torque is 10x too small to overcome rolling resistance.
+             gear=10 matches the proven working primitive sim.
+        -->
+        <motor name="wheel0_motor" joint="w1" gear="10.0"/>
+        <motor name="wheel1_motor" joint="w2" gear="10.0"/>
+        <motor name="wheel2_motor" joint="w3" gear="10.0"/>
     </actuator>
 </mujoco>
 """
