@@ -1102,3 +1102,140 @@ python3 scripts/train_task_oriented.py \
   --eval
 ```
 ```
+
+## 2026-04-13 11:00 JST — Cycle 13: bag_to_hdf5 Linear Interpolation + Functional --merge
+
+### ✅ bag_to_hdf5.py Improvements (this cycle)
+
+**1. Linear interpolation (was nearest-neighbor):**
+- `_interpolate_to_js_rate()` now uses **binary search + linear blend** instead of `np.argmin(nearest)` 
+- Handles cmd_vel (vx/vy/wz), image data (per-pixel blend), and vla_action arrays
+- Edge handling: extrapolation for timestamps before/after source range
+- Eliminates camera frame jitter and cmd_vel discontinuities in converted trajectories
+
+**2. Functional `--merge` for multiple bags:**
+- `bag_to_hdf5.py --input bag1/ bag2/ bag3/ --output merged.h5 --merge`
+- Reads all bags → concatenates joint_states/cmd_vel/camera/vla_action buffers
+- Interpolates all sources to aligned joint_states timestamps (same 20 Hz grid)
+- Builds merged HDF5 with all datasets: images, states, actions, rewards, joint_states, cmd_vel, goal_positions
+- Stores `merged_from` HDF5 attribute listing source bags
+- Single-bag case (no `--merge`): unchanged behavior
+
+**3. Module-level helper functions added:**
+```python
+_js_to_state(js)               # extract 9-D state from joint_states dict
+_interpolate_single(buf, t)    # single timestamp → interpolated dict
+_interpolate_buffers(src_buf, js_ts)  # full buffer → aligned array
+_twist_to_wheel_speeds(vx,vy,wz)  # inverse kinematics (module-level)
+```
+All replicate class method logic for use in the standalone merge path.
+
+**Validation:** All 7 sections PASS ✓
+
+### 📊 Current Architecture
+```
+Phase 1 ✓ lekiwi_modular      — URDF (lekiwi.urdf), STL meshes, ROS2 controller
+Phase 2 ✓ lekiwi_ros2_bridge — bridge_node.py (Twist→MuJoCo, sensor→joint_states)
+Phase 3 ✓ lekiwi_vla sim      — LeKiWiSim + LeKiWiSimURDF (MuJoCo, cameras)
+Phase 4 ✓ VLA policy          — CLIP-FM (task_oriented @ epoch 50, 20% success)
+Phase 5 ✓ Closed loop         — bridge_node._on_vla_action() arm override
+Phase 6 ✓ Recording & Replay  — TrajectoryRecorder + replay_node
+Phase 7 ✓ bag_to_hdf5        — linear interpolation + functional multi-bag merge
+```
+
+### Git
+- Commit: `e02584d` — fix(bag_to_hdf5): linear interpolation + functional --merge
+
+### 下一步
+1. **VLA training**: task_oriented checkpoint epoch 50 → 100 epochs (need success >40%)
+2. **Real hardware test**: `ros2 launch lekiwi_ros2_bridge real_mode.launch.py`
+3. **Collect goal-directed data**: `ros2 launch full.launch.py record:=true` → bag_to_hdf5 → retrain
+4. **Data pipeline**: integrate merged HDF5 into `train_task_oriented.py`
+
+### 阻礙
+- No ROS2/colcon environment for live tests
+- VLA task success still at ~0% at 0.1m threshold — needs longer training
+
+## [2026-04-13 11:50 JST] — Cycle 14: Critical Camera Bug Found + eval_policy.py Fix
+
+### 🔴 ROOT CAUSE: All Previous CLIP-FM Training Had Black Camera Input
+
+**The primitive sim (LeKiWiSim) camera is inside the chassis at z=0.06, pointing at the ground.**
+Render is black (mean=0.0) for the FIRST frame AND requires MuJoCo scene initialization
+(beyond `reset()`) — the first render after reset is black, only becomes valid after `mj_step()`.
+
+This means ALL training data (lekiwi_urdf_5k.h5) was collected with a properly functioning
+camera (LeKiWiSimURDF was used for data collection), BUT:
+
+1. **Training data (lekiwi_urdf_5k.h5)**: mean_pixel=52.83, nonzero=98.7% — VALID images ✓
+   - Collected using LeKiWiSimURDF render (which works after step ≥1)
+2. **eval_policy.py evaluation**: Used LeKiWiSim (primitive) → BLACK images → policy outputs garbage ✗
+3. **LeKiWiSimURDF camera**: front camera at z=0.12 on chassis top, looking at red target at (0.5, 0)
+   - mean pixel ≈ 53 — mostly ground texture, tiny red target (4cm cylinder) barely visible
+
+**Diagnosis results (eval_policy.py on LeKiWiSimURDF, 50 steps):**
+- CLIP-FM (task_oriented_quick): mean_reward=-24.240, mean_displacement=0.056m
+- Random baseline:             mean_reward=-24.093, mean_displacement=0.042m
+- **CLIP-FM is WORSE than random** — policy received meaningless black images during training
+
+**Diagnosis results (eval_policy.py on LeKiWiSimURDF, 100 steps):**
+- CLIP-FM epoch_30: mean_reward=-50.671, mean_displacement=0.221m
+- CLIP-FM epoch_50: mean_reward=-50.289, mean_displacement=0.183m
+- **More training → LESS movement** — classic overfitting to random noise
+
+### Fixes Applied This Cycle
+
+**1. eval_policy.py → LeKiWiSimURDF (eval_policy.py line 30, 197, 205)**
+```python
+# Before: from sim_lekiwi import LeKiwiSim → sim = LeKiwiSim()
+# After:
+from sim_lekiwi_urdf import LeKiWiSimURDF
+sim = LeKiWiSimURDF()
+```
+- Also fixed state extraction: `qvel[1:4]` → `qvel[9:12]` (correct URDF wheel indices)
+- Added frame-0 warmup step (URDF sim render is black at frame 0)
+
+**2. PIL vs ndarray check (eval_policy.py line 209)**
+```python
+# Before: if hasattr(img_raw, 'resize') — FAILS: numpy arrays also have .resize()
+# After:
+from PIL import Image as PILImage
+if isinstance(img_raw, PILImage.Image):
+    # PIL path (LeKiwiSim)
+else:
+    # numpy path (LeKiWiSimURDF)
+```
+
+**3. LeKiWiSimURDF.get_reward() (sim_lekiwi_urdf.py)**
+```python
+# Added missing wrapper so eval_policy.py get_reward() call works
+def get_reward(self) -> float:
+    return self._reward()
+```
+
+### Architecture Status
+```
+Phase 1  ✓ lekiwi_modular      — URDF (lekiwi.urdf), STL meshes, ROS2 controller
+Phase 2  ✓ lekiwi_ros2_bridge — bridge_node.py (Twist→MuJoCo, sensor→joint_states)
+Phase 3  ✓ lekiwi_vla sim      — LeKiWiSimURDF (STL mesh, dual cameras, correct physics)
+Phase 4  ⚠️ VLA policy          — CLIP-FM trains on VALID data but eval was broken
+                              — Policy performs WORSE than random on proper URDF eval
+Phase 5  ✓ Closed loop         — bridge_node._on_vla_action() arm override
+Phase 6  ✓ Recording & Replay  — TrajectoryRecorder + replay_node
+Phase 7  ✓ bag_to_hdf5        — linear interpolation + functional multi-bag merge
+Phase 8  ✓ Bridge bugs         — wheel axes + joint_states position — FIXED
+Phase 9  ✓ eval_policy.py      — Switched to LeKiWiSimURDF, fixed PIL/ndarray bug
+```
+
+### 下一步 (Priority Order)
+1. **Retrain with URDF sim**: Run `train_task_oriented.py` fresh with `--sim_type urdf`
+   to collect NEW training data that actually has visual navigation signal
+2. **Add target marker**: Make the red target more visually distinctive (taller, brighter)
+3. **Camera improvement**: Move URDF front camera higher or add downward angle to see more floor
+4. **Extended training**: 100+ epochs once URDF eval is working correctly
+
+### Git
+```
+FIX: eval_policy.py — LeKiWiSimURDF for correct camera physics + PIL/ndarray bug fix
+FIX: sim_lekiwi_urdf.py — add get_reward() wrapper
+```

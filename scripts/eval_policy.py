@@ -27,7 +27,7 @@ import torch.nn as nn
 import numpy as np
 from pathlib import Path
 
-from sim_lekiwi import LeKiwiSim
+from sim_lekiwi_urdf import LeKiWiSimURDF
 
 
 # ─── SimpleCNN Vision Encoder (from train_flow_matching_real.py) ──────────────
@@ -194,26 +194,53 @@ def make_policy(arch, checkpoint, device):
 
 def evaluate(policy, device, episodes=10, max_steps=200, verbose=True):
     """Run episodes and collect metrics."""
-    from sim_lekiwi import LeKiwiSim
-    sim = LeKiwiSim()
+    from sim_lekiwi_urdf import LeKiWiSimURDF
+    sim = LeKiWiSimURDF()
     all_rewards = []
     all_distances = []
 
     for ep in range(episodes):
         sim.reset()
+        # Warmup step: URDF sim render is black at frame-0; one step seeds the renderer
+        sim.step(np.zeros(9, dtype=np.float32))
         total_reward = 0.0
         start_pos = sim.data.qpos[:2].copy()
 
         for step in range(max_steps):
-            img_pil = sim.render()
-            img_np  = np.array(img_pil.resize((224, 224)), dtype=np.float32) / 255.0
+            img_raw = sim.render()
+            # Handle both PIL Image (primitive sim) and np.ndarray (URDF sim)
+            # NOTE: numpy arrays also have .resize() method with DIFFERENT signature,
+            # so isinstance check is required, not hasattr
+            from PIL import Image as PILImage
+            if isinstance(img_raw, PILImage.Image):
+                # PIL Image path (LeKiwiSim)
+                img_pil = img_raw.resize((224, 224))
+                img_np  = np.array(img_pil, dtype=np.float32) / 255.0
+            else:
+                # numpy array path (LeKiWiSimURDF)
+                img_np  = np.array(img_raw, dtype=np.float32)
+                if img_np.ndim == 2:
+                    img_np = np.stack([img_np]*3, axis=-1)
+                elif img_np.ndim == 0:
+                    # Empty/corrupt frame — use black placeholder
+                    img_np = np.zeros((224, 224, 3), dtype=np.float32)
+                else:
+                    # URDF sim can return all-black frames at step 0; use cv2 or scipy
+                    # for fast reliable resize, avoiding PIL Image conversion quirks
+                    try:
+                        import cv2
+                        img_np = cv2.resize(img_np, (224, 224), interpolation=cv2.INTER_LINEAR)
+                    except ImportError:
+                        import scipy.ndimage as ndimage
+                        img_np = ndimage.zoom(img_np, (224/img_np.shape[0], 224/img_np.shape[1], 1), order=1)
+                img_np = img_np.astype(np.float32) / 255.0
             img_t   = torch.from_numpy(img_np.transpose(2, 0, 1)).unsqueeze(0).to(device)
 
             # Use correct joint indices via _jpos_idx / _jvel_idx lookup
             # qpos layout: [freejoint_base(6), arm_joints(6), wheel_joints(3)]
-            # arm j0..j5 → qpos[4:10], wheel w1..w3 → qvel[1:4]
+            # arm j0..j5 → qpos[7:13], wheel w1..w3 → qvel[9:12]
             arm_pos = sim.data.qpos[7:13]
-            wheel_v = sim.data.qvel[1:4]
+            wheel_v = sim.data.qvel[9:12]
             state_t = torch.from_numpy(np.concatenate([arm_pos, wheel_v])).float().unsqueeze(0).to(device)
 
             action = policy.infer(img_t, state_t, num_steps=4)

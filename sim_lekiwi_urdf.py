@@ -344,6 +344,9 @@ class LeKiWiSimURDF:
         mujoco.mj_step(self.model, self.data)
         return self._obs(), float(self._reward()), bool(self.data.time > 60), {}
 
+    def get_reward(self) -> float:
+        return self._reward()
+
     def _reward(self) -> float:
         return -float(np.linalg.norm(self._target[:2] - self.data.qpos[:2]))
 
