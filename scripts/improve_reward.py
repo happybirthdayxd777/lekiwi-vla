@@ -11,6 +11,10 @@ Tasks:
   3. Grasp object: arm tip within 0.05m of object position
 
 Success = task completed. Not just "less negative reward".
+
+CRITICAL FIX (2026-04-13): reach_target was resetting robot AT the goal
+and testing if it STAYS there. This tests station-keeping, not goal-seeking.
+Fixed: reset at start position, measure if robot REACHES the target.
 """
 
 import os, sys
@@ -74,17 +78,45 @@ class TaskEvaluator:
         action = self.policy.infer(img_t, state_t, num_steps=4)
         return np.clip(action.cpu().numpy()[0], -1, 1).astype(np.float32)
 
-    def reach_target(self, target=(0.5, 0.0), threshold=0.3, max_steps=300):
+    def reach_target(self, target=(0.5, 0.0), start=(0.0, 0.0), threshold=0.1, max_steps=300):
         """
-        Task: Move the robot base to within `threshold` meters of target.
+        Task: Move the robot base FROM start position TO within `threshold` meters of target.
+        
+        CRITICAL FIX: Robot now resets at START position (not the goal), then we test
+        if it successfully navigates TO the target.
+        
+        Args:
+            target: Goal position (x, y) to reach
+            start: Starting position (x, y) for the robot (default: origin)
+            threshold: Success radius in meters
+            max_steps: Maximum steps before giving up
+            
         Returns: (success: bool, steps_taken: int, final_dist: float)
         """
-        target = np.array(target)
-        self.sim.reset(target=target)
+        target_arr = np.array(target)
+        start_arr  = np.array(start)
+        
+        # Reset sim first, then set target marker at goal
+        self.sim.reset()  # Reset at default (origin) first
+        if hasattr(self.sim, 'set_target'):
+            self.sim.set_target(target_arr)  # Show marker at goal position
+        
+        # Move robot to START position (if sim supports it)
+        # LeKiWiSimURDF uses qpos[:2] = base x, y
+        if hasattr(self.sim, '_jpos_idx'):
+            # URDF sim: set base x, y
+            base_joint_id = self.sim._jpos_idx.get('j0', 0)
+            # For URDF, qpos[0:2] are x, y of base (via freejoint)
+            self.sim.data.qpos[0] = start_arr[0]
+            self.sim.data.qpos[1] = start_arr[1]
+        else:
+            # Primitive sim: qpos[0:2] are x, y
+            self.sim.data.qpos[0] = start_arr[0]
+            self.sim.data.qpos[1] = start_arr[1]
 
         for step in range(max_steps):
             pos = self.sim.data.qpos[:2]  # x, y of base
-            dist = np.linalg.norm(pos - target)
+            dist = np.linalg.norm(pos - target_arr)
 
             if dist < threshold:
                 return True, step, dist
@@ -94,7 +126,7 @@ class TaskEvaluator:
             action = self._get_action(img_pil)
             self.sim.step(action)
 
-        final_dist = np.linalg.norm(self.sim.data.qpos[:2] - target)
+        final_dist = np.linalg.norm(self.sim.data.qpos[:2] - target_arr)
         return False, max_steps, final_dist
 
     def follow_waypoints(self, waypoints=[(0.3, 0.2), (-0.2, 0.3), (0.0, -0.3)],
@@ -141,7 +173,7 @@ class TaskEvaluator:
             if dist < threshold:
                 return True, step, dist
 
-            # Arm-only action (wheels = 0)
+            # Arm only action (wheels = 0)
             action = np.zeros(9, dtype=np.float32)
             action[:6] = self._get_action(self.sim.render())[:6]
             self.sim.step(action)
@@ -152,18 +184,21 @@ class TaskEvaluator:
 
 
 def evaluate_policy(policy=None, device="cpu", episodes=20, task="reach", sim=None,
-                   threshold=0.3, max_steps=300):
+                   threshold=0.1, max_steps=300, start_pos=(0.0, 0.0), goal_pos=(0.5, 0.0)):
     """Evaluate a policy on task-oriented metrics."""
     if sim is None:
-        sim = LeKiwiSim()
+        sim = LeKiWiSim()
     evaluator = TaskEvaluator(sim, policy=policy, device=device)
 
     if task == "reach":
-        results = [evaluator.reach_target(threshold=threshold, max_steps=max_steps) for _ in range(episodes)]
+        results = [evaluator.reach_target(
+            target=goal_pos, start=start_pos, threshold=threshold, max_steps=max_steps
+        ) for _ in range(episodes)]
         successes = sum(1 for r in results if r[0])
         avg_steps = np.mean([r[1] for r in results])
         avg_dist = np.mean([r[2] for r in results])
         print(f"\n=== Reach Target Task ({episodes} episodes) ===")
+        print(f"  Start: {start_pos} → Goal: {goal_pos} (threshold={threshold}m)")
         print(f"  Success rate: {successes}/{episodes} ({100*successes/episodes:.0f}%)")
         print(f"  Avg steps:     {avg_steps:.1f}")
         print(f"  Avg final dist: {avg_dist:.3f}m")
@@ -198,17 +233,29 @@ def main():
                         help="Success threshold in meters (default: 0.1 for primitive, 0.3 for urdf)")
     parser.add_argument("--max_steps", type=int, default=None,
                         help="Max steps per episode (default: 200 for primitive, 300 for urdf)")
+    parser.add_argument("--start_x",  type=float, default=0.0,
+                        help="Start X position (default: 0.0)")
+    parser.add_argument("--start_y",  type=float, default=0.0,
+                        help="Start Y position (default: 0.0)")
+    parser.add_argument("--goal_x",   type=float, default=0.5,
+                        help="Goal X position (default: 0.5)")
+    parser.add_argument("--goal_y",   type=float, default=0.0,
+                        help="Goal Y position (default: 0.0)")
     args = parser.parse_args()
+
+    start_pos = (args.start_x, args.start_y)
+    goal_pos  = (args.goal_x, args.goal_y)
 
     print(f"\n{'='*60}")
     print(f"  Task-Oriented Evaluation | {args.task}")
     print(f"  Sim: {args.sim_type} | Policy: {args.policy or 'random'}")
+    print(f"  Start: {start_pos} → Goal: {goal_pos}")
     print(f"{'='*60}")
 
     # Create simulation (MUST match what was used during training)
     if args.sim_type == "urdf":
         sim = LeKiWiSimURDF()
-        default_threshold = 0.3
+        default_threshold = 0.1  # 10cm precision navigation
         default_max_steps = 300
     else:
         sim = LeKiwiSim()
@@ -231,7 +278,8 @@ def main():
 
     evaluate_policy(policy=policy, device=args.device, episodes=args.episodes,
                     task=args.task, sim=sim,
-                    threshold=threshold, max_steps=max_steps)
+                    threshold=threshold, max_steps=max_steps,
+                    start_pos=start_pos, goal_pos=goal_pos)
 
 if __name__ == "__main__":
     main()

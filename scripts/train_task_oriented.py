@@ -451,8 +451,13 @@ def train(policy, optimizer, replay, epochs=50, device="cpu", output_dir="result
 
 # ─── Task Evaluation ──────────────────────────────────────────────────────────
 
-def evaluate_task_success(policy, device="cpu", num_episodes=5, goal_pos=(0.5, 0.0)):
-    """Evaluate how often policy reaches goal."""
+def evaluate_task_success(policy, device="cpu", num_episodes=5,
+                          start_pos=(0.0, 0.0), goal_pos=(0.5, 0.0), threshold=0.1):
+    """Evaluate how often policy REACHES goal from start position.
+
+    CRITICAL FIX (2026-04-13): Robot now resets at ORIGIN (start_pos),
+    not at the goal. Tests if policy navigates TOWARD target, not STATION-KEEPING.
+    """
     from scripts.improve_reward import TaskEvaluator
 
     policy.eval()
@@ -462,7 +467,7 @@ def evaluate_task_success(policy, device="cpu", num_episodes=5, goal_pos=(0.5, 0
     results = []
     for ep in range(num_episodes):
         success, steps, dist = evaluator.reach_target(
-            target=goal_pos, threshold=0.1, max_steps=200
+            target=goal_pos, start=start_pos, threshold=threshold, max_steps=300
         )
         results.append({"success": success, "steps": steps, "dist": dist})
         print(f"  Episode {ep+1}: success={success}, dist={dist:.3f}m")
@@ -561,7 +566,9 @@ def main():
         success_rate, mean_dist = evaluate_task_success(
             policy, device=args.device,
             num_episodes=5,
-            goal_pos=(args.goal_x, args.goal_y),
+            start_pos=(0.0, 0.0),  # Robot starts at origin
+            goal_pos=(args.goal_x, args.goal_y),  # Goal from CLI args (default 0.5, 0.0)
+            threshold=args.goal_threshold,
         )
         # Save eval results
         import json
