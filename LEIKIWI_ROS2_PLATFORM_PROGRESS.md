@@ -1,7 +1,63 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
-**Last Updated:** 2026-04-13 10:30 JST
-**Status:** 🚀 Phase 9 — `policy:=clip_fm` Bug Fixed + Architecture Audit
+**Last Updated:** 2026-04-13 12:30 JST
+**Status:** 🚀 Phase 9 — Package Structure Sync + Outer/Nested 一致性修復
+
+---
+
+## 2026-04-13 12:30 JST — Cycle 13: Package Sync Fix + Outer/Nested一致性修復
+
+### 🔧 Critical Package Structure Bug Fixed: Outer src/ 落後於 Nested
+
+**問題：** `setup.py` 的 entry_points 指向 `lekiwi_ros2_bridge.lekiwi_ros2_bridge.<module>:<func>`
+（nested 版本），但 nested `bridge_node.py` 比外層 `src/bridge_node.py` **落後一個版本**：
+- 缺少 `record_images` parameter 宣告（導致 `full.launch.py record_images:=true` 無效）
+- Arm joint doc 錯誤（`ST3215_Servo_Motor` → 應為 `STS3215_03a`）
+- `render(640, 480)` call signature 與 `LeKiWiSimURDF.render()` 不匹配（不接受參數）
+
+**修復：**
+```bash
+# 1. 同步 nested bridge_node.py（外層 → nested）
+cp src/lekiwi_ros2_bridge/bridge_node.py \
+   src/lekiwi_ros2_bridge/lekiwi_ros2_bridge/bridge_node.py
+
+# 2. 外層補回 replay_node.py（完全缺失，導致 replay_node entry point 404）
+cp src/lekiwi_ros2_bridge/lekiwi_ros2_bridge/replay_node.py \
+   src/lekiwi_ros2_bridge/replay_node.py
+
+# 3. 外層補回 lekiwi_sim_loader.py（工廠模組，bridge_node main() 需要）
+cp src/lekiwi_ros2_bridge/lekiwi_ros2_bridge/lekiwi_sim_loader.py \
+   src/lekiwi_ros2_bridge/lekiwi_sim_loader.py
+```
+
+**Commit:** `e8e085d` — "sync(bridge): nested bridge_node.py updated from outer + add replay_node.py + lekiwi_sim_loader.py"
+
+### ✅ 架構現狀確認
+
+| 元件 | 狀態 | 備註 |
+|------|------|------|
+| `bridge_node.py` | ✅ 最新（outer+nested 同步）| 9D action, HMAC, CTF |
+| `vla_policy_node.py` | ✅ 同步 | CLIP-FM/Task-Oriented |
+| `replay_node.py` | ✅ 從 nested 補回 | HDF5 replay |
+| `lekiwi_sim_loader.py` | ✅ 工廠函數 | 3 backends |
+| `security_monitor.py` | ✅ | CTF Ch1-Ch6 |
+| `policy_guardian.py` | ✅ | CTF Ch7 主動防御 |
+| `trajectory_logger.py` | ✅ | HDF5 記錄 |
+| Launch files (4) | ✅ | bridge/full/vla/real_mode |
+| `package.xml` | ✅ | |
+| `setup.py` | ✅ | entry_points 指向 nested |
+
+### 下一步
+1. **端到端燒試**（需要 ROS2 環境）：`ros2 launch lekiwi_ros2_bridge full.launch.py`
+2. **replay_node HDF5 測試**：確認 `/lekiwi/replay_control` 正確播放
+3. **真實硬體整合**：`mode:=real` + ST3215 串口
+
+---
+
+# LeKiWi ROS2-MuJoCo Platform Progress
+
+**Last Updated:** 2026-04-13 12:30 JST
+**Status:** 🚀 Phase 9 — Package Structure Sync + Outer/Nested 一致性修復
 
 ---
 
