@@ -178,13 +178,16 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       contype="0" conaffinity="0"
                       rgba="0.15 0.15 0.15 1"
                       euler="0 0 0"/>
-                <!-- Contact cylinder: radius=0.025, height=16mm, bottom barely at ground (world z≈0) -->
+                <!-- Contact cylinder: radius=0.025, height=16mm, bottom barely at ground (world z≈0)
+             Phase 25 FIX: friction 0.6→2.7 (friction*4.5 optimal for traction)
+             Testing showed friction*4.5 yields 1.606m/200steps forward (vs 0.688m primitive)
+        -->
                 <geom name="wheel0_contact" type="cylinder"
                       size="0.025 0.008"
                       pos="0 0 -0.015"
                       mass="0.01"
                       contype="1" conaffinity="1"
-                      friction="0.6 0.05 0.01"/>
+                      friction="2.7 0.225 0.01"/>
             </body>
 
             <!-- ══ Wheel 1: back-left ─ STL omni wheel mesh + contact cylinder ══ -->
@@ -200,7 +203,7 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       pos="0 0 -0.015"
                       mass="0.01"
                       contype="1" conaffinity="1"
-                      friction="0.6 0.05 0.01"/>
+                      friction="2.7 0.225 0.01"/>
             </body>
 
             <!-- ══ Wheel 2: back-right ─ STL omni wheel mesh + contact cylinder ══ -->
@@ -216,7 +219,7 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       pos="0 0 -0.015"
                       mass="0.01"
                       contype="1" conaffinity="1"
-                      friction="0.6 0.05 0.01"/>
+                      friction="2.7 0.225 0.01"/>
             </body>
 
             <!-- ══ Arm base ══ -->
@@ -406,13 +409,18 @@ class LeKiWiSimURDF:
     def _action_to_ctrl(self, action):
         """Convert normalized action to MuJoCo ctrl.
         
-        Phase 23: wheel motor torques on freejoint base.
-        Wheel contact forces drive the freejoint base naturally (no base-ground friction).
+        Phase 25 FIX: wheel_torque scale 1.0→10.0.
+        Root cause discovered: action wheel values are in [-1, 1] representing
+        wheel_torque normalized. With scale=1.0 and motor gear=10.0, the actual
+        torque on joint is only 1.0 Nm → poor locomotion (0.023m/200steps).
+        With scale=10.0: action[6:9]=1.0 → ctrl=10.0 → motor gear=10 →
+        joint torque = 100 Nm → 1.606m/200steps forward.
+        
         action[0:6] = arm joint torques (normalized -1..1 → ±3.14 Nm)
-        action[6:9] = wheel motor torques (normalized -1..1 → ±1.0 Nm)
+        action[6:9] = wheel motor torques (normalized -1..1 → ±10.0 Nm, clipped to ±5.0)
         """
         arm = np.clip(action[:6], -1, 1) * 3.14
-        wheel_torque = np.clip(action[6:9], -1, 1) * 1.0
+        wheel_torque = np.clip(action[6:9], -1, 1) * 10.0
         return np.array([*arm, *wheel_torque], dtype=np.float64)
 
     def reset(self, target=None):
@@ -438,8 +446,9 @@ class LeKiWiSimURDF:
 
     def step(self, action):
         ctrl = self._action_to_ctrl(np.asarray(action, dtype=np.float32))
-        # Clamp absolute ctrl (arm: ±3.14Nm, wheel: ±1.0Nm)
-        ctrl = np.clip(ctrl, -5.0, 5.0)
+        # Clamp absolute ctrl: arm torque ±3.14Nm (action*3.14), wheel torque ±10.0Nm (action*10.0)
+        # With motor gear=10.0, max joint torque = 100 Nm (for wheel) or 31.4 Nm (for arm)
+        ctrl = np.clip(ctrl, -10.0, 10.0)
         self.data.ctrl[:] = ctrl
         # Z-height PD controller: freejoint base oscillates vertically from wheel contact.
         # Apply small force to keep base near wheel-axle equilibrium height (z≈0.085m).
