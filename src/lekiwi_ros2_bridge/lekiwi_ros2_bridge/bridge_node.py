@@ -59,13 +59,13 @@ from trajectory_logger import TrajectoryRecorder
 #   wheel_0 → ST3215_Servo_Motor-v1_Revolute-64
 #   wheel_1 → ST3215_Servo_Motor-v1-1_Revolute-62
 #   wheel_2 → ST3215_Servo_Motor-v1-2_Revolute-60
-# Arm joints (from URDF Revolute joints):
-#   arm_j0 → ST3215_Servo_Motor-v1-1_Revolute-49  (first arm joint)
-#   arm_j1 → ST3215_Servo_Motor-v1-2_Revolute-51
-#   arm_j2 → ST3215_Servo_Motor-v1-3_Revolute-53
-#   arm_j3 → STS3215_03a_Wrist_Roll-v1_Revolute-55
-#   arm_j4 → STS3215_03a-v1-4_Revolute-57
-#   arm_j5 → (gripper slide — not in URDF Gazebo plugin)
+# Arm joints (from lekiwi.urdf Revolute joints):
+#   arm_j0 → STS3215_03a-v1_Revolute-45    (shoulder pan, axis≈Z, range ±1.57)
+#   arm_j1 → STS3215_03a-v1-1_Revolute-49  (shoulder lift, axis=[1,0,0], range -3.14..0)
+#   arm_j2 → STS3215_03a-v1-2_Revolute-51   (elbow, axis=[1,0,0], range 0..3.14)
+#   arm_j3 → STS3215_03a-v1-3_Revolute-53   (wrist pitch, axis=[1,0,0], range 0..3.14)
+#   arm_j4 → STS3215_03a_Wrist_Roll-v1_Revolute-55  (wrist roll, axis=[0,0.423,-0.906])
+#   arm_j5 → STS3215_03a-v1-4_Revolute-57  (gripper slide, axis=[0,-0.906,-0.423], range ±1.57)
 URDF_WHEEL_JOINT_NAMES = [
     "ST3215_Servo_Motor-v1_Revolute-64",       # wheel_0 → w1 in bridge
     "ST3215_Servo_Motor-v1-1_Revolute-62",     # wheel_1 → w2 in bridge
@@ -158,6 +158,7 @@ class LeKiWiBridge(Node):
         self.declare_parameter("mode", "sim")
         self.declare_parameter("record", False)
         self.declare_parameter("record_file", "")
+        self.declare_parameter("record_images", True)
         self.declare_parameter("enable_hmac", False)
         self.declare_parameter("cmd_vel_secret", "")
 
@@ -300,11 +301,14 @@ class LeKiWiBridge(Node):
         # ── Trajectory recording ──────────────────────────────────────────────
         self._recorder = None
         self._record_control_sub = None
+        p_record_images = self.get_parameter("record_images")
+        record_images = bool(p_record_images.value) if p_record_images.value else True
+
         if self._record:
             if not self._record_file:
                 self._record_file = os.path.expanduser(
                     f"~/hermes_research/lekiwi_vla/trajectories/run_{int(time.time())}.h5")
-            self._recorder = TrajectoryRecorder(self._record_file)
+            self._recorder = TrajectoryRecorder(self._record_file, record_images=record_images)
             self._recorder.start()
             self.get_logger().info(f"Recording trajectory → {self._record_file}")
             # Record control subscriber
@@ -683,13 +687,19 @@ class LeKiWiBridge(Node):
         self._frame_count += 1
         if self._frame_count % 5 == 0:   # publish every 5th frame (4 Hz @ 20 Hz timer)
             try:
-                # Front camera
-                img_pil = self.sim.render(640, 480)
+                # Front camera (render() takes no args — resolution hardcoded in sim)
+                img_pil = self.sim.render()
                 img_np  = np.asarray(img_pil)
                 ros_img = self.bridge.cv2_to_imgmsg(img_np, encoding="rgb8")
                 ros_img.header.stamp = msg.header.stamp
                 ros_img.header.frame_id = "lekiwi_camera"
                 self.camera_pub.publish(ros_img)
+
+                # ── Trajectory recording: capture image for HDF5 ───────────────
+                if self._recorder is not None and self._recorder.is_recording:
+                    ts = now.seconds_nanoseconds()
+                    img_ts = ts[0] + ts[1] * 1e-9
+                    self._recorder.record_image(img_np, timestamp=img_ts)
 
                 # Wrist camera (URDF model only)
                 if hasattr(self.sim, 'render_wrist'):
