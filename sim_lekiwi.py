@@ -333,6 +333,12 @@ class LeKiwiSim:
         mujoco.mj_resetData(self.model, self.data)
         self.data.qpos[self._jpos_idx["j1"]] = 0.3
 
+    def set_target(self, pos):
+        """Move the target marker to (x, y)."""
+        self._target = np.array([pos[0], pos[1], 0.02], dtype=np.float64)
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "target")
+        self.data.xpos[body_id] = self._target
+
     def step(self, action: np.ndarray) -> dict:
         """Step with raw 9-D float64 action (first 6 arm pos, last 3 wheel vel)."""
         action = np.asarray(action, dtype=np.float64)

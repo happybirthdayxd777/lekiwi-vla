@@ -79,8 +79,8 @@ class TaskEvaluator:
         Task: Move the robot base to within `threshold` meters of target.
         Returns: (success: bool, steps_taken: int, final_dist: float)
         """
-        self.sim.reset()
         target = np.array(target)
+        self.sim.reset(target=target)
 
         for step in range(max_steps):
             pos = self.sim.data.qpos[:2]  # x, y of base
@@ -105,6 +105,9 @@ class TaskEvaluator:
         """
         self.sim.reset()
         visited = 0
+        # Set initial target to first waypoint
+        if waypoints:
+            self.sim.set_target(np.array(waypoints[0]))
 
         for wp_idx, wp in enumerate(waypoints):
             wp_target = np.array(wp)

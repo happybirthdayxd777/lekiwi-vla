@@ -325,11 +325,20 @@ class LeKiWiSimURDF:
         wheel = np.clip(action[6:9], -1, 1) * 5.0
         return np.concatenate([arm, wheel]).astype(np.float64)
 
-    def reset(self):
+    def reset(self, target=None):
+        """Reset sim. If target is given (x, y), update the goal marker position."""
         mujoco.mj_resetData(self.model, self.data)
         self.data.qpos[self._jpos_idx["j1"]] = 0.3
         self.data.qpos[self._jpos_idx["j2"]] = -0.3
+        if target is not None:
+            self.set_target(target)
         return self._obs()
+
+    def set_target(self, pos):
+        """Move the target marker to (x, y). Updates _target and MuJoCo body pos."""
+        self._target = np.array([pos[0], pos[1], 0.02], dtype=np.float64)
+        body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "target")
+        self.data.xpos[body_id] = self._target
 
     def step(self, action):
         ctrl = self._action_to_ctrl(np.asarray(action, dtype=np.float32))
