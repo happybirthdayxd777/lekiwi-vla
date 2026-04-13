@@ -43,12 +43,17 @@ from typing import Optional, Tuple
 try:
     import rclpy
     from rclpy.node import Node
-    from std_msgs.msg import String, ByteMultiArray
+    from std_msgs.msg import String
     from geometry_msgs.msg import Twist
     from std_msgs.msg import Float64
-    ROS2_AVAILABLE = True
+    try:
+        from std_msgs.msg import ByteMultiArray
+    except ImportError:
+        ByteMultiArray = None
+    ROS2_AVAILABLE = rclpy is not None and ByteMultiArray is not None
 except ImportError:
     ROS2_AVAILABLE = False
+    ByteMultiArray = None
     print("ROS2 not available — running in OFFLINE simulation mode")
 
 
