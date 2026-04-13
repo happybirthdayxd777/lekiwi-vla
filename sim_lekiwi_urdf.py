@@ -116,30 +116,28 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
               rgba="0.18 0.18 0.22 1"
               friction="1.0 0.1 0.02"/>
 
-        <!-- ══ Base (planar 3-DOF) ══
-             Phase 22 FIX: slide_x/y + yaw_z joints allow planar base motion.
-             The z-spring in step() keeps base at correct height against wheel contact forces.
-             qpos layout: [x=0, y=1, theta=2, w1=3, w2=4, w3=5, j0..j5=6..11]
+        <!-- ══ Base (6-DOF freejoint) ══
+             Phase 23 FIX: Switched back to freejoint from slide joints.
+             Root cause: slide joints + base plate meshes with contype=1 created
+             massive ground friction drag (friction=0.6 on base plates), preventing
+             any base locomotion. Freejoint base (like LeKiWiSim primitive) allows
+             natural gravity-based wheel contact without base-ground friction.
+             qpos layout: freejoint [quat(4)+pos(3), then w1,w2,w3,j0..j5]
         -->
-        <body name="base" pos="0 0 0.035">
-            <joint name="slide_x" type="slide" axis="1 0 0" damping="0.1"/>
-            <joint name="slide_y" type="slide" axis="0 1 0" damping="0.1"/>
-            <joint name="yaw_z"   type="hinge" axis="0 0 1" damping="0.3"/>
+        <body name="base" pos="0 0 0.075">
+            <freejoint name="base_free"/>
             <inertial pos="0 0 0.01" mass="2.0" diaginertia="0.01 0.01 0.015"/>
-            <!-- Bottom plate: very low friction — wheel contact drives base -->
-            <geom name="chassis_bottom" type="cylinder" size="0.10 0.001"
-                  pos="0 0 -0.034" rgba="0 0 0 0" friction="0.001 0.001 0.001"/>
-
-            <!-- Base plate STL layers -->
-            <geom name="base_p1" type="mesh" mesh="base_plate_1" rgba="0 0 0.9 1"/>
+            <!-- Base plate STL layers: visual only, no ground contact -->
+            <geom name="base_p1" type="mesh" mesh="base_plate_1"
+                  rgba="0 0 0.9 1" contype="0" conaffinity="0"/>
             <geom name="base_p2" type="mesh" mesh="base_plate_2"
-                  rgba="0 0 0.8 1" pos="0 0 0.006"/>
-            <!-- Battery mount -->
+                  rgba="0 0 0.8 1" pos="0 0 0.006" contype="0" conaffinity="0"/>
+            <!-- Battery mount: visual only -->
             <geom name="batt_m" type="mesh" mesh="battery_mount"
-                  rgba="0.1 0.1 0.1 1" pos="-0.04 0 0.01"/>
-            <!-- Camera mount -->
+                  rgba="0.1 0.1 0.1 1" pos="-0.04 0 0.01" contype="0" conaffinity="0"/>
+            <!-- Camera mount: visual only -->
             <geom name="cam_m" type="mesh" mesh="base_cam_mount"
-                  rgba="0.5 0.5 0.5 1" pos="0 0 0.08"/>
+                  rgba="0.5 0.5 0.5 1" pos="0 0 0.08" contype="0" conaffinity="0"/>
 
             <!-- ══ Wheel 0: front-right ─ STL omni wheel mesh + contact cylinder ══ -->
             <body name="wheel0" pos="0.0866 0.10 -0.06">
@@ -289,11 +287,10 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
     </worldbody>
 
     <!-- Actuators: ctrl[0..5]=arm torques, ctrl[6..9]=wheel torques
-         Phase 22 FIX: 
-         - REPLACED slide+velocity actuators with MOTOR torques on wheel joints
-         - Wheel motors spin wheels → contact forces → base moves (like real robots)
-         - Base is freejoint (6DOF) — natural dynamics
-         Action[6:9] = [w1_torque, w2_torque, w3_torque] in Nm, clip to ±1.0
+         Phase 23 FIX:
+         - freejoint base: natural gravity-based wheel contact (no base-ground friction)
+         - Wheel motors spin wheels → contact forces → freejoint base moves
+         - Action[6:9] = [w1_torque, w2_torque, w3_torque] in Nm, clip to ±1.0
     -->
     <actuator>
         <!-- Arm motors (6-DOF): torque control -->
@@ -355,20 +352,19 @@ class LeKiWiSimURDF:
     def _obs(self) -> dict:
         """Return observation as dict (compatible with LeKiWiSim._obs interface).
         
-        Phase 22: freejoint base — qpos[0:7]=base_free(quat+pos), qpos[7:10]=wheel, qpos[10:16]=arm
+        Phase 23: freejoint base — qpos[0:7]=base_free(quat+pos), qpos[7:10]=wheel, qpos[10:16]=arm
         Uses xpos/xquat for base world position/orientation.
+        Compatible with LeKiWiSim observation keys.
         """
         d = self.data
         base_body_id = self.model.body('base').id
-        # base_quaternion from freejoint: qpos[0:4] of the freejoint
-        # xquat is world-frame quaternion of base body
         return {
-            "arm_positions":        np.array([d.qpos[self._jpos_idx[n]] for n in ARM_JOINTS]),
-            "wheel_velocities":     np.array([d.qvel[self._jvel_idx[n]] for n in WHEEL_JOINTS]),
-            "arm_velocities":       np.array([d.qvel[self._jvel_idx[n]] for n in ARM_JOINTS]),
-            "base_position":        d.xpos[base_body_id].copy(),  # [x, y, z] world
-            "base_quaternion":      d.xquat[base_body_id].copy(),  # [qx, qy, qz, qw]
-            "base_linear_velocity": d.cvel[base_body_id, 3:].copy(),  # world-frame linear vel
+            "arm_positions":         np.array([d.qpos[self._jpos_idx[n]] for n in ARM_JOINTS]),
+            "wheel_velocities":      np.array([d.qvel[self._jvel_idx[n]] for n in WHEEL_JOINTS]),
+            "arm_velocities":        np.array([d.qvel[self._jvel_idx[n]] for n in ARM_JOINTS]),
+            "base_position":         d.xpos[base_body_id].copy(),  # [x, y, z] world
+            "base_quaternion":       d.xquat[base_body_id].copy(),  # [qx, qy, qz, qw]
+            "base_linear_velocity":  d.cvel[base_body_id, 3:].copy(),  # world-frame linear vel
             "base_angular_velocity": d.cvel[base_body_id, :3].copy(),  # world-frame angular vel
             "time": d.time,
         }
@@ -376,8 +372,8 @@ class LeKiWiSimURDF:
     def _action_to_ctrl(self, action):
         """Convert normalized action to MuJoCo ctrl.
         
-        Phase 22: wheel motor torques — motor torques on wheel hinges create
-        contact forces that drive the freejoint base (like real robots).
+        Phase 23: wheel motor torques on freejoint base.
+        Wheel contact forces drive the freejoint base naturally (no base-ground friction).
         action[0:6] = arm joint torques (normalized -1..1 → ±3.14 Nm)
         action[6:9] = wheel motor torques (normalized -1..1 → ±1.0 Nm)
         """
@@ -391,6 +387,7 @@ class LeKiWiSimURDF:
         # Set arm initial pose (j1/lift and j2/elbow)
         self.data.qpos[self._jpos_idx["j1"]] = 0.3
         self.data.qpos[self._jpos_idx["j2"]] = -0.3
+        # Set arm initial pose (j1/lift and j2/elbow)
         if target is not None:
             self.set_target(target)
         else:
@@ -410,14 +407,16 @@ class LeKiWiSimURDF:
         # Clamp absolute ctrl (arm: ±3.14Nm, wheel: ±1.0Nm)
         ctrl = np.clip(ctrl, -5.0, 5.0)
         self.data.ctrl[:] = ctrl
-        # Z-height spring: counteract upward forces from wheel contact
-        # Base should stay at z=0.035 (height of wheel axle above ground)
+        # Z-height PD controller: freejoint base oscillates vertically from wheel contact.
+        # Apply small force to keep base near wheel-axle equilibrium height (z≈0.085m).
+        # Equilibrium: wheel_body_z = base_z - 0.06, contact_cylinder_bottom = wheel_body_z - 0.025
+        # For contact_cylinder_bottom=0 (ground): base_z = 0.085m
         base_body_id = self.model.body('base').id
         base_z = self.data.xpos[base_body_id, 2]
-        kp_z = 50.0   # spring stiffness (N/m)
-        kd_z = 10.0   # damping (N·s/m)
-        z_target = 0.035
-        z_force = -kp_z * (base_z - z_target) - kd_z * self.data.cvel[base_body_id, 5]
+        kp_z = 30.0   # proportional: upward force when base_z < 0.085
+        kd_z = 8.0    # derivative: damping on vertical velocity
+        z_target = 0.085  # equilibrium height (wheel axle - wheel radius)
+        z_force = kp_z * (z_target - base_z) - kd_z * self.data.cvel[base_body_id, 5]
         self.data.xfrc_applied[base_body_id, 2] += z_force
         mujoco.mj_step(self.model, self.data)
         return self._obs(), float(self._reward()), bool(self.data.time > 60), {}
