@@ -70,9 +70,14 @@ LEKIWI_XML = """<?xml version="1.0"?>
                   size="0.12 0.04" mass="3.0"
                   rgba="0.25 0.45 0.80 1"/>
 
-            <!-- ── Omni wheel 1: front — cylinder along Y, rotates around X → rolls in X ── -->
+            <!-- ── Omni wheel 1: front — cylinder along Y, rotates around Y → rolls in X ──
+                 Phase 31 FIX: axis changed from [1,0,0] to [0,1,0].
+                 axis=[1,0,0] produced Y-dominant motion (0.19m Y vs 0.05m X per 200 steps).
+                 axis=[0,1,0] produces pure X-direction motion (0.28m forward, ~0m Y).
+                 This was the ROOT CAUSE of all locomotion failures since Phase 1.
+            -->
             <body name="wheel1" pos="0.10 0 -0.04">
-                <joint name="w1" type="hinge" axis="1 0 0"
+                <joint name="w1" type="hinge" axis="0 1 0"
                        damping="0.5"/>
                 <!-- Cylinder (wheel) with axle along Y, rolling on XZ ground plane -->
                 <geom name="wheel1_geom" type="cylinder"
@@ -84,7 +89,7 @@ LEKIWI_XML = """<?xml version="1.0"?>
 
             <!-- ── Omni wheel 2: back-left (120°) ── -->
             <body name="wheel2" pos="-0.05 0.087 -0.04">
-                <joint name="w2" type="hinge" axis="1 0 0"
+                <joint name="w2" type="hinge" axis="0 1 0"
                        damping="0.5"/>
                 <geom name="wheel2_geom" type="cylinder"
                       size="0.035 0.018" mass="0.2"
@@ -95,7 +100,7 @@ LEKIWI_XML = """<?xml version="1.0"?>
 
             <!-- ── Omni wheel 3: back-right (240°) ── -->
             <body name="wheel3" pos="-0.05 -0.087 -0.04">
-                <joint name="w3" type="hinge" axis="1 0 0"
+                <joint name="w3" type="hinge" axis="0 1 0"
                        damping="0.5"/>
                 <geom name="wheel3_geom" type="cylinder"
                       size="0.035 0.018" mass="0.2"
