@@ -54,6 +54,9 @@ LEKIWI_XML = """<?xml version="1.0"?>
     </default>
 
     <worldbody>
+        <!-- Lighting: overhead white light so images are not black -->
+        <light name="overhead" pos="0 0 3" dir="0 0 -1" diffuse="1 1 1" specular="0.3 0.3 0.3"/>
+
         <!-- Ground — smooth high-friction plane -->
         <geom name="ground" type="plane"
               size="5 5 0.01"
@@ -157,9 +160,9 @@ LEKIWI_XML = """<?xml version="1.0"?>
                 </body>
             </body>
 
-            <!-- Front camera -->
-            <camera name="front" pos="0 0 0.06"
-                    xyaxes="1 0 0 0 1 0" fovy="60"/>
+            <!-- Front camera: external fixed view of the robot -->
+            <camera name="front" pos="0 -0.5 0.4"
+                    xyaxes="1 0 0 0 0.5 0.866" fovy="60"/>
         </body>
 
         <!-- Target object -->
