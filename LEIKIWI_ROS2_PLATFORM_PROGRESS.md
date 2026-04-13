@@ -123,3 +123,55 @@ Policy 行為：
 - bridge_node.py (824行) — 完整 ROS2↔MuJoCo 橋樑
 - vla_policy_node.py (531行) — CLIP-FM + MockPolicy
 - 所有 launch files 功能確認
+---
+
+## [2026-04-13 2130]
+### Phase: Phase 19 — Goal Distributional Gap Confirmed + ID vs OOD Validation
+
+### 本次心跳完成事項
+
+**1. Goal Distributional Gap 量化驗證（eval_goal_gap.py）**
+
+創建 `scripts/eval_goal_gap.py`：在 ID（訓練分佈內）和 OOD（訓練分佈外）目標上系統性評估 goal_aware policy。
+
+| 類別 | 目標範例 | SR | Mean Dist |
+|------|----------|----|-----------|
+| **ID** ([-0.4, 0.4]) | (0.2,0), (-0.2,0), (0.3,0.3) | **40%** | **0.689m** |
+| **OOD** (>0.4) | (0.5,0), (0.6,0), (0.5,0.5) | **0%** | **1.200m** |
+
+結論：目標 (0.5, 0.0) 明確位於 OOD 區域，無法泛化。
+
+**2. 根本原因確認**
+
+- 訓練數據 `lekiwi_goal_urdf_10k.h5`：goal range X: [-0.412, 0.365], Y: [-0.458, 0.412]
+- 評估目標 (0.5, 0.0) 完全在訓練分佈之外
+- ID SR=40% 表示 policy 在見過的目標範圍內有部分成功率
+- OOD SR=0% 表示完全無法泛化到未見過的目標坐標
+
+**3. 現有架構狀態確認**
+
+| 元件 | 狀態 |
+|------|------|
+| `bridge_node.py` | ✅ ROS2↔MuJoCo 完整橋樑（824行） |
+| `vla_policy_node.py` | ✅ CLIP-FM + MockPolicy（531行） |
+| `lekiwi_sim_loader.py` | ✅ 工廠：primitive/urdf/real |
+| `goal_aware_50ep` policy | ✅ state_dim=11, 51M params |
+| `eval_goal_gap.py` | ✅ 新增：ID vs OOD 量化診斷 |
+
+### 下一步（下次心跳）
+
+1. **收集寬範圍訓練數據**
+   - 目標：覆蓋 [-0.8, 0.8] × [-0.8, 0.8]，100+ unique goals
+   - 修改 `collect_goal_directed.py`：增加 `--goal_max 0.8`
+   - 確保 (0.5, 0.0), (0.0, 0.5), (-0.5, 0.0), (0.6, 0.3), etc. 都在數據中
+
+2. **重新訓練 goal_aware policy（100 epochs）**
+   - 使用新的寬範圍數據集
+   - 預期：ID→SR提升，OOD→SR>0%
+
+3. **驗證 bridge_node ROS2 集成**（需要 ROS2 環境）
+
+### 阻礙
+- 評估目標 (0.5, 0.0) 不在訓練分佈 → 根本原因是數據分佈，非架構
+- 缺乏 ROS2 runtime 環境
+- lekiwi_modular remote 404
