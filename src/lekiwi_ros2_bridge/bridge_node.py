@@ -158,6 +158,7 @@ class LeKiWiBridge(Node):
         self.declare_parameter("mode", "sim")
         self.declare_parameter("record", False)
         self.declare_parameter("record_file", "")
+        self.declare_parameter("record_images", True)
         self.declare_parameter("enable_hmac", False)
         self.declare_parameter("cmd_vel_secret", "")
 
@@ -300,11 +301,14 @@ class LeKiWiBridge(Node):
         # ── Trajectory recording ──────────────────────────────────────────────
         self._recorder = None
         self._record_control_sub = None
+        p_record_images = self.get_parameter("record_images")
+        record_images = bool(p_record_images.value) if p_record_images.value else True
+
         if self._record:
             if not self._record_file:
                 self._record_file = os.path.expanduser(
                     f"~/hermes_research/lekiwi_vla/trajectories/run_{int(time.time())}.h5")
-            self._recorder = TrajectoryRecorder(self._record_file)
+            self._recorder = TrajectoryRecorder(self._record_file, record_images=record_images)
             self._recorder.start()
             self.get_logger().info(f"Recording trajectory → {self._record_file}")
             # Record control subscriber
@@ -690,6 +694,12 @@ class LeKiWiBridge(Node):
                 ros_img.header.stamp = msg.header.stamp
                 ros_img.header.frame_id = "lekiwi_camera"
                 self.camera_pub.publish(ros_img)
+
+                # ── Trajectory recording: capture image for HDF5 ───────────────
+                if self._recorder is not None and self._recorder.is_recording:
+                    ts = now.seconds_nanoseconds()
+                    img_ts = ts[0] + ts[1] * 1e-9
+                    self._recorder.record_image(img_np, timestamp=img_ts)
 
                 # Wrist camera (URDF model only)
                 if hasattr(self.sim, 'render_wrist'):

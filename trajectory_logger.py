@@ -60,30 +60,42 @@ class TrajectoryRecorder:
     """
     In-process trajectory recorder for embedding in bridge_node.
 
-    Takes cmd_vel + joint_states data directly from bridge callbacks
+    Takes cmd_vel + joint_states + camera data directly from bridge callbacks
     and writes to HDF5 on flush().
 
-    Recording format (HDF5):
-        /cmd_vel       (N, 3)   float64   [vx, vy, wz]
-        /joint_states  (N, 18) float64   [arm_pos*6, arm_vel*6, wheel_pos*3, wheel_vel*3]
-        /timestamps    (N,)    float64   seconds
-        /metadata      {run_id, duration_s, num_frames}
+    Recording format (HDF5) — mirrors lekiwi_urdf_5k.h5 for replay compatibility:
+        /images         (N, 224, 224, 3) uint8   (zero-filled if no camera)
+        /states         (N, 9)  float32   [arm_pos*6, wheel_x, wheel_y, yaw_proxy]
+        /actions        (N, 9)  float32   [arm_vel*6, wheel_vel*3]
+        /joint_states   (N, 18) float64   [arm_pos*6, arm_vel*6, wheel_pos*3, wheel_vel*3]
+        /cmd_vel        (N, 3)  float64   [vx, vy, wz]
+        /rewards        (N,)    float32   (zeros — compute with bag_to_hdf5 --compute-rewards)
+        /goal_positions (N, 2) float64   (zeros — placeholder)
+        /metadata       {run_id, duration_s, num_frames}
+
+    Images are recorded at the rate they arrive from _on_timer (typically 4 Hz).
+    They are zero-padded for frames where no image was captured, matching the
+    joint_states rate (20 Hz). The replay_node handles this automatically.
 
     Usage in bridge_node:
         self.recorder = TrajectoryRecorder("/tmp/my_traj.h5")
         # In _on_cmd_vel:  self.recorder.record_cmd_vel(vx, vy, wz)
-        # In _on_timer:    self.recorder.record_joint_state(...)
-        # On shutdown:     self.recorder.flush()
+        # In _on_timer:    self.recorder.record_joint_state(...) + record_image(img_np)
+        # On shutdown:    self.recorder.flush()
     """
 
-    def __init__(self, output_path: str, max_frames: int = MAX_FRAMES):
+    def __init__(self, output_path: str, max_frames: int = MAX_FRAMES,
+                 record_images: bool = True):
         self.output_path = os.path.expanduser(output_path)
         self.max_frames  = max_frames
+        self.record_images = record_images
         Path(self.output_path).parent.mkdir(parents=True, exist_ok=True)
 
         self.cmd_vel_buf  = []
         self.js_buf       = []
         self.ts_buf       = []
+        self.img_buf      = []          # images captured (may be fewer than js_buf)
+        self.img_ts_buf   = []          # timestamps for each captured image
         self._start_time  = None
         self._recording   = False
 
@@ -93,6 +105,8 @@ class TrajectoryRecorder:
         self.cmd_vel_buf.clear()
         self.js_buf.clear()
         self.ts_buf.clear()
+        self.img_buf.clear()
+        self.img_ts_buf.clear()
 
     def stop(self):
         self._recording = False
@@ -124,6 +138,19 @@ class TrajectoryRecorder:
         self.js_buf.append(row)
         self.ts_buf.append(timestamp or (datetime.now().timestamp()))
 
+    def record_image(self, image: np.ndarray, timestamp: float = None):
+        """
+        Record a camera image. Called from _on_timer when sim.render() produces a frame.
+        Images arrive at a lower rate than joint_states (typically 4 Hz vs 20 Hz).
+
+        The image is buffered separately and aligned to joint_states timestamps
+        during flush() via nearest-neighbor interpolation.
+        """
+        if not self._recording or not self.record_images:
+            return
+        self.img_buf.append(np.asarray(image, dtype=np.uint8))
+        self.img_ts_buf.append(timestamp or (datetime.now().timestamp()))
+
     def flush(self):
         """Write buffered data to HDF5. Call on shutdown or episode end."""
         if not self._recording and not self.js_buf:
@@ -133,24 +160,65 @@ class TrajectoryRecorder:
         if n == 0:
             return
 
-        # Pad cmd_vel to same length as joint_states
+        # ── Pad cmd_vel to same length as joint_states ──────────────────────
         cv_len = len(self.cmd_vel_buf)
         if cv_len < n:
             self.cmd_vel_buf.extend([[0.0, 0.0, 0.0]] * (n - cv_len))
         elif cv_len > n:
             self.cmd_vel_buf = self.cmd_vel_buf[:n]
 
+        # ── Align images to joint_states timestamps via nearest-neighbor ─────
+        # img_buf may be shorter than js_buf (4 Hz vs 20 Hz)
+        js_ts = np.array(self.ts_buf)
+        if self.img_buf and self.img_ts_buf:
+            img_ts = np.array(self.img_ts_buf)
+            # For each js timestamp, find nearest captured image
+            aligned_images = np.zeros((n, IMAGE_H, IMAGE_W, 3), dtype=np.uint8)
+            for i, t in enumerate(js_ts):
+                nearest_idx = np.argmin(np.abs(img_ts - t))
+                aligned_images[i] = self.img_buf[nearest_idx]
+        else:
+            aligned_images = np.zeros((n, IMAGE_H, IMAGE_W, 3), dtype=np.uint8)
+
+        # ── Build states (N, 9) ───────────────────────────────────────────────
+        # state = [arm_pos*6, wheel_x, wheel_y, wheel_z] from joint_states
+        # (wheel_z is used as a yaw proxy; actual base yaw requires odom)
+        js_arr = np.array(self.js_buf, dtype=np.float64)
+        states = np.zeros((n, 9), dtype=np.float32)
+        states[:, 0:6] = js_arr[:, 0:6]         # arm positions
+        states[:, 6:9] = js_arr[:, 12:15]       # wheel positions as proxy
+
+        # ── Build actions (N, 9) ──────────────────────────────────────────────
+        # action = [arm_vel*6, wheel_vel*3] — differentiate or use cmd_vel IK
+        cv_arr = np.array(self.cmd_vel_buf, dtype=np.float64)
+        actions = np.zeros((n, 9), dtype=np.float32)
+        actions[:, 0:6] = js_arr[:, 6:12]        # arm velocities
+        # Convert cmd_vel → wheel_speeds for wheel action
+        for i in range(n):
+            vx, vy, wz = cv_arr[i]
+            w1 = (1.0/0.05) * (np.cos(np.radians(60))*vx + np.sin(np.radians(60))*vy + 0.1732*wz)
+            w2 = (1.0/0.05) * (np.cos(np.radians(-60))*vx + np.sin(np.radians(-60))*vy + 0.1732*wz)
+            w3 = (1.0/0.05) * (0.0*vx + (-1.0)*vy + 0.1732*wz)
+            actions[i, 6:9] = [w1, w2, w3]
+
         duration = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0.0
 
         with h5py.File(self.output_path, "w") as f:
-            f.create_dataset("cmd_vel",      data=np.array(self.cmd_vel_buf, dtype=np.float64))
-            f.create_dataset("joint_states", data=np.array(self.js_buf,      dtype=np.float64))
-            f.create_dataset("timestamps",   data=np.array(self.ts_buf,     dtype=np.float64))
+            f.create_dataset("images",         data=aligned_images, compression="gzip", compression_opts=4)
+            f.create_dataset("states",          data=states,        compression="gzip", compression_opts=1)
+            f.create_dataset("actions",        data=actions,       compression="gzip", compression_opts=1)
+            f.create_dataset("joint_states",    data=js_arr,        compression="gzip", compression_opts=1)
+            f.create_dataset("cmd_vel",         data=cv_arr,        compression="gzip", compression_opts=1)
+            f.create_dataset("rewards",          data=np.zeros(n, dtype=np.float32))
+            f.create_dataset("goal_positions",  data=np.zeros((n, 2), dtype=np.float64))
+            f.create_dataset("timestamps",       data=np.array(self.ts_buf, dtype=np.float64))
             f.attrs["run_id"]      = Path(self.output_path).stem
             f.attrs["duration_s"]   = float(duration)
             f.attrs["num_frames"]   = n
+            f.attrs["fps"]          = n / duration if duration > 0 else 20.0
             f.attrs["arm_names"]    = ARM_JOINT_NAMES
             f.attrs["wheel_names"]  = WHEEL_JOINT_NAMES
+            f.attrs["has_images"]   = len(self.img_buf) > 0
 
         size_mb = os.path.getsize(self.output_path) / 1024 / 1024
         print(f"[TrajectoryRecorder] Saved {n} frames, {duration:.1f}s → "

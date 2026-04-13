@@ -85,6 +85,10 @@ def generate_launch_description() -> LaunchDescription:
         "record_file", default_value="",
         description="Output HDF5 path for trajectory recording (default: auto-generated)",
     )
+    record_images = DeclareLaunchArgument(
+        "record_images", default_value="true",
+        description="Record camera images during trajectory (disable for fast motion blur reduction)",
+    )
     replay_file = DeclareLaunchArgument(
         "replay_file", default_value="",
         description="HDF5 trajectory file to replay (empty = no replay)",
@@ -115,6 +119,7 @@ def generate_launch_description() -> LaunchDescription:
             "render": LaunchConfiguration("render"),
             "record": LaunchConfiguration("record"),
             "record_file": LaunchConfiguration("record_file"),
+            "record_images": LaunchConfiguration("record_images"),
             "enable_hmac": LaunchConfiguration("enable_hmac"),
             "cmd_vel_secret": LaunchConfiguration("cmd_vel_secret"),
         }],
@@ -166,6 +171,7 @@ def generate_launch_description() -> LaunchDescription:
         device,
         record,
         record_file,
+        record_images,
         replay_file,
         replay_hz,
         enable_hmac,

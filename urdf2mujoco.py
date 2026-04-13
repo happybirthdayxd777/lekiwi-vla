@@ -104,7 +104,7 @@ def mesh_of(link_name: str) -> str | None:
             continue
         uri = mesh.attrib.get("filename", "")
         if uri:
-            return os.path.basename(uri)
+            return os.path.splitext(os.path.basename(uri))[0]
     return None
 
 
@@ -209,10 +209,10 @@ def build_wheel_xml(idx: int) -> str:
     lines = []
     lines.append(f'    <body name="wheel{idx}" pos="{body_pos}">')
     lines.append(inertial_xml(mass, inertia))
+    # Omni wheel: use cylinder primitive (the actual STL has >200k faces)
     lines.append(geom_xml(
-        f"wheel{idx}_geom", "mesh",
-        mesh=actual_mesh,
-        pos="0 0 0", euler="0 0 0",
+        f"wheel{idx}_geom", "cylinder",
+        size="0.035 0.018", pos="0 0 0", euler="0 0 0",
         rgba="0.08 0.08 0.08 1",
         friction="0.9 0.05 0.01",
         contype="1", conaffinity="1",
@@ -304,6 +304,8 @@ def setup_meshes():
     needed = {
         "base_plate_layer1-v5.stl",
         "omni_wheel_mount-v5.stl",
+        "omni_wheel_mount-v5-1.stl",
+        "omni_wheel_mount-v5-2.stl",
         "4-Omni-Directional-Wheel_Single_Body-v1-1.stl",
         "4-Omni-Directional-Wheel_Single_Body-v1-2.stl",
         "4-Omni-Directional-Wheel_Single_Body-v1.stl",
@@ -313,6 +315,13 @@ def setup_meshes():
         "STS3215_03a-v1-3.stl",
         "STS3215_03a-v1-4.stl",
         "STS3215_03a_Wrist_Roll-v1.stl",
+        # Arm structural meshes (from urdf/meshes/)
+        "Moving_Jaw_08d-v1.stl",
+        "Rotation_Pitch_08i-v1.stl",
+        "SO_ARM100_08k_116_Square-v1.stl",
+        "SO_ARM100_08k_Mirror-v1.stl",
+        "Wrist_Roll_08c-v1.stl",
+        "Wrist_Roll_Pitch_08i-v1.stl",
     }
     for m in needed:
         src = MESHHOME / m
@@ -359,6 +368,15 @@ def generate_xml() -> str:
         '    <mesh file="meshes/STS3215_03a-v1-3.stl" name="STS3215_03a-v1-3"/>',
         '    <mesh file="meshes/STS3215_03a-v1-4.stl" name="STS3215_03a-v1-4"/>',
         '    <mesh file="meshes/STS3215_03a_Wrist_Roll-v1.stl" name="STS3215_03a_Wrist_Roll-v1"/>',
+        '    <mesh file="meshes/omni_wheel_mount-v5-1.stl" name="omni_wheel_mount-v5-1"/>',
+        '    <mesh file="meshes/omni_wheel_mount-v5-2.stl" name="omni_wheel_mount-v5-2"/>',
+        '    <!-- Arm structural meshes -->',
+        '    <mesh file="meshes/Rotation_Pitch_08i-v1.stl" name="Rotation_Pitch_08i-v1"/>',
+        '    <mesh file="meshes/SO_ARM100_08k_116_Square-v1.stl" name="SO_ARM100_08k_116_Square-v1"/>',
+        '    <mesh file="meshes/SO_ARM100_08k_Mirror-v1.stl" name="SO_ARM100_08k_Mirror-v1"/>',
+        '    <mesh file="meshes/Wrist_Roll_Pitch_08i-v1.stl" name="Wrist_Roll_Pitch_08i-v1"/>',
+        '    <mesh file="meshes/Wrist_Roll_08c-v1.stl" name="Wrist_Roll_08c-v1"/>',
+        '    <mesh file="meshes/Moving_Jaw_08d-v1.stl" name="Moving_Jaw_08d-v1"/>',
         '  </asset>',
         '',
         '  <worldbody>',
