@@ -20,15 +20,20 @@ if _LEKIWI_VLA not in sys.path:
     sys.path.insert(0, _LEKIWI_VLA)
 
 
-def load_lekiwi_sim(sim_type: str = 'urdf', mode: str = 'sim', render: bool = False):
+def load_lekiwi_sim(sim_type: str = 'primitive', mode: str = 'sim', render: bool = False):
     """
     Factory function returning the appropriate simulation / hardware backend.
+
+    NOTE: As of Phase 26, 'primitive' is the RECOMMENDED backend for VLA policy
+    inference. The URDF sim has fundamentally broken contact physics that make it
+    unsuitable as a locomotion backend (200x higher wheel spin for same base motion,
+    non-linear response, NaN instability). Use 'urdf' only for visual rendering.
 
     Parameters
     ----------
     sim_type : str
-        'primitive'  → LeKiwiSim (fast, no meshes)
-        'urdf'       → LeKiWiSimURDF (STL meshes, front + wrist cameras)
+        'primitive'  → LeKiwiSim (fast, velocity-based, stable contact) [RECOMMENDED]
+        'urdf'       → LeKiWiSimURDF (STL meshes, torque-based contact) [visual only]
     mode : str
         'sim'  → MuJoCo simulation (normal)
         'real' → RealHardwareAdapter (serial bus, no MuJoCo)
