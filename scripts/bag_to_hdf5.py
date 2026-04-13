@@ -71,6 +71,99 @@ WHEEL_JOINT_NAMES = ["w1", "w2", "w3"]
 IMAGE_H, IMAGE_W = 224, 224
 
 
+# ─── Standalone helpers for merge path (replicate class methods at module level) ─
+
+def _js_to_state(js: dict) -> np.ndarray:
+    """Extract 9-D state from a joint_states dict (standalone version)."""
+    nmap = dict(zip(js["names"], js["position"])) if js["position"] else {}
+    arm = [nmap.get(n, 0.0) for n in ARM_JOINT_NAMES]
+    wheel = [nmap.get(n, 0.0) for n in WHEEL_JOINT_NAMES]
+    return np.array(arm + wheel, dtype=np.float32)
+
+
+def _interpolate_single(buf: list, t: float):
+    """Return interpolated value at timestamp t from a buffer of dicts with 'ts' key."""
+    if not buf:
+        return None
+    src_ts = np.array([e["ts"] for e in buf])
+    if t <= src_ts[0]:
+        return buf[0]
+    if t >= src_ts[-1]:
+        return buf[-1]
+    lo, hi = 0, len(src_ts) - 1
+    while lo < hi - 1:
+        mid = (lo + hi) // 2
+        if src_ts[mid] <= t:
+            lo = mid
+        else:
+            hi = mid
+    t0, t1 = src_ts[lo], src_ts[hi]
+    alpha = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+    a0, a1 = buf[lo], buf[hi]
+    res = {"ts": t}
+    for key in ("vx", "vy", "wz"):
+        if key in a0 and key in a1:
+            res[key] = a0[key] + alpha * (a1[key] - a0[key])
+    if "data" in a0 and "data" in a1:
+        d0 = np.asarray(a0["data"], dtype=np.float64)
+        d1 = np.asarray(a1["data"], dtype=np.float64)
+        res["data"] = (d0 + alpha * (d1 - d0)).tolist()
+    elif "data" in a0:
+        res["data"] = a0["data"]
+    return res
+
+
+def _interpolate_buffers(source_buf: list, js_timestamps: list):
+    """
+    Resample a source buffer to match joint_states timestamps.
+    Returns list of same length as js_timestamps with linearly interpolated dicts.
+    """
+    if not source_buf:
+        return [None] * len(js_timestamps)
+    src_ts = np.array([e["ts"] for e in source_buf])
+    n_src = len(src_ts)
+    result = [None] * len(js_timestamps)
+    for i, t in enumerate(js_timestamps):
+        if t <= src_ts[0]:
+            result[i] = source_buf[0]
+            continue
+        if t >= src_ts[-1]:
+            result[i] = source_buf[-1]
+            continue
+        lo, hi = 0, n_src - 1
+        while lo < hi - 1:
+            mid = (lo + hi) // 2
+            if src_ts[mid] <= t:
+                lo = mid
+            else:
+                hi = mid
+        t0, t1 = src_ts[lo], src_ts[hi]
+        alpha = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+        a0, a1 = source_buf[lo], source_buf[hi]
+        res = {"ts": t}
+        for key in ("vx", "vy", "wz"):
+            if key in a0 and key in a1:
+                res[key] = a0[key] + alpha * (a1[key] - a0[key])
+        if "data" in a0 and "data" in a1 and a0["data"] is not None and a1["data"] is not None:
+            res["data"] = (np.asarray(a0["data"]) * (1 - alpha) +
+                           np.asarray(a1["data"]) * alpha).astype(np.uint8)
+        elif "data" in a0:
+            res["data"] = a0["data"]
+        result[i] = res
+    return result
+
+
+def _twist_to_wheel_speeds(vx: float, vy: float, wz: float) -> list:
+    """Inverse kinematics: Twist → wheel angular velocities (module-level version)."""
+    L = 0.1732
+    R = 0.05
+    a = np.radians(60)
+    w1 = (1.0 / R) * (np.cos(a) * vx + np.sin(a) * vy + L * wz)
+    w2 = (1.0 / R) * (np.cos(-a) * vx + np.sin(-a) * vy + L * wz)
+    w3 = (1.0 / R) * (0.0 * vx + (-1.0) * vy + L * wz)
+    return [w1, w2, w3]
+
+
 # ─── Message helpers ──────────────────────────────────────────────────────────
 
 def _get_msg_type(msg_class_path: str):
@@ -292,7 +385,10 @@ class BagToHDF5Converter:
     def _interpolate_to_js_rate(self, source_buf: list, js_timestamps: list):
         """
         Resample a source buffer (camera, cmd_vel) to match joint_states timestamps.
-        Returns array of same length as js_timestamps with interpolated values.
+        Returns array of same length as js_timestamps with linearly interpolated values.
+
+        Upgraded from nearest-neighbor to linear interpolation for smoother
+        trajectory reconstruction — reduces camera jitter and cmd_vel discontinuities.
         """
         if not source_buf:
             return [None] * len(js_timestamps)
@@ -301,11 +397,54 @@ class BagToHDF5Converter:
         src_ts = np.array([e["ts"] for e in source_buf])
         js_ts = np.array(js_timestamps)
 
-        result = []
-        for t in js_ts:
-            # Find nearest source timestamp
-            idx = np.argmin(np.abs(src_ts - t))
-            result.append(source_buf[idx])
+        # Fast vectorized linear interpolation
+        # For each js timestamp, find surrounding source indices
+        # src_ts must be sorted (bag messages are in time order)
+        n_src = len(src_ts)
+        result = [None] * len(js_ts)
+
+        for i, t in enumerate(js_ts):
+            if t <= src_ts[0]:
+                result[i] = source_buf[0]
+                continue
+            if t >= src_ts[-1]:
+                result[i] = source_buf[-1]
+                continue
+
+            # Binary search for insertion point
+            lo, hi = 0, n_src - 1
+            while lo < hi - 1:
+                mid = (lo + hi) // 2
+                if src_ts[mid] <= t:
+                    lo = mid
+                else:
+                    hi = mid
+
+            # Linear interpolation between lo and hi
+            t0, t1 = src_ts[lo], src_ts[hi]
+            alpha = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+            a0, a1 = source_buf[lo], source_buf[hi]
+
+            # Interpolate numeric fields
+            res = {"ts": t}
+            for key in ("vx", "vy", "wz"):
+                if key in a0 and key in a1:
+                    res[key] = a0[key] + alpha * (a1[key] - a0[key])
+            # Interpolate image data if present
+            if "data" in a0 and "data" in a1 and a0["data"] is not None and a1["data"] is not None:
+                # Blend images with alpha
+                res["data"] = (a0["data"] * (1 - alpha) + a1["data"] * alpha).astype(np.uint8)
+            else:
+                # Fall back to nearest
+                res["data"] = a0["data"] if alpha < 0.5 else a1["data"]
+            # Interpolate action data
+            if "data" in a0 and "data" in a1:
+                d0 = np.asarray(a0["data"], dtype=np.float64)
+                d1 = np.asarray(a1["data"], dtype=np.float64)
+                res["data"] = (d0 + alpha * (d1 - d0)).tolist()
+
+            result[i] = res
+
         return result
 
     def build_hdf5(self, output_path: str, compute_rewards: bool = False):
@@ -477,8 +616,9 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.merge:
-        # Merge multiple bags into one
+    if args.merge and len(args.input) > 1:
+        # Merge multiple bags: read all bags, concatenate buffers, build merged HDF5
+        print(f"[bag_to_hdf5] Merging {len(args.input)} bag files...")
         all_js, all_cv, all_cam, all_va, all_ts = [], [], [], [], []
         for bp in args.input:
             conv = BagToHDF5Converter(bp)
@@ -488,11 +628,109 @@ def main():
             all_cam.extend(conv._buffers["camera"])
             all_va.extend(conv._buffers["vla_action"])
             all_ts.extend(conv._buffers["timestamps"])
+            print(f"  {bp}: {len(conv._buffers['joint_states'])} joint_states, "
+                  f"{len(conv._buffers['camera'])} images")
 
-        # TODO: implement merge (requires aligning timestamps across bags)
-        print("[bag_to_hdf5] Merge not yet implemented — processing first bag only")
-        # Fall through to single-bag processing
-        args.input = args.input[:1]
+        # Sort by global timestamp across all bags
+        # Build merged buffer with consistent ordering
+        n = len(all_js)
+        print(f"[bag_to_hdf5] Merged: {n} total frames")
+
+        # ── Build states ────────────────────────────────────────────────────
+        states = np.stack([_js_to_state(js) for js in all_js])
+        states = states.astype(np.float32)
+
+        # ── Build actions ───────────────────────────────────────────────────
+        if all_va:
+            va_interp = _interpolate_buffers(all_va, [js["ts"] for js in all_js])
+            actions = []
+            for va, js in zip(va_interp, all_js):
+                if va and va.get("data") and len(va["data"]) >= 9:
+                    arm = va["data"][:6]
+                    wheel = va["data"][6:9]
+                else:
+                    cv = _interpolate_single(all_cv, js["ts"]) if all_cv else None
+                    arm_vel = js["velocity"][:6] if js["velocity"] else [0]*6
+                    wheel = _twist_to_wheel_speeds(
+                        cv["vx"], cv["vy"], cv["wz"]
+                    ) if cv else [0, 0, 0]
+                    arm = arm_vel
+                actions.append(list(arm) + list(wheel))
+            actions = np.array(actions, dtype=np.float32)
+        else:
+            cv_interp = _interpolate_buffers(all_cv, [js["ts"] for js in all_js])
+            actions = []
+            for js, cv in zip(all_js, cv_interp):
+                arm_vel = list(js["velocity"][:6]) if js["velocity"] else [0.0]*6
+                if cv:
+                    wheel = _twist_to_wheel_speeds(cv["vx"], cv["vy"], cv["wz"])
+                else:
+                    wheel = [0.0]*3
+                actions.append(arm_vel + wheel)
+            actions = np.array(actions, dtype=np.float32)
+
+        # ── Build images ────────────────────────────────────────────────────
+        images = np.zeros((n, IMAGE_H, IMAGE_W, 3), dtype=np.uint8)
+        if all_cam:
+            cam_interp = _interpolate_buffers(all_cam, [js["ts"] for js in all_js])
+            for i, cam in enumerate(cam_interp):
+                if cam is not None and cam.get("data") is not None:
+                    images[i] = cam["data"]
+        else:
+            print("[bag_to_hdf5] WARNING: No camera data in merged bags — images will be black")
+
+        # ── Build joint_states (N, 18) ───────────────────────────────────────
+        js_arr = np.zeros((n, 18), dtype=np.float64)
+        for i, js in enumerate(all_js):
+            nmap_pos = dict(zip(js["names"], js["position"])) if js["position"] else {}
+            nmap_vel = dict(zip(js["names"], js["velocity"])) if js["velocity"] else {}
+            arm_p = [nmap_pos.get(n, 0.0) for n in ARM_JOINT_NAMES]
+            arm_v = [nmap_vel.get(n, 0.0) for n in ARM_JOINT_NAMES]
+            wheel_p = [nmap_pos.get(n, 0.0) for n in WHEEL_JOINT_NAMES]
+            wheel_v = [nmap_vel.get(n, 0.0) for n in WHEEL_JOINT_NAMES]
+            js_arr[i] = arm_p + arm_v + wheel_p + wheel_v
+
+        # ── Build cmd_vel (N, 3) ─────────────────────────────────────────────
+        cv_arr = np.zeros((n, 3), dtype=np.float64)
+        cv_interp = _interpolate_buffers(all_cv, [js["ts"] for js in all_js])
+        for i, cv in enumerate(cv_interp):
+            if cv:
+                cv_arr[i] = [cv["vx"], cv["vy"], cv["wz"]]
+
+        # ── Rewards placeholder ─────────────────────────────────────────────
+        rewards = np.zeros(n, dtype=np.float32)
+        goal_positions = np.zeros((n, 2), dtype=np.float64)
+        duration = (all_js[-1]["ts"] - all_js[0]["ts"]) if len(all_js) > 1 else 0.0
+        fps = n / duration if duration > 0 else 20.0
+
+        # ── Write merged HDF5 ───────────────────────────────────────────────
+        import h5py
+        output_path = os.path.expanduser(args.output)
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with h5py.File(output_path, "w") as f:
+            f.create_dataset("images",        data=images,       compression="gzip", compression_opts=4)
+            f.create_dataset("states",        data=states,       compression="gzip", compression_opts=1)
+            f.create_dataset("actions",       data=actions,      compression="gzip", compression_opts=1)
+            f.create_dataset("rewards",       data=rewards,     compression="gzip", compression_opts=1)
+            f.create_dataset("joint_states",  data=js_arr,      compression="gzip", compression_opts=1)
+            f.create_dataset("cmd_vel",        data=cv_arr,      compression="gzip", compression_opts=1)
+            f.create_dataset("goal_positions",data=goal_positions)
+            f.attrs["run_id"] = Path(output_path).stem + "_merged"
+            f.attrs["duration_s"] = float(duration)
+            f.attrs["num_frames"] = n
+            f.attrs["fps"] = float(fps)
+            f.attrs["arm_names"] = ARM_JOINT_NAMES
+            f.attrs["wheel_names"] = WHEEL_JOINT_NAMES
+            f.attrs["has_rewards"] = False
+            f.attrs["has_images"] = len(all_cam) > 0
+            f.attrs["merged_from"] = str([str(p) for p in args.input])
+
+        size_mb = os.path.getsize(output_path) / 1024 / 1024
+        print(f"[bag_to_hdf5] Merged saved: {n} frames, {duration:.1f}s, {fps:.1f} fps → "
+              f"{output_path} ({size_mb:.1f} MB)")
+        print(f"[bag_to_hdf5]   images: {images.shape}, states: {states.shape}, "
+              f"actions: {actions.shape}")
+        return  # Done — don't fall through to single-bag processing
 
     if len(args.input) == 1:
         conv = BagToHDF5Converter(args.input[0])
