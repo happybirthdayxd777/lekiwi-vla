@@ -1,0 +1,8 @@
+Phase 29 quick train: 5 epochs
+Final loss: 0.75758
+Success Rate: 0%
+epoch 0: 1.16754
+epoch 1: 0.93471
+epoch 2: 0.83691
+epoch 3: 0.78371
+epoch 4: 0.75758
