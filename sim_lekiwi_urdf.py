@@ -116,19 +116,19 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
               rgba="0.18 0.18 0.22 1"
               friction="1.0 0.1 0.02"/>
 
-        <!-- ══ Base (planar 3-DOF: slide_x, slide_y, yaw_z) ══
-             Phase 19: freejoint → planar joints to ensure stable ground contact.
-             Equality constraint prevents roll/pitch while allowing XY+yaw motion.
-             qpos layout: [x=0, y=1, theta=2, w1=3, w2=4, w3=5, j0=6..j5=11]
+        <!-- ══ Base (planar 3-DOF) ══
+             Phase 22 FIX: slide_x/y + yaw_z joints allow planar base motion.
+             The z-spring in step() keeps base at correct height against wheel contact forces.
+             qpos layout: [x=0, y=1, theta=2, w1=3, w2=4, w3=5, j0..j5=6..11]
         -->
         <body name="base" pos="0 0 0.035">
-            <joint name="slide_x" type="slide" axis="1 0 0" damping="0.0"/>
-            <joint name="slide_y" type="slide" axis="0 1 0" damping="0.0"/>
+            <joint name="slide_x" type="slide" axis="1 0 0" damping="0.1"/>
+            <joint name="slide_y" type="slide" axis="0 1 0" damping="0.1"/>
             <joint name="yaw_z"   type="hinge" axis="0 0 1" damping="0.3"/>
-            <!-- Strong friction geom under chassis to drive translation from wheel forces -->
+            <inertial pos="0 0 0.01" mass="2.0" diaginertia="0.01 0.01 0.015"/>
+            <!-- Bottom plate: very low friction — wheel contact drives base -->
             <geom name="chassis_bottom" type="cylinder" size="0.10 0.001"
                   pos="0 0 -0.034" rgba="0 0 0 0" friction="0.001 0.001 0.001"/>
-            <inertial pos="0 0 0.01" mass="2.0" diaginertia="0.01 0.01 0.015"/>
 
             <!-- Base plate STL layers -->
             <geom name="base_p1" type="mesh" mesh="base_plate_1" rgba="0 0 0.9 1"/>
@@ -288,21 +288,25 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
         </body>
     </worldbody>
 
-    <!-- Actuators: ctrl[0..5]=arm torques, ctrl[6..8]=base velocity (slide_x, slide_y, yaw_z)
-         Phase 19: use direct velocity actuators on base joints for stable holonomic motion.
-         Action[6:9] = [vx, vy, omega] normalized to [-1,1] → [-0.5, -0.5, -2.0] m/s or rad/s.
+    <!-- Actuators: ctrl[0..5]=arm torques, ctrl[6..9]=wheel torques
+         Phase 22 FIX: 
+         - REPLACED slide+velocity actuators with MOTOR torques on wheel joints
+         - Wheel motors spin wheels → contact forces → base moves (like real robots)
+         - Base is freejoint (6DOF) — natural dynamics
+         Action[6:9] = [w1_torque, w2_torque, w3_torque] in Nm, clip to ±1.0
     -->
     <actuator>
+        <!-- Arm motors (6-DOF): torque control -->
         <motor joint="j0" gear="10"/>
         <motor joint="j1" gear="10"/>
         <motor joint="j2" gear="10"/>
         <motor joint="j3" gear="5"/>
         <motor joint="j4" gear="5"/>
         <motor joint="j5" gear="3"/>
-        <!-- Base holonomic drive: kv=20 gives stiff velocity tracking -->
-        <velocity name="drive_x"     joint="slide_x" kv="20.0"/>
-        <velocity name="drive_y"     joint="slide_y" kv="20.0"/>
-        <velocity name="drive_omega" joint="yaw_z"   kv="5.0"/>
+        <!-- Omni wheel motors: torque applied to wheel hinge → contact → base motion -->
+        <motor name="wheel0_motor" joint="w1" gear="1.0"/>
+        <motor name="wheel1_motor" joint="w2" gear="1.0"/>
+        <motor name="wheel2_motor" joint="w3" gear="1.0"/>
     </actuator>
 </mujoco>
 """
@@ -344,7 +348,6 @@ class LeKiWiSimURDF:
         self._jpos_idx = {n: _jpos(self.model, n) for n in ALL_JOINTS}
         self._jvel_idx = {n: _jvel(self.model, n) for n in ALL_JOINTS}
         self._target   = np.array([0.5, 0.0, 0.0])
-        self._prev_wheel_ctrl = np.zeros(3, dtype=np.float64)
         print(f"[LeKiWiSimURDF] bodies={self.model.nbody}, "
               f"meshes={self.model.nmesh}, joints={self.model.njnt}, "
               f"geoms={self.model.ngeom}")
@@ -352,44 +355,40 @@ class LeKiWiSimURDF:
     def _obs(self) -> dict:
         """Return observation as dict (compatible with LeKiWiSim._obs interface).
         
-        Phase 19: planar joints — qpos=[x,y,theta,w1,w2,w3,j0..j5]
-        base_position is [x,y,theta], base_quaternion kept for compatibility (identity).
+        Phase 22: freejoint base — qpos[0:7]=base_free(quat+pos), qpos[7:10]=wheel, qpos[10:16]=arm
+        Uses xpos/xquat for base world position/orientation.
         """
         d = self.data
+        base_body_id = self.model.body('base').id
+        # base_quaternion from freejoint: qpos[0:4] of the freejoint
+        # xquat is world-frame quaternion of base body
         return {
             "arm_positions":        np.array([d.qpos[self._jpos_idx[n]] for n in ARM_JOINTS]),
             "wheel_velocities":     np.array([d.qvel[self._jvel_idx[n]] for n in WHEEL_JOINTS]),
             "arm_velocities":       np.array([d.qvel[self._jvel_idx[n]] for n in ARM_JOINTS]),
-            "base_position":        d.qpos[:3].copy(),       # [x, y, theta]
-            "base_quaternion":      np.array([1.,0.,0.,0.]), # planar: always upright
-            "base_linear_velocity": d.qvel[:2].copy(),       # [vx, vy]
-            "base_angular_velocity": np.array([0., 0., d.qvel[2]]),  # [0, 0, omega]
+            "base_position":        d.xpos[base_body_id].copy(),  # [x, y, z] world
+            "base_quaternion":      d.xquat[base_body_id].copy(),  # [qx, qy, qz, qw]
+            "base_linear_velocity": d.cvel[base_body_id, 3:].copy(),  # world-frame linear vel
+            "base_angular_velocity": d.cvel[base_body_id, :3].copy(),  # world-frame angular vel
             "time": d.time,
         }
 
     def _action_to_ctrl(self, action):
         """Convert normalized action to MuJoCo ctrl.
         
-        Phase 19: holonomic base control.
-        action[0:6]  = arm joint targets (normalized -1..1 → ±3.14 rad torque)
-        action[6:9]  = [vx, vy, omega] normalized base velocity:
-                       vx/vy: ±1 → ±0.5 m/s in ROBOT FRAME
-                       omega: ±1 → ±2.0 rad/s
+        Phase 22: wheel motor torques — motor torques on wheel hinges create
+        contact forces that drive the freejoint base (like real robots).
+        action[0:6] = arm joint torques (normalized -1..1 → ±3.14 Nm)
+        action[6:9] = wheel motor torques (normalized -1..1 → ±1.0 Nm)
         """
         arm = np.clip(action[:6], -1, 1) * 3.14
-        # Convert robot-frame velocity to world-frame (rotate by current yaw)
-        theta = self.data.qpos[2]  # current yaw
-        vx_r = float(np.clip(action[6], -1, 1)) * 0.5
-        vy_r = float(np.clip(action[7], -1, 1)) * 0.5
-        omega = float(np.clip(action[8], -1, 1)) * 2.0
-        c, s = np.cos(theta), np.sin(theta)
-        vx_w = c * vx_r - s * vy_r
-        vy_w = s * vx_r + c * vy_r
-        return np.array([*arm, vx_w, vy_w, omega], dtype=np.float64)
+        wheel_torque = np.clip(action[6:9], -1, 1) * 1.0
+        return np.array([*arm, *wheel_torque], dtype=np.float64)
 
     def reset(self, target=None):
         """Reset sim. If target is given (x, y), update the goal marker position."""
         mujoco.mj_resetData(self.model, self.data)
+        # Set arm initial pose (j1/lift and j2/elbow)
         self.data.qpos[self._jpos_idx["j1"]] = 0.3
         self.data.qpos[self._jpos_idx["j2"]] = -0.3
         if target is not None:
@@ -408,14 +407,18 @@ class LeKiWiSimURDF:
 
     def step(self, action):
         ctrl = self._action_to_ctrl(np.asarray(action, dtype=np.float32))
-        # Safety: clamp absolute ctrl + rate-limit wheel ctrl to prevent MuJoCo instability
+        # Clamp absolute ctrl (arm: ±3.14Nm, wheel: ±1.0Nm)
         ctrl = np.clip(ctrl, -5.0, 5.0)
-        # Rate-limit wheel velocities: max 2.0 rad/s change per step (5ms = 0.005s → max 0.01 rad/s per step)
-        for i in range(6, 9):
-            delta = ctrl[i] - self._prev_wheel_ctrl[i - 6]
-            ctrl[i] = self._prev_wheel_ctrl[i - 6] + np.clip(delta, -2.0, 2.0)
-        self._prev_wheel_ctrl = ctrl[6:9].copy()
         self.data.ctrl[:] = ctrl
+        # Z-height spring: counteract upward forces from wheel contact
+        # Base should stay at z=0.035 (height of wheel axle above ground)
+        base_body_id = self.model.body('base').id
+        base_z = self.data.xpos[base_body_id, 2]
+        kp_z = 50.0   # spring stiffness (N/m)
+        kd_z = 10.0   # damping (N·s/m)
+        z_target = 0.035
+        z_force = -kp_z * (base_z - z_target) - kd_z * self.data.cvel[base_body_id, 5]
+        self.data.xfrc_applied[base_body_id, 2] += z_force
         mujoco.mj_step(self.model, self.data)
         return self._obs(), float(self._reward()), bool(self.data.time > 60), {}
 
