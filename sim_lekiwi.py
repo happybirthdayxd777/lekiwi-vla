@@ -15,8 +15,10 @@ Key improvements over v1:
 
 Usage:
     python3 sim_lekiwi.py --test kinematics
-    python3 sim_lekiwi.py --test gym       # run Gymnasium episode
     python3 sim_lekiwi.py --test camera
+    python3 sim_lekiwi.py --test gym       # run Gymnasium episode
+    python3 sim_lekiwi.py --test sim       # test LeKiWiSim.step() with wheel commands
+    python3 sim_lekiwi.py --test contact   # verify wheel-ground contact forces
 """
 
 import argparse
@@ -486,9 +488,120 @@ def test_camera():
     return path
 
 
+def test_sim():
+    """Test LeKiWiSim.step() with wheel commands: verify wheel-ground contact.
+
+    Phase 21: Verify that LeKiWiSim (freejoint base) responds correctly to
+    wheel action commands by checking wheel velocities and base motion.
+    """
+    print("=" * 60)
+    print("  LeKiWi Simulation v2 — step() / Contact Test")
+    print("=" * 60)
+
+    # LeKiWiSim: freejoint base + 3 hinge wheel joints
+    from sim_lekiwi import LeKiwiSim
+    sim = LeKiwiSim()
+
+    print("\n[1] Forward motion: w=[0.5, 0.5, 0.5] — 100 steps")
+    sim.reset()
+    for _ in range(100):
+        # action = [arm*6, wheel*3], wheel_ctrl = action[6:9] * 5.0
+        # w=[0.5,0.5,0.5] → wheel_ctrl=[2.5,2.5,2.5] rad/s
+        sim.step(np.array([0, 0, 0, 0, 0, 0, 0.5, 0.5, 0.5]))
+    obs = sim._obs()
+    print(f"    base (x,y): ({obs['base_position'][0]:+.4f}, {obs['base_position'][1]:+.4f})")
+    print(f"    wheel vel (w1,w2,w3): ({obs['wheel_velocities'][0]:.4f}, {obs['wheel_velocities'][1]:.4f}, {obs['wheel_velocities'][2]:.4f}) rad/s")
+    print(f"    base vel (vx,vy): ({obs['base_linear_velocity'][0]:+.4f}, {obs['base_linear_velocity'][1]:+.4f}) m/s")
+
+    print("\n[2] Backward motion: w=[-0.5,-0.5,-0.5] — 100 steps")
+    sim.reset()
+    for _ in range(100):
+        sim.step(np.array([0, 0, 0, 0, 0, 0, -0.5, -0.5, -0.5]))
+    obs = sim._obs()
+    print(f"    base (x,y): ({obs['base_position'][0]:+.4f}, {obs['base_position'][1]:+.4f})")
+    print(f"    wheel vel: ({obs['wheel_velocities'][0]:.4f}, {obs['wheel_velocities'][1]:.4f}, {obs['wheel_velocities'][2]:.4f}) rad/s")
+
+    print("\n[3] Rotation: w=[1.0, -1.0, 0.0] — 100 steps")
+    sim.reset()
+    for _ in range(100):
+        sim.step(np.array([0, 0, 0, 0, 0, 0, 1.0, -1.0, 0.0]))
+    obs = sim._obs()
+    print(f"    yaw angle: {obs['base_position'][2]:+.4f} rad")
+    print(f"    ang vel z: {obs['base_angular_velocity'][2]:.4f} rad/s")
+
+    print("\n[4] Contact forces (nfrc): should be non-zero when wheels touch ground")
+    sim.reset()
+    for _ in range(50):
+        sim.step(np.array([0, 0, 0, 0, 0, 0, 0.5, 0.5, 0.5]))
+    # nfrc = number of contact force rows (6 * nconmax)
+    ncon = sim.data.ncon
+    print(f"    ncon: {ncon}")
+    if ncon > 0:
+        c = sim.data.contact
+        print(f"    contact pos (first): {c.pos[0]}")
+        print(f"    contact geom (first): {c.geom[0]}")
+        print(f"    contact dist (first): {c.dist[0]:+.4f}")
+    else:
+        print("    WARNING: no contacts detected — wheels may not be touching ground!")
+
+    print("\nstep() contact test complete.")
+
+
+def test_contact():
+    """Verify wheel-ground contact forces in LeKiWiSim.
+
+    Phase 21: Check that the contact cylinders produce measurable forces
+    when the robot presses against the ground.
+    """
+    print("=" * 60)
+    print("  LeKiWi Simulation v2 — Contact Force Verification")
+    print("=" * 60)
+
+    from sim_lekiwi import LeKiwiSim
+    sim = LeKiwiSim()
+
+    print("\n[1] Resting: check baseline contacts (robot standing still)")
+    sim.reset()
+    sim.step(np.zeros(9))
+    ncon_rest = sim.data.ncon
+    print(f"    ncon: {ncon_rest}")
+    if ncon_rest > 0:
+        print(f"    contact geom IDs: {sim.data.contact.geom[:ncon_rest]}")
+        for i in range(min(ncon_rest, 3)):
+            c = sim.data.contact
+            print(f"    pos[{i}]: ({c.pos[i,0]:+.4f}, {c.pos[i,1]:+.4f}, {c.pos[i,2]:+.4f})")
+            print(f"    dist[{i}]: {c.dist[i]:+.4f}")
+
+    print("\n[2] Pressing down: wheel_ctrl=[0.5,0.5,0.5] — extra downward force")
+    sim.reset()
+    for _ in range(200):
+        sim.step(np.array([0, 0, 0, 0, 0, 0, 0.5, 0.5, 0.5]))
+    ncon = sim.data.ncon
+    print(f"    ncon: {ncon}")
+    if ncon > 0:
+        c = sim.data.contact
+        print(f"    contact geom IDs: {c.geom[:ncon]}")
+        print(f"    contact dist: {c.dist[:ncon]}")
+        print(f"    contact pos: ({c.pos[0,0]:+.4f}, {c.pos[0,1]:+.4f}, {c.pos[0,2]:+.4f})")
+        print(f"    contact frame[0]: ({c.frame[0,0]:+.4f}, {c.frame[0,1]:+.4f}, {c.frame[0,2]:+.4f})")
+    else:
+        print("    WARNING: no contacts!")
+
+    print("\n[3] Lateral slide: w=[0.5,-0.5,0.0] — lateral force")
+    sim.reset()
+    sim.data.qpos[0] = 0.0  # set at origin
+    for _ in range(100):
+        sim.step(np.array([0, 0, 0, 0, 0, 0, 0.5, -0.5, 0.0]))
+    obs = sim._obs()
+    print(f"    base (x,y): ({obs['base_position'][0]:+.4f}, {obs['base_position'][1]:+.4f})")
+    print(f"    wheel vel: ({obs['wheel_velocities'][0]:.4f}, {obs['wheel_velocities'][1]:.4f}, {obs['wheel_velocities'][2]:.4f})")
+
+    print("\nContact force test complete.")
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LeKiwi MuJoCo Simulation v2")
-    parser.add_argument("--test", choices=["kinematics", "camera", "gym"], default="kinematics")
+    parser = argparse.ArgumentParser(description="LeKiWi MuJoCo Simulation v2")
+    parser.add_argument("--test", choices=["kinematics", "camera", "gym", "sim", "contact"], default="kinematics")
     args = parser.parse_args()
 
     if args.test == "kinematics":
@@ -497,3 +610,7 @@ if __name__ == "__main__":
         test_camera()
     elif args.test == "gym":
         test_gym()
+    elif args.test == "sim":
+        test_sim()
+    elif args.test == "contact":
+        test_contact()

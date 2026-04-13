@@ -156,7 +156,7 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       pos="0 0 -0.025"
                       mass="0.01"
                       contype="1" conaffinity="1"
-                      friction="0 0 0"/>
+                      friction="0.6 0.05 0.01"/>
             </body>
 
             <!-- ══ Wheel 1: back-left ─ STL omni wheel mesh + contact cylinder ══ -->
@@ -172,7 +172,7 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       pos="0 0 -0.025"
                       mass="0.01"
                       contype="1" conaffinity="1"
-                      friction="0 0 0"/>
+                      friction="0.6 0.05 0.01"/>
             </body>
 
             <!-- ══ Wheel 2: back-right ─ STL omni wheel mesh + contact cylinder ══ -->
@@ -188,7 +188,7 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       pos="0 0 -0.025"
                       mass="0.01"
                       contype="1" conaffinity="1"
-                      friction="0 0 0"/>
+                      friction="0.6 0.05 0.01"/>
             </body>
 
             <!-- ══ Arm base ══ -->
