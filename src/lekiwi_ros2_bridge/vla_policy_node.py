@@ -335,9 +335,15 @@ def _make_task_oriented_wrapper(pretrained: Optional[str], device: str):
     return CLIPFMPolicyRunner(raw, device)
 
 
+def _make_clip_fm_wrapper(pretrained: Optional[str], device: str):
+    """Wrapper for clip_fm: loads CLIPFlowMatchingPolicy + CLIPFMPolicyRunner."""
+    raw = _make_clip_fm_policy(pretrained, device)
+    return CLIPFMPolicyRunner(raw, device)
+
+
 _POLICY_LOADERS = {
     "mock":          _make_mock_policy,
-    "clip_fm":       _make_clip_fm_policy_wrapper,
+    "clip_fm":       _make_clip_fm_wrapper,
     "task_oriented": _make_task_oriented_wrapper,
 }
 

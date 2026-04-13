@@ -1,9 +1,133 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
-**Last Updated:** 2026-04-13 03:00 JST
-**Status:** ✅ Goal-Directed Training + MuJoCo Stability Fix — goal_5k dataset (10k frames, 39% positive rewards, 20 epochs in 332s, loss 1.35→0.80)
+**Last Updated:** 2026-04-13 10:30 JST
+**Status:** 🚀 Phase 9 — `policy:=clip_fm` Bug Fixed + Architecture Audit
 
 ---
+
+---
+
+## 2026-04-13 10:30 JST — Cycle 12: VLA Policy Node Bug Fix + Architecture Audit
+
+### 🐛 Critical Bug Fixed: `clip_fm` Policy Loader — `NameError` at Runtime
+
+**Problem:** `_POLICY_LOADERS` dict in `vla_policy_node.py` referenced
+`_make_clip_fm_policy_wrapper` (line 340), but this function **does not exist**.
+The actual wrapper function was named `_make_clip_fm_wrapper` (confirmed in
+nested package copy, already correct). Using `policy:=clip_fm` would raise
+`NameError: name '_make_clip_fm_policy_wrapper' is not defined` immediately
+on node startup.
+
+**Affected files (both copies had the bug):**
+```
+src/lekiwi_ros2_bridge/vla_policy_node.py          ← OUTER (symlink src/)
+src/lekiwi_ros2_bridge/lekiwi_ros2_bridge/vla_policy_node.py  ← NESTED (entry point)
+```
+
+**Fix applied (both files):**
+```python
+# Added new wrapper function:
+def _make_clip_fm_wrapper(pretrained: Optional[str], device: str):
+    """Wrapper for clip_fm: loads CLIPFlowMatchingPolicy + CLIPFMPolicyRunner."""
+    raw = _make_clip_fm_policy(pretrained, device)
+    return CLIPFMPolicyRunner(raw, device)
+
+_POLICY_LOADERS = {
+    "mock":          _make_mock_policy,
+    "clip_fm":       _make_clip_fm_wrapper,   # ← was: _make_clip_fm_policy_wrapper (BROKEN)
+    "task_oriented": _make_task_oriented_wrapper,
+}
+```
+
+**Impact:** `ros2 launch lekiwi_ros2_bridge full.launch.py policy:=clip_fm`
+would crash immediately. Users of `policy:=mock` or `policy:=task_oriented`
+were unaffected. The `task_oriented` wrapper (`_make_task_oriented_wrapper`)
+existed and was correctly referenced.
+
+### 🔧 Doc Fix: bridge_node.py Arm Joint Comments
+
+**Problem:** Comments above `URDF_ARM_JOINT_NAMES` listed wheel joint names
+under "Arm joints" heading (lines 63-66), and referenced non-existent
+"ST3215_Servo_Motor-v1-X_Revolute-Y" names. These were stale comments from
+before URDF integration.
+
+**Fix:** Rewrote comments to accurately document actual arm joint names
+from lekiwi.urdf:
+```python
+# Arm joints (from lekiwi.urdf Revolute joints):
+#   arm_j0 → STS3215_03a-v1_Revolute-45    (shoulder pan, axis≈Z, range ±1.57)
+#   arm_j1 → STS3215_03a-v1-1_Revolute-49  (shoulder lift, axis=[1,0,0], range -3.14..0)
+#   arm_j2 → STS3215_03a-v1-2_Revolute-51   (elbow, axis=[1,0,0], range 0..3.14)
+#   arm_j3 → STS3215_03a-v1-3_Revolute-53   (wrist pitch, axis=[1,0,0], range 0..3.14)
+#   arm_j4 → STS3215_03a_Wrist_Roll-v1_Revolute-55  (wrist roll)
+#   arm_j5 → STS3215_03a-v1-4_Revolute-57  (gripper slide, axis=[0,-0.906,-0.423])
+```
+
+### 📊 Architecture Audit Results
+
+**Confirmed operational:**
+```
+bridge_node.py (entry) → bridge_node.py (nested) → lekiwi_sim_loader.py
+                                                          ├── LeKiWiSim (primitive)
+                                                          ├── LeKiWiSimURDF (STL meshes)
+                                                          └── RealHardwareAdapter (serial)
+vla_policy_node.py → CLIPFMPolicyRunner → CLIPFlowMatchingPolicy.infer()
+replay_node.py → h5py trajectory → /lekiwi/joint_states + /lekiwi/cmd_vel
+```
+
+**Package structure:**
+```
+src/lekiwi_ros2_bridge/              ← symlink or colcon build target
+  bridge_node.py                      ← outer copy (not entry point)
+  vla_policy_node.py                   ← outer copy (had bug)
+  setup.py                            ← entry points → lekiwi_ros2_bridge.lekiwi_ros2_bridge.*
+  lekiwi_ros2_bridge/                 ← nested package (ACTUAL entry point)
+    bridge_node.py                     ← 814 lines (entry point)
+    vla_policy_node.py                 ← 531 lines (nested copy, already fixed)
+    lekiwi_sim_loader.py               ← factory: sim_type → sim backend
+    security_monitor.py
+    policy_guardian.py
+    trajectory_logger.py
+    replay_node.py
+    real_hardware_adapter.py
+  launch/
+    bridge.launch.py
+    full.launch.py                      ← default: bridge + vla_policy_node
+    vla.launch.py
+    real_mode.launch.py
+```
+
+**Launch defaults confirmed:**
+```
+bridge.launch.py:     sim_type='urdf', mode='sim'
+full.launch.py:       sim_type='urdf', mode='sim', policy='task_oriented'
+real_mode.launch.py:  sim_type='urdf', mode='real'
+vla.launch.py:        policy='mock'
+```
+
+**Available checkpoints (5 architectures):**
+```
+mock             — MockPolicyRunner (sinusoidal, no GPU)
+clip_fm          — CLIPFlowMatchingPolicy (CLIP ViT-B/32, 398 keys, ~610MB)
+task_oriented    — CLIPFlowMatchingPolicy (reward-weighted, 419 keys)
+pi0 / pi0_fast   — LeRobot PI0Config
+act / diffusion  — LeRobot ACTConfig / DiffusionConfig
+```
+
+### 📋 Next Steps (Priority Order)
+
+1. **End-to-end launch test**: `ros2 launch lekiwi_ros2_bridge full.launch.py policy:=mock`
+   - Verify bridge + VLA policy loop runs without errors
+   - Confirm `/lekiwi/vla_action` publishes at ~20 Hz
+2. **clip_fm launch test**: `policy:=clip_fm` — now that the NameError is fixed
+3. **VLA training continuation**: task_oriented @ epoch 30 → 50 epochs
+4. **Real hardware**: `mode:=real` with ST3215 serial integration
+5. **Extended eval**: Test task_oriented policy at training-distribution goals
+
+### 阻礙
+- No ROS2/colcon environment available to run live tests (ros2 CLI not in PATH)
+- Need akamai/cloud GPU for pi0 / full CLIP-FM training
+- VLA navigation 0% success at (0.5, 0.0) — evaluate at training-distribution goals
 
 ---
 

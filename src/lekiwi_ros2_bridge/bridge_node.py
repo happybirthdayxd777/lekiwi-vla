@@ -59,13 +59,13 @@ from trajectory_logger import TrajectoryRecorder
 #   wheel_0 → ST3215_Servo_Motor-v1_Revolute-64
 #   wheel_1 → ST3215_Servo_Motor-v1-1_Revolute-62
 #   wheel_2 → ST3215_Servo_Motor-v1-2_Revolute-60
-# Arm joints (from URDF Revolute joints):
-#   arm_j0 → ST3215_Servo_Motor-v1-1_Revolute-49  (first arm joint)
-#   arm_j1 → ST3215_Servo_Motor-v1-2_Revolute-51
-#   arm_j2 → ST3215_Servo_Motor-v1-3_Revolute-53
-#   arm_j3 → STS3215_03a_Wrist_Roll-v1_Revolute-55
-#   arm_j4 → STS3215_03a-v1-4_Revolute-57
-#   arm_j5 → (gripper slide — not in URDF Gazebo plugin)
+# Arm joints (from lekiwi.urdf Revolute joints):
+#   arm_j0 → STS3215_03a-v1_Revolute-45    (shoulder pan, axis≈Z, range ±1.57)
+#   arm_j1 → STS3215_03a-v1-1_Revolute-49  (shoulder lift, axis=[1,0,0], range -3.14..0)
+#   arm_j2 → STS3215_03a-v1-2_Revolute-51   (elbow, axis=[1,0,0], range 0..3.14)
+#   arm_j3 → STS3215_03a-v1-3_Revolute-53   (wrist pitch, axis=[1,0,0], range 0..3.14)
+#   arm_j4 → STS3215_03a_Wrist_Roll-v1_Revolute-55  (wrist roll, axis=[0,0.423,-0.906])
+#   arm_j5 → STS3215_03a-v1-4_Revolute-57  (gripper slide, axis=[0,-0.906,-0.423], range ±1.57)
 URDF_WHEEL_JOINT_NAMES = [
     "ST3215_Servo_Motor-v1_Revolute-64",       # wheel_0 → w1 in bridge
     "ST3215_Servo_Motor-v1-1_Revolute-62",     # wheel_1 → w2 in bridge
