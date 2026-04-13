@@ -170,15 +170,21 @@ class CLIPVisionEncoder(nn.Module):
 # ─── Flow Matching Policy ─────────────────────────────────────────────────────
 
 class FlowMatchingHead(nn.Module):
-    """Flow Matching MLP: predicts velocity = x_0 - x_noise."""
-    def __init__(self, vision_dim=512, state_dim=9, action_dim=9, hidden=512):
+    """Flow Matching MLP: predicts velocity = x_0 - x_noise.
+
+    Goal-Aware Architecture (Phase 16):
+    - state_dim=11: arm_pos(6) + wheel_vel(3) + goal_xy(2)
+    - total_dim = 512(vision) + 11(state) + 9(action) + 256(time) = 788
+    """
+    def __init__(self, vision_dim=512, state_dim=11, action_dim=9, hidden=512):
         super().__init__()
         self.action_dim = action_dim
+        self.state_dim = state_dim
 
         self.time_mlp = nn.Sequential(
             nn.Linear(1, 128), nn.SiLU(), nn.Linear(128, 256)
         )
-        total_dim = vision_dim + state_dim + action_dim + 256  # 786
+        total_dim = vision_dim + state_dim + action_dim + 256  # 788 for goal-aware (11D)
         self.net = nn.Sequential(
             nn.Linear(total_dim, hidden), nn.SiLU(), nn.LayerNorm(hidden),
             nn.Linear(hidden, hidden), nn.SiLU(), nn.LayerNorm(hidden),
@@ -198,8 +204,12 @@ class CLIPFlowMatchingPolicy(nn.Module):
     Full VLA policy: CLIP vision encoder + Flow Matching action head.
     Vision: frozen CLIP ViT-B/32 (151M)
     Action: Flow Matching MLP (8M trainable)
+
+    Goal-Aware (Phase 16):
+      state = arm_pos(6) + wheel_vel(3) + goal_xy(2) = 11D
+      Policy now knows WHERE to go, enabling true goal-directed navigation.
     """
-    def __init__(self, state_dim=9, action_dim=9, hidden=512, device="cpu"):
+    def __init__(self, state_dim=11, action_dim=9, hidden=512, device="cpu"):
         super().__init__()
         self.vision_encoder = CLIPVisionEncoder(device=device)
         self.flow_head = FlowMatchingHead(
@@ -214,6 +224,7 @@ class CLIPFlowMatchingPolicy(nn.Module):
         n_flow      = sum(p.numel() for p in self.flow_head.parameters())
         n_trainable = sum(p.numel() for p in self.flow_head.parameters() if p.requires_grad)
         print(f"[INFO] Total params: {n_vision + n_flow:,} | trainable: {n_trainable:,}")
+        print(f"[INFO] State dim: {state_dim} (goal-aware: {state_dim}D)")
 
     def forward(self, image, state, noisy_action, timestep):
         vis = self.vision_encoder(image)
@@ -221,7 +232,12 @@ class CLIPFlowMatchingPolicy(nn.Module):
 
     @torch.no_grad()
     def infer(self, image, state, num_steps=4):
-        """4-step Euler ODE inference."""
+        """4-step Euler ODE inference.
+
+        Args:
+            image: [B, 3, 224, 224] RGB
+            state: [B, 11] — arm_pos(6) + wheel_vel(3) + goal_xy(2)
+        """
         action = torch.randn(image.shape[0], self.action_dim, device=self.device)
         dt = 1.0 / num_steps
         for i in range(num_steps):
@@ -315,16 +331,22 @@ class GoalOrientedReplayBuffer:
     Replay buffer for goal-directed training using lekiwi_goal_5k.h5 dataset.
     Each frame has its own goal position and pre-computed reward signal.
     Uses the dataset's pre-computed rewards directly (no simulation re-roll needed).
+
+    Goal-Aware State (Phase 16):
+      HDF5 stores: arm_pos(6) + wheel_vel(3) = 9D per frame
+      goal_positions: (N, 2) per frame — goal x, y
+      We BUILD 11D state = [arm_pos(6), wheel_vel(3), goal_xy(2)]
+      Policy receives explicit goal coordinates → true goal-directed behavior.
     """
 
     def __init__(self, h5_path, batch_size=16, goal_threshold=0.1):
         print(f"[INFO] Loading goal HDF5: {h5_path}")
         with h5py.File(h5_path, "r") as f:
-            self.images       = f["images"][:]
-            self.states       = f["states"][:]
-            self.actions      = f["actions"][:]
-            self.rewards      = f["rewards"][:]
-            self.goal_positions = f["goal_positions"][:]
+            self.images         = f["images"][:]
+            self.states_9d      = f["states"][:]          # (N, 9) arm_pos + wheel_vel
+            self.actions        = f["actions"][:]
+            self.rewards        = f["rewards"][:]
+            self.goal_positions = f["goal_positions"][:]   # (N, 2) goal x, y
 
         N = len(self.actions)
         print(f"[INFO] {N:,} goal-directed frames loaded")
@@ -333,6 +355,13 @@ class GoalOrientedReplayBuffer:
         print(f"[INFO] Positive reward frames: {(self.rewards > 0).sum():,} / {N:,} "
               f"({100*(self.rewards > 0).mean():.1f}%)")
         print(f"[INFO] Goals: {len(np.unique(self.goal_positions, axis=0)):,} unique positions")
+
+        # ── Build 11D state by appending goal_xy to each frame's 9D state ───────
+        # Normalize goal_xy to [-1, 1] based on arena bounds [-1, 1]
+        goal_norm = np.clip(self.goal_positions / 1.0, -1.0, 1.0).astype(np.float32)
+        self.states_11d = np.concatenate([self.states_9d, goal_norm], axis=1)  # (N, 11)
+        print(f"[INFO] State: 9D(h5) + 2D(goal) = 11D goal-aware vector")
+        print(f"[INFO] States: {self.states_9d.shape} → {self.states_11d.shape}")
 
         # Compute sample weights from pre-computed rewards
         is_goals = (self.rewards >= 1.0)
@@ -351,7 +380,8 @@ class GoalOrientedReplayBuffer:
 
         imgs = torch.from_numpy(self.images[idx].astype(np.float32) / 255.0)
         imgs = imgs.permute(0, 3, 1, 2)
-        states  = torch.from_numpy(self.states[idx].astype(np.float32))
+        # Return 11D state with goal_xy embedded
+        states  = torch.from_numpy(self.states_11d[idx].astype(np.float32))
         actions = torch.from_numpy(self.actions[idx].astype(np.float32))
         weights = torch.from_numpy(sample_weights)
 
@@ -536,8 +566,11 @@ def main():
         )
 
     print("\n[2] Building CLIP-Flow Matching policy...")
+    # Goal-aware mode: state_dim=11 (arm_pos 6 + wheel_vel 3 + goal_xy 2)
+    state_dim = 11 if args.goal_data else 9
+    print(f"[INFO] State dim: {state_dim}D ({'goal-aware' if state_dim == 11 else 'standard'})")
     policy = CLIPFlowMatchingPolicy(
-        state_dim=9, action_dim=9,
+        state_dim=state_dim, action_dim=9,
         hidden=args.hidden, device=args.device
     )
     start_epoch = 0

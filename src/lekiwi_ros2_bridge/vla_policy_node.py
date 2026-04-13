@@ -310,12 +310,14 @@ def _make_task_oriented_policy(pretrained: Optional[str], device: str):
     Checkpoint format: {'epoch': int, 'policy_state_dict': state_dict, ...}
 
     Default checkpoint: results/task_oriented_50ep/checkpoint_epoch_30.pt
+
+    Phase 16: Uses state_dim=11 (goal-aware: arm_pos6 + wheel_vel3 + goal_xy2)
     """
     import torch
     sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
     from scripts.train_task_oriented import CLIPFlowMatchingPolicy as TOClipFlowMatchingPolicy
 
-    policy = TOClipFlowMatchingPolicy(state_dim=9, action_dim=9, hidden=512, device=device)
+    policy = TOClipFlowMatchingPolicy(state_dim=11, action_dim=9, hidden=512, device=device)
 
     if pretrained:
         ckpt_path = os.path.expanduser(pretrained)
@@ -374,14 +376,23 @@ class LeKiWiVLAPolicyNode(Node):
     def __init__(self, policy_name: str = "mock", pretrained: Optional[str] = None):
         super().__init__("lekiwi_vla_policy_node")
 
-        # ── Parameters ────────────────────────────────────────────────────────
+        # ── Parameters ───────────────────────────────────────────────────────
         self.declare_parameter("policy",     "mock")
         self.declare_parameter("pretrained", "")
         self.declare_parameter("device",    "cpu")
+        # Phase 16: goal_xy for goal-aware 11D state
+        self.declare_parameter("goal_x",    0.5)
+        self.declare_parameter("goal_y",    0.0)
 
         policy_name  = str(self.get_parameter("policy").value)
         pretrained_v = self.get_parameter("pretrained").value
         device       = str(self.get_parameter("device").value)
+        goal_x       = float(self.get_parameter("goal_x").value)
+        goal_y       = float(self.get_parameter("goal_y").value)
+
+        # Phase 16: normalize goal to [-1, 1] for 11D state embedding
+        self._goal_xy = np.array([goal_x, goal_y], dtype=np.float32)
+        self._goal_xy_norm = np.clip(self._goal_xy / 1.0, -1.0, 1.0)
 
         pretrained = str(pretrained_v) if pretrained_v else None
 
@@ -485,16 +496,19 @@ class LeKiWiVLAPolicyNode(Node):
         img_arr = np.array(img_resized).transpose(2, 0, 1).astype(np.float32) / 255.0
 
         joints = self._last_joints
+        # Phase 16: Build state with goal_xy (11D) or without (9D legacy)
         # NOTE: CLIP-FM policy was trained with wheel_velocities as the 3 wheel
         # state dimensions (matching lerobot_policy_inference.py), NOT positions.
-        state = np.concatenate([
+        base_state = np.concatenate([
             joints["arm_positions"],
-            joints["wheel_velocities"],   # ← was: wheel_positions (training mismatch bug)
+            joints["wheel_velocities"],
         ]).astype(np.float32)
+        # Append normalized goal_xy for goal-aware policy
+        state = np.concatenate([base_state, self._goal_xy_norm]).astype(np.float32)
 
         obs = {
             "observation.images.primary": img_arr[np.newaxis, ...],   # (1,3,224,224)
-            "observation.state":          state[np.newaxis, ...],     # (1,9)
+            "observation.state":          state[np.newaxis, ...],     # (1,11) goal-aware
         }
 
         # Policy inference

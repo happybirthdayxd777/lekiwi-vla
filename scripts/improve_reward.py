@@ -31,18 +31,26 @@ from sim_lekiwi_urdf import LeKiWiSimURDF
 
 
 class TaskEvaluator:
-    """Task-oriented evaluation for LeKiWi robot."""
+    """Task-oriented evaluation for LeKiWi robot.
 
-    def __init__(self, sim, policy=None, device="cpu"):
+    Phase 16 Goal-Aware:
+      Policy state_dim=11 → [arm_pos(6), wheel_vel(3), goal_xy(2)]
+      If self.goal_pos is set, _get_action embeds goal_xy into state.
+      Otherwise falls back to 9D state for legacy policy compatibility.
+    """
+
+    def __init__(self, sim, policy=None, device="cpu", goal_pos=None):
         """
         Args:
             sim: LeKiWiSim or LeKiWiSimURDF instance
             policy: Policy with .infer(image, state) method. If None → random baseline.
             device: Device for policy inference (cpu/mps/cuda)
+            goal_pos: (x, y) goal in meters. If set, appended to state as goal_xy(2).
         """
         self.sim = sim
         self.policy = policy
         self.device = device
+        self.goal_pos = goal_pos  # Set by reach_target() before evaluation loop
 
     def _get_action(self, img):
         """Infer action from policy, or random if no policy."""
@@ -62,9 +70,6 @@ class TaskEvaluator:
         # LeKiWiSim (primitive):     qpos[0:6]=arm_joints, qpos[6:9]=wheel_pos, qvel same
         # LeKiWiSimURDF (STL mesh): qpos[0:7]=base_free(xyz+quat), qpos[7:13]=arm_joints,
         #                            qvel[0:6]=base_linang, qvel[6:9]=arm_vel, qvel[9:12]=wheel_vel
-        # CRITICAL BUG FIX (2026-04-13): the old code used qpos[0:6] + qvel[0:3]
-        # which gave BASE position (x,y,z,qw,qx,qy) + BASE velocity (vx,vy,vz)!
-        # This caused the policy to receive meaningless state and fail at navigation.
         from sim_lekiwi_urdf import LeKiWiSimURDF
         if isinstance(self.sim, LeKiWiSimURDF):
             arm_pos = np.array([self.sim.data.qpos[self.sim._jpos_idx[n]]
@@ -74,7 +79,18 @@ class TaskEvaluator:
         else:
             arm_pos = self.sim.data.qpos[0:6]
             wheel_v = self.sim.data.qvel[6:9]
-        state_t = torch.from_numpy(np.concatenate([arm_pos, wheel_v])).float().unsqueeze(0).to(self.device)
+
+        # Phase 16: append goal_xy if goal_pos is set (goal-aware policy)
+        if self.goal_pos is not None:
+            goal_norm = np.clip(np.array(self.goal_pos) / 1.0, -1.0, 1.0).astype(np.float32)
+            state_t = torch.from_numpy(
+                np.concatenate([arm_pos, wheel_v, goal_norm])
+            ).float().unsqueeze(0).to(self.device)
+        else:
+            state_t = torch.from_numpy(
+                np.concatenate([arm_pos, wheel_v])
+            ).float().unsqueeze(0).to(self.device)
+
         action = self.policy.infer(img_t, state_t, num_steps=4)
         return np.clip(action.cpu().numpy()[0], -1, 1).astype(np.float32)
 
@@ -95,12 +111,15 @@ class TaskEvaluator:
         """
         target_arr = np.array(target)
         start_arr  = np.array(start)
-        
+
+        # ── Phase 16: Set goal_pos so _get_action passes 11D state to policy ────
+        self.goal_pos = (float(target_arr[0]), float(target_arr[1]))
+
         # Reset sim first, then set target marker at goal
         self.sim.reset()  # Reset at default (origin) first
         if hasattr(self.sim, 'set_target'):
             self.sim.set_target(target_arr)  # Show marker at goal position
-        
+
         # Move robot to START position (if sim supports it)
         # LeKiWiSimURDF uses qpos[:2] = base x, y
         if hasattr(self.sim, '_jpos_idx'):
@@ -269,12 +288,13 @@ def main():
     policy = None
     if args.policy:
         from scripts.train_task_oriented import CLIPFlowMatchingPolicy
-        policy = CLIPFlowMatchingPolicy(state_dim=9, action_dim=9, hidden=512, device=args.device)
+        # Phase 16: goal-aware policy uses state_dim=11
+        policy = CLIPFlowMatchingPolicy(state_dim=11, action_dim=9, hidden=512, device=args.device)
         state_dict = torch.load(args.policy, map_location=args.device, weights_only=False)
         policy.load_state_dict(state_dict.get("policy_state_dict", state_dict), strict=False)
         policy.to(args.device)
         policy.eval()
-        print(f"Loaded policy: {args.policy}")
+        print(f"Loaded policy: {args.policy} (goal-aware, state_dim=11)")
 
     evaluate_policy(policy=policy, device=args.device, episodes=args.episodes,
                     task=args.task, sim=sim,

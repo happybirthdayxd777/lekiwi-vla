@@ -104,17 +104,30 @@ def make_lekiwi_observation(
     image: Image.Image,
     arm_positions: np.ndarray,
     wheel_velocities: np.ndarray,
+    goal_xy: Optional[np.ndarray] = None,
 ) -> dict:
-    """Convert LeKiwi state → LeRobot observation dict."""
+    """Convert LeKiwi state → LeRobot observation dict.
+
+    Phase 16 Goal-Aware:
+      If goal_xy is provided, state = [arm_pos(6), wheel_vel(3), goal_xy(2)] = 11D
+      Otherwise state = [arm_pos(6), wheel_vel(3)] = 9D (legacy)
+    """
     img_resized = image.resize((224, 224), Image.BILINEAR)
     img_tensor = torch.from_numpy(
         np.array(img_resized).transpose(2, 0, 1)
     ).float() / 255.0
-    state = np.concatenate([arm_positions, wheel_velocities]).astype(np.float32)
+
+    base_state = np.concatenate([arm_positions, wheel_velocities]).astype(np.float32)
+    if goal_xy is not None:
+        # Normalize goal to [-1, 1] based on 1m arena radius
+        goal_norm = np.clip(goal_xy / 1.0, -1.0, 1.0).astype(np.float32)
+        state = np.concatenate([base_state, goal_norm]).astype(np.float32)
+    else:
+        state = base_state
 
     return {
         "observation.images.primary": img_tensor.unsqueeze(0),   # (1,3,224,224)
-        "observation.state":          torch.from_numpy(state).unsqueeze(0),  # (1,9)
+        "observation.state":          torch.from_numpy(state).unsqueeze(0),  # (1,9) or (1,11)
     }
 
 
