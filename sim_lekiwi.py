@@ -203,6 +203,16 @@ ALL_JOINTS   = ARM_JOINTS + WHEEL_JOINTS
 def _jid(model, name: str) -> int:
     return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
 
+def _jpos(model, name: str) -> int:
+    """Return qpos address for named joint — correct index into data.qpos."""
+    jid = _jid(model, name)
+    return int(model.jnt_qposadr[jid])
+
+def _jvel(model, name: str) -> int:
+    """Return dofadr for named joint — correct index into data.qvel."""
+    jid = _jid(model, name)
+    return int(model.jnt_dofadr[jid])
+
 
 # ─── Gymnasium Wrapper ────────────────────────────────────────────────────────
 
@@ -236,9 +246,9 @@ class LeKiwiEnv(gym.Env):
         self.render_mode = render_mode
         self._viewer = None
 
-        # Pre-index joint positions/velocities
-        self._jpos_idx = {n: _jid(self.model, n) for n in ALL_JOINTS}
-        self._jvel_idx = {n: _jid(self.model, n) for n in ALL_JOINTS}
+        # Pre-index joint positions/velocities (store qpos/dof addresses, not joint IDs)
+        self._jpos_idx = {n: _jpos(self.model, n) for n in ALL_JOINTS}
+        self._jvel_idx = {n: _jvel(self.model, n) for n in ALL_JOINTS}
 
         # Target for reward (x=0.5, y=0)
         self._target = np.array([0.5, 0.0, 0.0])
@@ -334,8 +344,8 @@ class LeKiwiSim:
     def __init__(self):
         self.model = mujoco.MjModel.from_xml_string(LEKIWI_XML)
         self.data  = mujoco.MjData(self.model)
-        self._jpos_idx = {n: _jid(self.model, n) for n in ALL_JOINTS}
-        self._jvel_idx = {n: _jid(self.model, n) for n in ALL_JOINTS}
+        self._jpos_idx = {n: _jpos(self.model, n) for n in ALL_JOINTS}
+        self._jvel_idx = {n: _jvel(self.model, n) for n in ALL_JOINTS}
         self._target = np.array([0.5, 0.0, 0.0])  # default goal (x, y, z)
         self.action_dim = 9
         self.reset()
