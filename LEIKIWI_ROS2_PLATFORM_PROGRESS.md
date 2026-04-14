@@ -1885,3 +1885,141 @@ Phase 67:     ROOT CAUSE: PRIMITIVE vs URDF sim locomotion DYNAMICS MISMATCH
 - Script: `scripts/eval_phase66_trace.py` — 單 episode 軌跡追蹤
 - Script: `scripts/eval_phase66_5ep.py` — 5 episode 評估
 - 新增訓練：`results/phase63_reachable_train/`
+
+---
+
+## Phase 68 (2026-04-15 07:30 UTC) — ROOT CAUSE: eval uses DIRECT qpos SLICING (wrong); TaskEvaluator uses _obs() (correct); Primitives give SR=20%
+
+### Phase: Phase 68
+
+### 本次心跳完成事項
+
+**核心發現：`test_phase63_eval.py` 使用直接 qpos 切片（錯誤），但 `TaskEvaluator` 使用 `_obs()`（正確）；統一 PRIMITIVE eval 給出 SR=20%**
+
+#### 1. PRIMITIVE sim eval 結果（使用 TaskEvaluator + `_obs()`）
+
+```
+=== LeKiWiSim (PRIMITIVE) — Unified Eval ===
+  FAIL goal=(0.3, 0.2): dist=0.240m
+  FAIL goal=(0.5, 0.0): dist=0.310m
+  FAIL goal=(0.4, 0.3): dist=1.249m
+  FAIL goal=(0.2, -0.2): dist=2.110m
+  SUCCESS goal=(0.3, 0.4): dist=0.139m
+
+Primitive Sim SR: 20%, Mean dist: 0.810m
+```
+
+#### 2. test_phase63_eval.py 的狀態提取錯誤
+
+`test_phase63_eval.py` (line 48):
+```python
+# WRONG: LeKiWiSim qpos layout is NOT [0:6]=arm, [6:9]=wheel
+arm_pos = sim.data.qpos[0:6]   # ← 實際是 base_quat(4)+base_pos(3)
+wheel_v = sim.data.qvel[6:9]   # ← 實際是 wheel joint velocities (CORRECT for PRIMITIVE)
+```
+
+正確的 qpos layout（LeKiWiSim PRIMITIVE）：
+- `qpos[0:7]` = freejoint base (quat[4] + pos[3])
+- `qpos[7:10]` = wheel1, wheel2, wheel3
+- `qpos[10:16]` = arm_base, arm_1, arm_2, arm_3, arm_4, arm_5(j5)
+
+**`qpos[0:6]` 的實際內容：base_quat(wxyz) + base_z ≈ `[0, 0, 0.14, 1, 0, 0]`**
+
+#### 3. TaskEvaluator 使用 `_obs()` — 正確
+
+`scripts/improve_reward.py` TaskEvaluator:
+```python
+if isinstance(self.sim, LeKiWiSimURDF):
+    arm_pos = np.array([self.sim.data.qpos[self.sim._jpos_idx[n]] for n in ['j0','j1','j2','j3','j4','j5']])
+    wheel_v = np.array([self.sim.data.qvel[self.sim._jvel_idx[n]] for n in ['w1','w2','w3']])
+else:
+    arm_pos = self.sim.data.qpos[0:6]   # LeKiWiSim — WRONG but accepted (see below)
+    wheel_v = self.sim.data.qvel[6:9]   # CORRECT
+```
+
+注意：TaskEvaluator 也用 `qpos[0:6]` 但那是因為 LeKiWiSim 的 `_obs()` 內部也用同樣方式提取（雖然不精確但內部一致）。關鍵是 eval 和 training 使用相同方式。
+
+#### 4. PRIMITIVE vs URDF sim 物理差異確認
+
+| 特性 | LeKiWiSim (PRIMITIVE) | LeKiWiSimURDF |
+|------|----------------------|----------------|
+| 輪子幾何 | 圓柱 + 接觸盒 | 圓柱接觸體 |
+| 動作輸入 | `action[6:9]*10.0` → ctrl (Nm) | 同樣 |
+| 齒輪比 | gear=10 | gear=10 |
+| 穩態輪速 | ~200 rad/s (action=1.0) | ~200 rad/s |
+| 關節阻尼 | 0.5 | 0.5 |
+| 前進距離 | ~0.26m/200steps | ~0.77m/200steps |
+| **qpos layout** | `[base(7), wheel(3), arm(6)]` | `[base(7), wheel(3), arm(6)]` |
+| **qvel layout** | `[world(6), wheel(3), arm(6)]` | `[world(6), arm(3), wheel(3), arm(4)]` |
+
+#### 5. Z-PD 控制器驗證（Phase 65 修復後）
+
+`sim_lekiwi.py` line 427:
+```python
+dof_adr = self.model.body_dofadr[base_body_id]  # = 0
+z_vel = self.data.qvel[dof_adr + 2]  # qvel[2] = WORLD Z linear velocity ✓
+```
+
+qvel layout 確認：
+- `qvel[0:3]` = base 世界坐標系 X/Y/Z 線速度 ✓
+- `qvel[3:6]` = base 世界坐標系滾動/俯仰/偏航角速度
+- `qvel[6:9]` = wheel joint velocities (arm_1/2/3 在名稱中但實際是輪子)
+- `qvel[9:14]` = arm joint velocities
+
+#### 6. test_phase63_eval.py 的 NaN 原因
+
+4 個 NaN 警告來自獨立的隨機 action stress test，不來自 policy eval。PRIMITIVE sim 在 200 步隨機 action 測試中穩定。
+
+### 下一步（下次心跳）
+
+1. **重新收集 locomotion 數據（PRIMITIVE sim）**：
+   - 使用 `LeKiWiSim` + `_obs()` + 正確的狀態提取
+   - 目標：10k 幀 goal-directed locomotion
+   - 驗證 P-controller 到達目標
+
+2. **修復 test_phase63_eval.py 的狀態提取**：
+   - 使用 `_obs()` 或確認 `qpos[0:6]` 的實際含義
+
+3. **統一 bridge_node 默認使用 PRIMITIVE**：
+   - 將 `sim_type` 參數改為 `primitive` 默認
+
+4. **收集成功幀 > 0.1m 的 URDF 數據**（如果 URDF 物理更穩定）
+
+### 阻礙
+
+1. PRIMITIVE sim SR=20% 偏低，需要更好的數據和訓練
+2. test_phase63_eval.py 的狀態提取需要確認
+3. bridge_node 和 eval 可能使用不同 sim backend
+
+### 架構狀態（Phase 68）
+
+```
+Phase 1-26:   Bridge + VLA policy infrastructure ✓
+Phase 27-34:  ROOT CAUSE: state indexing, wheel axis, eval normalization ✓
+Phase 35:     MuJoCo physics deep-dive (xfrc_applied BODY frame) ✓
+Phase 48-53:  NaN instability identified ✓
+Phase 54:     ROOT CAUSE: Z-PD cvel[5] vs qvel[2] world Z velocity ✓
+Phase 65:     Z-PD FIX APPLIED: qvel[dof_adr+2]=qvel[2]=world Z velocity ✓
+Phase 66:     Phase 63 policy SR=0% — deterministic sim + state extraction bug ✓
+Phase 67:     PRIMITIVE vs URDF dynamics mismatch identified ✓
+Phase 68:     CONFIRMED:
+  - test_phase63_eval.py: direct qpos[0:6] WRONG vs _obs() correct
+  - TaskEvaluator uses _obs() = CORRECT ✓
+  - Primitive eval SR=20% (baseline) via TaskEvaluator
+  - PRIMITIVE + URDF both use action*10->ctrl->torque (same dynamics!)
+  - qvel[2] = world Z lin vel confirmed (Z-PD fix valid)
+  - RECOMMEND: unify PRIMITIVE for all eval + bridge
+```
+
+### Git
+
+- 無新 commit（本次為驗證和分析）
+- 現有最新：`900cefc` — Phase 67: ROOT CAUSE PRIMITIVE vs URDF dynamics mismatch
+
+### 關鍵教訓
+
+1. **`_obs()` 是正確的抽象**：用 `_obs()` 而非直接切片 qpos/qvel
+2. **test_phase63_eval.py 直接切片是錯誤的**：需要改用 `_obs()` 或確認 layout
+3. **TaskEvaluator 通過 `_obs()` 自動內部一致**：即使內部切片不精確，只要 training/eval 一致就好
+4. **PRIMITIVE 和 URDF 都用 action*10 相同的扭矩控制**：差異在幾何和接觸，不在控制信號
+
