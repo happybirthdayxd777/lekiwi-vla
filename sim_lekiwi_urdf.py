@@ -423,13 +423,60 @@ class LeKiWiSimURDF:
         wheel_torque = np.clip(action[6:9], -1, 1) * 10.0
         return np.array([*arm, *wheel_torque], dtype=np.float64)
 
-    def reset(self, target=None):
-        """Reset sim. If target is given (x, y), update the goal marker position."""
+    def reset(self, target=None, seed=None):
+        """Reset sim with optional stochasticity.
+        
+        Phase 67 FIX: LeKiWiSimURDF was fully deterministic — each reset() + episode
+        produced identical trajectories, making policy eval unreliable (5 identical eps).
+        
+        Args:
+            target: (x, y) goal position. If None, uses default or last set_target().
+            seed:   Optional int random seed. When set, adds small random perturbations
+                    to initial state for realistic eval diversity:
+                    - Base position jitter: ±0.02m (x, y)
+                    - Base rotation jitter: ±0.05 rad (yaw)
+                    - Arm position perturbation: ±0.05 rad per joint
+                    - Wheel velocity perturbation: ±0.5 rad/s
+                    Without seed (or seed=0), behavior is unchanged (fully deterministic).
+        """
         mujoco.mj_resetData(self.model, self.data)
+        
+        # ── Phase 67: Stochastic perturbation when seed is set ──────────────────
+        if seed is not None and seed != 0:
+            rng = np.random.default_rng(seed)
+            # Base position jitter: ±0.02m in x, y
+            self.data.qpos[0] += rng.uniform(-0.02, 0.02)  # base x
+            self.data.qpos[1] += rng.uniform(-0.02, 0.02)  # base y
+            # Base quaternion perturbation: small yaw rotation
+            # qpos[2:6] = free joint quaternion [qx, qy, qz, qw] at world
+            # Add small Z-axis rotation via quaternion multiplication
+            yaw_delta = rng.uniform(-0.05, 0.05)
+            cos_yaw = np.cos(yaw_delta / 2)
+            sin_yaw = np.sin(yaw_delta / 2)
+            delta_q = np.array([0, 0, sin_yaw, cos_yaw])
+            base_q = self.data.qpos[2:6].copy()
+            # Quaternion multiplication: q_new = delta_q * base_q
+            self.data.qpos[2] = delta_q[0]*base_q[3] + delta_q[1]*base_q[2] - delta_q[2]*base_q[1] + delta_q[3]*base_q[0]
+            self.data.qpos[3] = delta_q[0]*base_q[2] + delta_q[1]*base_q[3] + delta_q[2]*base_q[0] - delta_q[3]*base_q[1]
+            self.data.qpos[4] = -delta_q[0]*base_q[1] + delta_q[1]*base_q[0] + delta_q[2]*base_q[3] + delta_q[3]*base_q[2]
+            self.data.qpos[5] = -delta_q[0]*base_q[0] - delta_q[1]*base_q[1] - delta_q[2]*base_q[2] + delta_q[3]*base_q[3]
+        
         # Set arm initial pose (j1/lift and j2/elbow)
         self.data.qpos[self._jpos_idx["j1"]] = 0.3
         self.data.qpos[self._jpos_idx["j2"]] = -0.3
-        # Set arm initial pose (j1/lift and j2/elbow)
+        
+        # Arm position perturbation if seeded
+        if seed is not None and seed != 0:
+            rng = np.random.default_rng(seed + 1000)  # different subseed
+            for jn in ARM_JOINTS:
+                if jn in self._jpos_idx:
+                    self.data.qpos[self._jpos_idx[jn]] += rng.uniform(-0.05, 0.05)
+            # Wheel velocity perturbation
+            for wn in WHEEL_JOINTS:
+                if wn in self._jvel_idx:
+                    v_adr = self._jvel_idx[wn]
+                    self.data.qvel[v_adr] += rng.uniform(-0.5, 0.5)
+        
         if target is not None:
             self.set_target(target)
         else:
