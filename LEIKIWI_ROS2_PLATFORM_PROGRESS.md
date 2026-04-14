@@ -612,3 +612,90 @@ Phase 44:     FIXED: primitive sim locomotion
 3. **Z-PD controller 必要**：FreeJoint base 會震蕩，Z-PD 保持 equilibrium height
 4. **M7=[1,1,1] 是 3-way stop 不是前進**：OMNI-wheel 幾何決定了合力方向，不是簡單的 "all forward"
 
+
+---
+
+## Phase 50 (2026-04-15 00:30 UTC) — Heartbeat: Kinematics Verified, Policy Evaluation Baseline
+
+### Phase: Phase 50
+
+### 本次心跳完成事項
+
+**核心：確認 bridge 運動學正確，policy 評估基準建立**
+
+#### 1. Bridge 運動學驗證（已確認正確）
+
+```
+python validate_bridge_kinematics.py
+RESULT: Kinematics tests PASSED — bridge WHEEL_POSITIONS match URDF ✓
+```
+
+Bridge WHEEL_POSITIONS 與 URDF 幾何完全匹配（Phase 48 已修復，Phase 49 驗證腳本已同步）。
+
+#### 2. Policy 評估基準（goal=(0.3, 0.2), 100 steps, URDF sim）
+
+| Checkpoint | Episodes | Mean Reward | Mean Dist | Success Rate |
+|---------|---------|-----------|---------|------------|
+| phase37_goal_fixed_train/final_policy.pt | 3 | -73.6 ± 14.2 | 1.39m | 0% |
+
+**分析：**
+- mean_dist=1.39m > 初始距離 √(0.3²+0.2²) ≈ 0.36m → policy 未朝目標移動
+- reward = -distance，best=-53.6（接近目標時），worst=-84（遠離目標）
+- URDF sim 物理正常：action=[0.5,0.5,0.5] → 0.49m 前進（已有數據）
+- 問題在於 policy 輸出 action 並未轉換為有效 locomotion
+
+#### 3. 已確認架構完整
+
+```
+lekiwi_ros2_bridge/ (927行 bridge_node.py)
+  ├── bridge_node.py      — ROS2↔MuJoCo 完整橋樑 ✓
+  ├── vla_policy_node.py  — VLA policy 推理 ✓
+  ├── replay_node.py      — 數據回放 ✓
+  ├── real_hardware_adapter.py — 真實硬體 ✓
+  ├── lekiwi_sim_loader.py — 統一加載介面 ✓
+  └── launch/
+      ├── bridge.launch.py     — 僅 bridge ✓
+      ├── full.launch.py      — 完整 launch ✓
+      ├── real_mode.launch.py — 真實硬體 ✓
+      └── vla.launch.py       — VLA 推理 ✓
+```
+
+### 下一步（下次心跳）
+
+1. **分析 policy action 輸出**：添加調試日誌，記錄每步 policy 輸出的 action 值
+   - 確認 policy 是否輸出了有意義的 wheel commands
+   - 對比 P-controller 輸出（已知可到達目標）
+
+2. **收集新的 locomotion 數據集**：
+   - 使用驗證過的 P-controller（已知可到達目標）
+   - 記錄 policy-style action (normalized -1..1) → wheel torque
+   - 目標：10k 幀 goal-directed locomotion
+
+3. **Bridge 端到端測試**（需 ROS2 環境）：
+   - 驗證 VLA action → bridge → LeKiWiSim → joint_states → VLA 閉環
+
+### 阻礙
+
+1. Policy SR=0% at 100 steps — 需深入分析 policy 行為
+2. 數據收集使用 P-controller（直接 torque），而 policy 輸出 normalized action
+3. macOS 無法運行 ROS2（需 Linux 環境做端到端測試）
+
+### 架構狀態（Phase 50）
+
+```
+Phase 1-26:   Bridge + VLA policy infrastructure ✓
+Phase 27-34:  ROOT CAUSE: state indexing, wheel axis, eval normalization ✓
+Phase 35:     MuJoCo physics deep-dive ✓
+Phase 48:     Bridge WHEEL_POSITIONS FIXED ✓
+Phase 49:     validate_bridge_kinematics.py stale reference FIXED ✓
+Phase 50:     Heartbeat: kinematics verified ✓, policy baseline SR=0% goal(0.3,0.2) 100steps
+  - validate_bridge_kinematics.py exit code 0 ✓
+  - bridge_node.py kinematics confirmed correct
+  - phase37_goal_fixed_train: mean_dist=1.39m > initial 0.36m (policy not moving toward goal)
+  - 需分析 policy action 輸出 vs P-controller 行為差異
+```
+
+### Git
+
+- Commit: `d7dc1db` — Phase 50 heartbeat: kinematics verified, eval SR=0% goal (0.3,0.2) 100steps
+- 已推送到 main 分支
