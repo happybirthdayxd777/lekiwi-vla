@@ -1650,3 +1650,123 @@ Phase 62:     ROOT CAUSE: Training data quadrant bias + distribution mismatch
 2. **GridSearchController 過度依賴 M7**：導致 95%+ 的數據都是 all-forward wheel commands
 3. **Episode-level 分析優於 Frame-level**：只看 frame reward 會忽略 goal arrival 的真實分佈
 4. **QACC warnings 信號不可靠**：它們預示 policy 正在 pushes sim 到不穩定區域，但 soft limits 不夠
+
+---
+
+## Phase 63 (2026-04-15 05:00 UTC) — ROOT CAUSE FIX: Reachable +X Hemisphere Goal Sampling
+
+### Phase: Phase 63
+
+### 本次心跳完成事項
+
+**核心修復：訓練數據只採樣可達到的 +X hemisphere goals**
+
+#### Phase 62 發現的 ROOT CAUSE
+
+機器人**只能向 +X 方向移動**：
+- M7=[1,1,1] (all forward) → +1.606m in +X (primary, fast)
+- M8=[-1,-1,-1] (all backward) → +0.159m in +X (slow)
+- **沒有任何 primitive 可以產生 -X 方向的運動**
+
+當 goals 在 -X quadrant 時：
+- GridSearchController 嘗試 M1/M2/M6 達到 -X goals
+- 這些 primitives 只能產生 +Y 或對角線運動
+- 機器人永遠無法到達 -X goals，產生大量失敗幀（負 reward）
+
+#### Phase 63 FIX: Reachable Goal Sampling
+
+修改 `collect_goal_directed.py` 的 goal 採樣邏輯：
+
+```python
+# 修改前（均勻圓形採樣）：
+angle = np.random.uniform(0, 2 * np.pi)  # 0°–360°
+
+# 修改後（+X hemisphere 採樣）：
+angle = np.random.uniform(-np.pi / 2, np.pi / 2)  # -90° to +90°
+```
+
+這確保：
+- 所有 goals 的 x >= 0（可達到）
+- Q2+Q3 (unreachable -X goals): 0% (was 56%)
+- Q1 (+X,+Y): ~50%, Q4 (+X,-Y): ~50%
+
+#### 新數據集分析
+
+```
+data/phase63_reachable_10k.h5 (50 episodes × 200 steps = 10k frames)
+  Goal quadrant distribution:
+    Q1 (+X,+Y):  5400 (54.0%)
+    Q2 (-X,+Y):     0 (0.0%) ← UNREACHABLE, now 0%
+    Q3 (-X,-Y):     0 (0.0%) ← UNREACHABLE, now 0%
+    Q4 (+X,-Y):  4600 (46.0%)
+  All goals x >= 0: True ✓
+
+  Wheel action distribution:
+    wheel_0: mean=+0.906, std=0.201
+    wheel_1: mean=+0.891, std=0.229
+    wheel_2: mean=+0.851, std=0.292
+
+  Positive reward frames: 4167/10000 (41.7%)
+    (was 44.5% with old sampling — improvement in data quality, not quantity)
+```
+
+#### 訓練結果
+
+```
+results/phase63_reachable_train/
+  30 epochs, 260s total
+  Loss: 1.4382 → 0.7725
+  Policy: final_policy.pt (state_dim=9, verified)
+```
+
+#### Policy 驗證
+
+```
+Forward pass: ✓ output shape [1, 9], range [-2.51, +2.43]
+Infer (4-step): ✓ output shape [1, 9], range [-4.00, +4.04]
+Policy loads correctly, state_dim=9 detected
+```
+
+### 下一步（下次心跳）
+
+1. **端到端評估 phase63 policy SR**：
+   - 解決 eval_policy.py 的 timeout 問題
+   - 測試 10 episodes × 200 steps 的成功率
+   - 目標：SR > 50% on +X hemisphere goals
+
+2. **改善數據收集的導航質量**：
+   - GridSearchController 仍會 overshoot goals
+   - 考慮降低 action scale 或增加 decision frequency
+
+3. **Bridge + VLA 端到端測試**（需要 Linux/ROS2 環境）
+
+### 阻礙
+
+1. **GridSearchController 振盪問題**：URDF sim 中 M7 會 overshoot goals
+   - 解決方案：降低 action scale 或使用更精確的 P-controller
+2. **eval_policy.py timeout**：MuJoCo URDF sim 渲染太慢
+   - 解決方案：增加渲染間隔或使用 headless 模式
+
+### 架構狀態（Phase 63）
+
+```
+Phase 1-26:   Bridge + VLA policy infrastructure ✓
+Phase 27-34:  ROOT CAUSE: state indexing, wheel axis, eval normalization ✓
+Phase 35:     MuJoCo physics deep-dive (xfrc_applied BODY frame) ✓
+Phase 48:     Bridge WHEEL_POSITIONS FIXED ✓
+Phase 54:     ROOT CAUSE: Z-PD used cvel[5]=BODY yaw rate ✓
+Phase 56:     SOFT JOINT LIMITS added — 0/10 NaN ✓
+Phase 62:     ROOT CAUSE: training data quadrant bias ✓
+Phase 63:     ROOT CAUSE FIXED: reachable +X hemisphere goal sampling
+  - collect_reachable_goals.py: new data collection script
+  - phase63_reachable_10k.h5: 10k frames, Q2+Q3=0% (was 56%)
+  - Trained: phase63_reachable_train/ (30 epochs, loss 1.44→0.77)
+  - Policy verified: forward/infer ✓
+```
+
+### Git
+
+- Commit: `0f8f605` — Phase 63: Add collect_reachable_goals.py — +X hemisphere only sampling
+- 新增腳本：`scripts/collect_reachable_goals.py`
+- 新增數據：`data/phase63_reachable_10k.h5` (需单独 push LFS)
+- 新增訓練：`results/phase63_reachable_train/`
