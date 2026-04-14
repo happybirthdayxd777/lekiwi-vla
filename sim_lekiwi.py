@@ -418,9 +418,14 @@ class LeKiwiSim:
         base_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "base")
         base_z = self.data.xpos[base_body_id, 2]
         kp_z = 30.0   # proportional: upward force when base_z < 0.085
-        kd_z = 8.0    # derivative: damping on vertical velocity
+        kd_z = 8.0    # derivative: damping on world-frame vertical velocity
         z_target = 0.085  # equilibrium height (wheel axle - wheel radius)
-        z_force = kp_z * (z_target - base_z) - kd_z * self.data.cvel[base_body_id, 5]
+        # Phase 65 FIX: cvel[:,5]=BODY-frame yaw rate causes NaN instability.
+        # qvel is 1D (DOF-indexed); body_dofadr gives freejoint start.
+        # qvel[dof_adr+2] = WORLD-frame Z linear velocity (stable for PD).
+        dof_adr = self.model.body_dofadr[base_body_id]
+        z_vel = self.data.qvel[dof_adr + 2]  # world Z linear velocity (m/s)
+        z_force = kp_z * (z_target - base_z) - kd_z * z_vel
         self.data.xfrc_applied[base_body_id, 2] += z_force
 
         mujoco.mj_step(self.model, self.data)
