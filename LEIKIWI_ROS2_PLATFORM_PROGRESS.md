@@ -1513,3 +1513,140 @@ Phase 59:     URDF goal-directed data collection: 5000 frames, 6 goal arrivals
 
 - Commit: `2f36917` — Phase 58 (00:30 UTC)
 - 本次進度追加至 LEIKIWI_ROS2_PLATFORM_PROGRESS.md
+
+---
+
+## Phase 62 (2026-04-15 03:30 UTC) — ROOT CAUSE: Training Data Quadrant Bias + Policy Goes Out-of-Distribution
+
+### Phase: Phase 62
+
+### 本次心跳完成事項
+
+**核心發現：Policy 表現差的根本原因是訓練數據的 quadrant bias + 隨機評估goals分佈不匹配**
+
+#### 1. 訓練數據 quadrant 分佈 vs 隨機評估分佈
+
+```
+訓練數據 (phase59_urdf_goal_10k.h5, 10k frames):
+  Q1 (+X,+Y): 14.0%  ← 最少！policy 主要學習的 M7 方向
+  Q2 (-X,+Y): 32.0%  ← 最多！
+  Q3 (-X,-Y): 24.0%
+  Q4 (+X,-Y): 30.0%
+
+隨機評估 (與 eval_policy.py 一致):
+  Q1 (+X,+Y): 26.9%
+  Q2 (-X,+Y): 23.4%
+  Q3 (-X,-Y): 25.4%
+  Q4 (+X,-Y): 24.3%
+```
+
+**關鍵問題**：
+- 訓練數據中 Q2 (-X,+Y) 佔 32%，但 Q1 (+X,+Y) 只有 14%
+- 訓練主要接觸 -X,+Y 區域的goals
+- 但 policy 學習的是 M7=[1,1,1]（all forward），主要向 +X 方向移動
+- 當評估時遇到 -X goals，policy 沒有足夠的 -X movement 數據
+
+#### 2. Wheel Action 分佈分析
+
+```
+訓練數據 wheel actions (10k frames):
+  w1: mean=0.770, std=0.375  ← 主要正值（M7-like）
+  w2: mean=0.602, std=0.463
+  w3: mean=0.426, std=0.479
+
+正 reward 幀 (44.5%):
+  w1=0.748, w2=0.617, w3=0.422  ← 全正，all-forward pattern
+
+負 reward 幀 (55.5%):
+  w1=0.790, w2=0.587, w3=0.430  ← 也全是正值！表示 policy 一直在嘗試 +X
+```
+
+**發現**：幾乎所有幀的 wheel actions 都是正值（forward），表示 GridSearchController 幾乎只用 M7（all forward）。這導致：
+- 訓練數據中 robot 主要只會向 +X 方向移動
+- 當目標在 -X 方向時，policy 無法有效移動過去
+
+#### 3. QACC Warnings 回歸（Phase 61）
+
+```
+Phase 56: 添加 soft joint limits → 0/10 NaN ✓
+Phase 61: 新增 12 個 QACC warnings：
+  - DOF 0, 1, 3, 4
+  - Time: 0.19s–0.89s
+  - 原因：policy 輸出 action 再次超出 URDF joint limits
+  - Soft limits 只在 step() 中 clamp，但 policy 在 4-step inference 中
+    多次應用 action 可能導致累積誤差
+```
+
+**分析**：Phase 60 訓練的 policy epoch30 的 SR=0% 表明 policy 進入了不穩定區域。Soft joint limits 是 clamp `data.ctrl`，但如果 `data.qpos` 本身已經因為 policy actions 而超出範圍，soft limits 無法完全阻止。
+
+#### 4. Goal Arrivals 分析
+
+```
+20 goal arrivals in 10k frames (0.2%)
+Arrival goal positions: mean_x=0.062, mean_y=-0.193
+
+這些 arrivals 集中在 -X 區域（x≈0, y≈-0.2），
+這不是因為 policy 學會了到達那裡，而是 robot 剛好路過。
+```
+
+### 下一步
+
+1. **重新設計數據收集策略**：
+   - 確保均勻覆蓋所有 4 個 quadrant
+   - 每個 quadrant 至少 2.5k 幀（總共 10k）
+   - 使用**真的隨機 goals**（radius 0.3–0.7, angle 0–2π）
+
+2. **添加 episode-level 成功率追蹤**：
+   - 評估腳本應該報告每個 quadrant 的 SR
+   - 而不是只看 overall SR
+
+3. **修復 QACC instability**：
+   - 在 URDF sim 的 step() 中添加 `mj.clip_ctrls()` 之前的 clamp
+   - 或者降低 policy action scale 到 ±0.5
+
+4. **驗證 Phase 37 goal_aware_50ep policy**：
+   - 這個 policy 的 SR=50%（10ep @ 200steps），相對穩定
+   - 檢查其訓練數據的 quadrant 分佈
+
+### 阻礙
+
+1. **Training/eval distribution mismatch**：訓練只用 M7 all-forward，policy 學不到其他方向
+2. **QACC instability 再次出現**：新訓練的 policy 導致模擬不穩定
+3. **Soft joint limits 不夠**：需要更嚴格的 action clamping 或更好的 PD control
+
+### 架構狀態（Phase 62）
+
+```
+Phase 1-26:   Bridge + VLA policy infrastructure ✓
+Phase 27-46:  ROOT CAUSE: state indexing, wheel axis, eval normalization ✓
+Phase 35:     MuJoCo physics deep-dive (xfrc_applied BODY frame) ✓
+Phase 48:     Bridge WHEEL_POSITIONS FIXED ✓
+Phase 52:     lekiwi_mujoco.xml wheel gear 0.5→10 ✓
+Phase 54:     ROOT CAUSE: Z-PD used cvel[5]=BODY yaw rate ✓
+Phase 55:     ROOT CAUSE: VLA policy actions exceed URDF joint limits ✓
+Phase 56:     SOFT JOINT LIMITS added — 0/10 NaN ✓
+Phase 57:     Policy SR=30% @ 200steps; Bridge infrastructure confirmed ✓
+Phase 59:     URDF goal-directed data: 5000 frames collected ✓
+Phase 60:     CLIP-FM trained on 10k frames — SR=33% @ 50steps, overfitting confirmed
+Phase 61:     epoch10 best (SR=20%), QACC warnings returned, overfitting confirmed
+Phase 62:     ROOT CAUSE: Training data quadrant bias + distribution mismatch
+  - Training Q-distribution: Q2=32%, Q1=14% (severely biased)
+  - Eval (random): Q1=27%, Q2=23%, Q3=25%, Q4=24% (uniform)
+  - Policy learns M7=[1,1,1] all-forward → primary +X movement
+  - Goals in -X quadrants: policy has no effective -X movement data
+  - 20 goal arrivals concentrated at (x≈0, y≈-0.2) — lucky coincidences
+  - QACC warnings returned (12 new in Phase 61)
+  - RECOMMEND: Re-collect data with UNIFORM quadrant coverage
+```
+
+### Git
+
+- 無新 commit（本次為調研和診斷）
+- 最新 commit: `011e395` — Phase 61: epoch10 best checkpoint (SR=20%), overfitting confirmed
+
+### 關鍵教訓
+
+1. **數據分佈匹配決定 policy 泛化能力**：訓練只用 M7 all-forward，policy 無法泛化到 -X goals
+2. **GridSearchController 過度依賴 M7**：導致 95%+ 的數據都是 all-forward wheel commands
+3. **Episode-level 分析優於 Frame-level**：只看 frame reward 會忽略 goal arrival 的真實分佈
+4. **QACC warnings 信號不可靠**：它們預示 policy 正在 pushes sim 到不穩定區域，但 soft limits 不夠
