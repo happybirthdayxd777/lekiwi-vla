@@ -49,7 +49,7 @@ LEKIWI_XML = """<?xml version="1.0"?>
     <!-- Global default: light damping, no dry friction (frictionloss) -->
     <default>
         <joint damping="0.5"/>
-        <geom contype="1" conaffinity="1" friction="0.6 0.05 0.01"
+        <geom friction="0.6 0.05 0.01"
               solref="0.004 1.0" solimp="0.8 0.4 0.01"/>
     </default>
 
@@ -66,47 +66,74 @@ LEKIWI_XML = """<?xml version="1.0"?>
         <!-- Base chassis (freejoint = 6DOF) -->
         <body name="base" pos="0 0 0.14">
             <freejoint/>
+            <!-- Visual chassis: no ground contact (contype=0) -->
             <geom name="chassis" type="cylinder"
                   size="0.12 0.04" mass="3.0"
-                  rgba="0.25 0.45 0.80 1"/>
+                  rgba="0.25 0.45 0.80 1"
+                  contype="0" conaffinity="0"/>
 
-            <!-- ── Omni wheel 1: front — cylinder along Y, rotates around Y → rolls in X ──
-                 Phase 31 FIX: axis changed from [1,0,0] to [0,1,0].
-                 axis=[1,0,0] produced Y-dominant motion (0.19m Y vs 0.05m X per 200 steps).
-                 axis=[0,1,0] produces pure X-direction motion (0.28m forward, ~0m Y).
-                 This was the ROOT CAUSE of all locomotion failures since Phase 1.
+            <!-- Chassis contact: flat box at ground level, provides reaction force for
+                 wheel locomotion (like URDF sim chassis_contact). friction=0.001
+                 prevents base-ground drag while still providing reaction force.
+                 Phase 44 FIX: Added to fix near-zero locomotion (0.02m vs URDF 1.6m).
+                 The original chassis had no contact geom, so wheel torques pushed against
+                 a free-floating base with no ground reaction. -->
+            <geom name="chassis_contact" type="box" size="0.12 0.10 0.002"
+                  pos="0 0 -0.14"
+                  mass="0.001"
+                  contype="1" conaffinity="1"
+                  friction="0.001 0.001 0.001"
+                  rgba="0 0 0.5 0.3"/>
+
+            <!-- ── Omni wheel 1: front-right ─────────────────────────────────────────
+                 Phase 44 FIX: Replaced naive [0,1,0] axis + elevated cylinder with
+                 correct omni-wheel geometry from URDF sim.
+                 
+                 CORRECT OMNI-WHEEL KINEMATICS (from lekiwi_modular URDF):
+                   wheel0 body: pos="0.0866 0.10 -0.06"
+                   joint axis: "-0.866 0 0.5" (matches real omni-wheel roller axis)
+                   contact cylinder: pos="0 0 -0.015" → bottom at world_z≈0 (touches ground)
+                   
+                 The old primitive sim (axis=[0,1,0], body pos="0.10 0 -0.04", cylinder
+                 at -0.013) had cylinder bottom at world_z=0.020 — well above ground, so
+                 no wheel-ground contact occurred at all. Result: near-zero locomotion.
             -->
-            <body name="wheel1" pos="0.10 0 -0.04">
-                <joint name="w1" type="hinge" axis="0 1 0"
+            <body name="wheel1" pos="0.0866 0.10 -0.06">
+                <joint name="w1" type="hinge" axis="-0.866 0 0.5"
                        damping="0.5"/>
-                <!-- Cylinder (wheel) with axle along Y, rolling on XZ ground plane -->
-                <geom name="wheel1_geom" type="cylinder"
-                      size="0.035 0.018" mass="0.2"
-                      friction="0.9 0.05 0.01"
-                      rgba="0.08 0.08 0.08 1"
-                      euler="0 0 0"/>
+                <!-- Contact cylinder: radius=0.025, halflength=0.008, bottom barely at ground
+                     body world_z=0.015, cylinder local_z=-0.015 → bottom world_z=0.000
+                     Phase 44: friction=2.7 matches URDF sim optimal traction value -->
+                <geom name="wheel1_contact" type="cylinder"
+                      size="0.025 0.008" pos="0 0 -0.015"
+                      mass="0.01"
+                      contype="1" conaffinity="1"
+                      friction="2.7 0.225 0.01"
+                      rgba="0.08 0.08 0.08 1"/>
             </body>
 
-            <!-- ── Omni wheel 2: back-left (120°) ── -->
-            <body name="wheel2" pos="-0.05 0.087 -0.04">
-                <joint name="w2" type="hinge" axis="0 1 0"
+            <!-- ── Omni wheel 2: back-left (120° apart) ── -->
+            <body name="wheel2" pos="-0.0866 0.10 -0.06">
+                <joint name="w2" type="hinge" axis="0.866 0 0.5"
                        damping="0.5"/>
-                <geom name="wheel2_geom" type="cylinder"
-                      size="0.035 0.018" mass="0.2"
-                      friction="0.9 0.05 0.01"
-                      rgba="0.08 0.08 0.08 1"
-                      euler="0 0 0"/>
+                <geom name="wheel2_contact" type="cylinder"
+                      size="0.025 0.008" pos="0 0 -0.015"
+                      mass="0.01"
+                      contype="1" conaffinity="1"
+                      friction="2.7 0.225 0.01"
+                      rgba="0.08 0.08 0.08 1"/>
             </body>
 
             <!-- ── Omni wheel 3: back-right (240°) ── -->
-            <body name="wheel3" pos="-0.05 -0.087 -0.04">
-                <joint name="w3" type="hinge" axis="0 1 0"
+            <body name="wheel3" pos="-0.0866 -0.10 -0.06">
+                <joint name="w3" type="hinge" axis="0 0 -1"
                        damping="0.5"/>
-                <geom name="wheel3_geom" type="cylinder"
-                      size="0.035 0.018" mass="0.2"
-                      friction="0.9 0.05 0.01"
-                      rgba="0.08 0.08 0.08 1"
-                      euler="0 0 0"/>
+                <geom name="wheel3_contact" type="cylinder"
+                      size="0.025 0.008" pos="0 0 -0.015"
+                      mass="0.01"
+                      contype="1" conaffinity="1"
+                      friction="2.7 0.225 0.01"
+                      rgba="0.08 0.08 0.08 1"/>
             </body>
 
             <!-- ── Arm: shoulder pan ── -->
@@ -185,9 +212,13 @@ LEKIWI_XML = """<?xml version="1.0"?>
         <motor joint="j3" gear="5"/>
         <motor joint="j4" gear="5"/>
         <motor joint="j5" gear="3"/>
-        <motor joint="w1" gear="0.5"/>
-        <motor joint="w2" gear="0.5"/>
-        <motor joint="w3" gear="0.5"/>
+        <!-- Phase 44 FIX: wheel gear 0.5→10.0
+             With gear=0.5, even with ctrl=10 (clamped), joint torque=5 Nm → near-zero locomotion.
+             gear=10 matches URDF sim (which achieves 1.6m/200steps with same action scale).
+             Action[6:9]=1.0 → ctrl=10.0 → joint torque=100 Nm → realistic traction. -->
+        <motor joint="w1" gear="10"/>
+        <motor joint="w2" gear="10"/>
+        <motor joint="w3" gear="10"/>
     </actuator>
 </mujoco>
 """
@@ -364,11 +395,34 @@ class LeKiwiSim:
         self.data.xpos[body_id] = self._target
 
     def step(self, action: np.ndarray) -> dict:
-        """Step with raw 9-D float64 action (first 6 arm pos, last 3 wheel vel)."""
+        """Step with raw 9-D float64 action (first 6 arm pos, last 3 wheel vel).
+
+        Phase 44 FIX: Updated action-to-ctrl scaling to match URDF sim.
+        - Arm: action[:6] * 3.14 (same as before)
+        - Wheel: action[6:9] * 10.0 → ctrl[6:9] = wheel torque in Nm (was * 5.0)
+        - Z-height PD controller: keeps freejoint base at equilibrium height
+          (wheel contact cylinder bottom barely touches ground at z=0)
+        """
         action = np.asarray(action, dtype=np.float64)
         self.data.ctrl[:] = 0.0
+        # Arm position control (same as before)
         self.data.ctrl[0:6] = np.clip(action[0:6], -3.14, 3.14)
-        self.data.ctrl[6:9] = np.clip(action[6:9], -5.0, 5.0)
+        # Wheel torque: action * 10.0 (Phase 44 fix: was * 5.0, now matches URDF sim)
+        # With motor gear=10, this gives joint torque up to 100 Nm
+        self.data.ctrl[6:9] = np.clip(action[6:9] * 10.0, -10.0, 10.0)
+
+        # Z-height PD controller: freejoint base oscillates from wheel contact.
+        # Apply upward force to keep base near equilibrium height (z≈0.085m).
+        # Equilibrium: wheel_body_z = base_z - 0.06, contact_bottom = wheel_body_z - 0.025
+        # For contact_bottom=0 (ground): base_z = 0.085m
+        base_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "base")
+        base_z = self.data.xpos[base_body_id, 2]
+        kp_z = 30.0   # proportional: upward force when base_z < 0.085
+        kd_z = 8.0    # derivative: damping on vertical velocity
+        z_target = 0.085  # equilibrium height (wheel axle - wheel radius)
+        z_force = kp_z * (z_target - base_z) - kd_z * self.data.cvel[base_body_id, 5]
+        self.data.xfrc_applied[base_body_id, 2] += z_force
+
         mujoco.mj_step(self.model, self.data)
         return self._obs()
 
