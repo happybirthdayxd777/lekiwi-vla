@@ -295,8 +295,12 @@ def evaluate(policy, device, episodes=10, max_steps=200, verbose=True,
 
             # Build state: 9D or 11D depending on policy
             state_9d = np.concatenate([arm_pos, wheel_v]).astype(np.float32)
-            if use_goal_aware or (goal_pos is not None and policy.state_dim > 9):
+            policy_state_dim = getattr(policy, 'state_dim', 9)
+            if use_goal_aware or policy_state_dim > 9:
                 # 11D: append goal position (normalized to [-1,1] range for [-0.8,0.8] goals)
+                # NOTE: For 11D goal-aware policies, we always embed the goal regardless of
+                # whether goal is fixed (--goal_x/--goal_y) or random. The policy was trained
+                # with goal conditioning and needs goal input at every step.
                 goal_norm = np.array([gx / 0.8, gy / 0.8], dtype=np.float32)
                 state_9d = np.concatenate([state_9d, goal_norm])
 
