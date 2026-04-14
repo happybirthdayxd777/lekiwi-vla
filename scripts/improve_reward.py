@@ -37,19 +37,32 @@ class TaskEvaluator:
       Policy state_dim=11 → [arm_pos(6), wheel_vel(3), goal_xy(2)]
       If self.goal_pos is set, _get_action embeds goal_xy into state.
       Otherwise falls back to 9D state for legacy policy compatibility.
+
+    Phase 64 Fix: Auto-detect policy.state_dim to avoid dimension mismatch
+      between 9D checkpoints (phase63, no goal) and 11D checkpoints (goal-aware).
+      Also supports policy_dim override for manual specification.
     """
 
-    def __init__(self, sim, policy=None, device="cpu", goal_pos=None):
+    def __init__(self, sim, policy=None, device="cpu", goal_pos=None, policy_state_dim=None):
         """
         Args:
             sim: LeKiWiSim or LeKiWiSimURDF instance
             policy: Policy with .infer(image, state) method. If None → random baseline.
             device: Device for policy inference (cpu/mps/cuda)
             goal_pos: (x, y) goal in meters. If set, appended to state as goal_xy(2).
+            policy_state_dim: Override policy state_dim detection. If None, auto-detect
+                              from policy.state_dim attribute, or default to 9.
         """
         self.sim = sim
         self.policy = policy
         self.device = device
+        # Phase 64: Auto-detect policy state_dim, default to 9 for legacy compatibility
+        if policy_state_dim is not None:
+            self.policy_state_dim = policy_state_dim
+        elif policy is not None and hasattr(policy, 'state_dim'):
+            self.policy_state_dim = policy.state_dim
+        else:
+            self.policy_state_dim = 9  # legacy default
         self.goal_pos = goal_pos  # Set by reach_target() before evaluation loop
 
     def _get_action(self, img):
@@ -80,9 +93,14 @@ class TaskEvaluator:
             arm_pos = self.sim.data.qpos[0:6]
             wheel_v = self.sim.data.qvel[6:9]
 
-        # Phase 16: append goal_xy if goal_pos is set (goal-aware policy)
-        if self.goal_pos is not None:
+        # Phase 64 Fix: Only append goal_xy if policy actually supports 11D state.
+        # phase63 checkpoint has state_dim=9 (no goal embedding), so even if goal_pos
+        # is set, we must use 9D state to match the policy's expected input dimension.
+        goal_norm = None
+        if self.goal_pos is not None and self.policy_state_dim >= 11:
             goal_norm = np.clip(np.array(self.goal_pos) / 1.0, -1.0, 1.0).astype(np.float32)
+
+        if goal_norm is not None:
             state_t = torch.from_numpy(
                 np.concatenate([arm_pos, wheel_v, goal_norm])
             ).float().unsqueeze(0).to(self.device)
@@ -112,7 +130,10 @@ class TaskEvaluator:
         target_arr = np.array(target)
         start_arr  = np.array(start)
 
-        # ── Phase 16: Set goal_pos so _get_action passes 11D state to policy ────
+        # ── Phase 64: Set goal_pos for visual marker only ────────────────────────
+        # Note: goal_xy is only appended to state if policy_state_dim >= 11.
+        # For 9D policies (phase63), the goal position is still shown visually
+        # via set_target() but is NOT embedded into the state vector.
         self.goal_pos = (float(target_arr[0]), float(target_arr[1]))
 
         # Reset sim first, then set target marker at goal
