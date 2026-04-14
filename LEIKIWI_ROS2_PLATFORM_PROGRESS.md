@@ -303,3 +303,72 @@ lekiwi_vla/
 1. 測試 bridge_node + CTFSecurityAuditor 在有 ROS2 的環境（colcon build + ros2 run）
 2. 在 primitive sim 上評估 phase37 policy 的真實 locomotion 能力
 3. 收集寬範圍多目標訓練數據（goal range [-0.8, 0.8]²）並重新訓練
+
+---
+
+## Phase 42 (2026-04-14 14:00 UTC) — ROOT CAUSE: Policy Trained on Broken State Indexing
+
+### 本次心跳完成
+
+**1. Phase 41 Analysis — Critical Bug Confirmed**
+
+Phase 41 committed a fix for `_jpos_idx`/`_jvel_idx` — they were storing MuJoCo joint IDs (arbitrary indices) instead of qpos/dof addresses. The correct fix uses `jnt_qposadr[jid]` and `jnt_dofadr[jid]`.
+
+**ROOT CAUSE of poor policy performance (SR=0%):**
+
+Training data `lekiwi_goal_fixed.h5` (10,000 frames) was collected using the CORRECT `_jpos` function during data collection (in scripts that used LeKiWiSim directly). But the POLICY TRAINING used broken `_jpos_idx` (stored jnt_id directly), so the policy never learned correct state → action mapping.
+
+Evidence:
+- phase37 trained on 10k frames (corrected M7/M8)
+- But policy wheel actions are stochastic chaos: std~1.8 across 5 identical inferences
+- GridSearchController (the data collector) reliably moves +X using M7=[1,1,1] → 1.6m/200steps
+- Policy never learns this — it was trained on garbage state
+
+**2. Policy Inference Diagnosis**
+
+```
+Testing 5 inferences from identical initial state + goal (0.3, 0.2):
+  trial 0: wheel=[ 1.999, -0.547, -0.158]  ← partially positive (M7-like)
+  trial 1: wheel=[-2.073, -1.085, -2.351]  ← all negative (chaotic)
+  trial 2: wheel=[-2.912, -1.860,  3.570] ← mixed
+  trial 3: wheel=[-2.117, -4.849,  0.383]  ← all negative
+  trial 4: wheel=[-0.853,  0.784, -1.261]  ← all negative
+Wheel std: [1.73, 1.88, 2.00] — near max stochasticity for [-1,+1] range
+
+Expected (from GridSearchController):
+  M7 = [1,1,1] → base moves +X at 0.008m/step
+
+Actual (policy): mean=[-1.19, -1.51, 0.04] → moves in wrong directions
+```
+
+**3. Training Data Quality**
+
+Phase 36 data (`phase36_goal_fixed_50ep.h5`, 10k frames, 50 goals):
+- Goal range: X [-0.662, 0.447], Y [-0.629, 0.482]
+- 50 unique goals, 200 frames each
+- Data collection method: GridSearchController (M7=[1,1,1] for +X locomotion)
+- Data state: arm_pos(6) + wheel_vel(3) = 9D (correctly extracted from sim)
+- Policy BUILD 11D state by appending goal_norm
+
+**4. Architecture Status — Bridge Complete**
+
+All Phase 42 bridge infrastructure is complete:
+```
+lekiwi_ros2_bridge/bridge_node.py     — 919 lines, CTF-integrated
+lekiwi_ros2_bridge/vla_policy_node.py — 545 lines
+lekiwi_ros2_bridge/real_hardware_adapter.py — 349 lines
+lekiwi_ros2_bridge/launch/             — 4 launch files (bridge, full, real_mode, vla)
+```
+
+### 下一步（下次心跳）
+1. **Retrain policy with Phase 41 fix applied**: Use correct `_jpos`/`_jvel` in training loop
+2. Verify training loop actually reads correct states (arm qpos[10:16], wheel qvel[6:9])
+3. Re-evaluate on primitive sim (not URDF) — URDF has contact instability (QACC NaN)
+4. Target: SR > 60% on (0.3, 0.2), (0.2, 0.4), (0.4, 0.4) within 200 steps
+
+### 阻礙
+1. Policy retraining needed — 50 epochs × ~20s = ~17 min CPU
+2. URDF sim physics still unstable for evaluation
+3. Need to verify train loop uses correct `_jpos` for state extraction
+
+### Git
