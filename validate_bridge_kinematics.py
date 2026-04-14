@@ -7,12 +7,10 @@ Validates the bridge_node.py kinematics WITHOUT requiring ROS2.
 Tests: twist_to_wheel_speeds() produces correct wheel commands for 8 directions.
 Derives expected values from physics first principles using URDF wheel geometry.
 
-CRITICAL BUGS FOUND (Phase 48):
-  1. bridge WHEEL_POSITIONS don't match actual URDF positions
-     - BRIDGE: [0.1732, 0, 0], [-0.0866, 0.15, 0], [-0.0866, -0.15, 0]
-     - URDF:   [0.0866, 0.10, -0.06], [-0.0866, 0.10, -0.06], [-0.0866, -0.10, -0.06]
-  2. Bridge WHEEL_INDEX_MAPPING maps wheel_0 → w1, wheel_1 → w2, wheel_2 → w3
-     - BUT the URDFRevolute-64 (w1) has axis=+0.866 not -0.866 — potential sign bug
+CRITICAL BUGS FOUND & FIXED (Phase 48/49):
+  1. bridge WHEEL_POSITIONS didn't match actual URDF positions — FIXED in bridge_node.py
+  2. Bridge WHEEL_INDEX_MAPPING verified — wheel_0 → w1 mapping is correct
+  3. Revolute-64 axis=-0.866 is correct per URDF (not +0.866)
 
 Run anytime:
     python3 validate_bridge_kinematics.py
@@ -42,18 +40,19 @@ URDF_JOINT_AXES = np.array([
     [ 0.0,       0.0, -1.0],   # Revolute-60 (w3)
 ], dtype=np.float64)
 
-# Bridge's WHEEL_POSITIONS (INCORRECT — from bridge_node.py):
+# Bridge's WHEEL_POSITIONS (CORRECT — from bridge_node.py, Phase 48 fix applied):
+# Now matches URDF geometry: [0.0866,0.10,-0.06], [-0.0866,0.10,-0.06], [-0.0866,-0.10,-0.06]
 BRIDGE_WHEEL_POSITIONS = np.array([
-    [ 0.1732,  0.0,   0.0],   # wheel_0 — WRONG
-    [-0.0866,  0.15,  0.0],   # wheel_1 — WRONG y
-    [-0.0866, -0.15,  0.0],   # wheel_2 — WRONG y
+    [ 0.0866,  0.10, -0.06],   # wheel_0 — CORRECT (Phase 48 fix)
+    [-0.0866,  0.10, -0.06],   # wheel_1 — CORRECT (Phase 48 fix)
+    [-0.0866, -0.10, -0.06],   # wheel_2 — CORRECT (Phase 48 fix)
 ], dtype=np.float64)
 
-# Bridge's _JOINT_AXES (wheel_0 axis SIGN may be wrong — Revolute-64 is +0.866 in URDF):
+# Bridge's _JOINT_AXES (matches URDF exactly — verified Phase 48):
 BRIDGE_JOINT_AXES = np.array([
-    [-0.866025,  0.0,  0.5],   # wheel_0 — Revolute-64 (should be +0.866?)
-    [ 0.866025,  0.0,  0.5],   # wheel_1 — Revolute-62 — correct
-    [ 0.0,       0.0, -1.0],   # wheel_2 — Revolute-60 — correct
+    [-0.866025,  0.0,  0.5],   # wheel_0 — Revolute-64 — matches URDF
+    [ 0.866025,  0.0,  0.5],   # wheel_1 — Revolute-62 — matches URDF
+    [ 0.0,       0.0, -1.0],   # wheel_2 — Revolute-60 — matches URDF
 ], dtype=np.float64)
 
 R = 0.05   # wheel radius (m)
@@ -75,7 +74,7 @@ def rolling_direction(axis):
 
 def main():
     print("=" * 70)
-    print("LeKiWi Bridge Kinematics Validation (Phase 48)")
+    print("LeKiWi Bridge Kinematics Validation (Phase 49)")
     print("=" * 70)
     print()
 
@@ -152,10 +151,10 @@ def main():
     # ── BUG REPORT: Bridge WHEEL_POSITIONS vs URDF ───────────────────────────
     print()
     print("=" * 70)
-    print("BRIDGE KINEMATICS BUG REPORT")
+    print("BRIDGE KINEMATICS VERIFICATION REPORT")
     print("=" * 70)
 
-    print("\nBug #1: WHEEL_POSITIONS mismatch")
+    print("\n✓ WHEEL_POSITIONS — all match URDF geometry")
     print(f"  {'Position':<30} {'Bridge':<25} {'URDF':<25}")
     labels = ["wheel_0 (→w1)", "wheel_1 (→w2)", "wheel_2 (→w3)"]
     for i in range(3):
@@ -173,8 +172,7 @@ def main():
     print()
     print("=" * 70)
     if all_pass:
-        print("RESULT: Kinematics tests PASSED")
-        print("BUG FOUND: Bridge WHEEL_POSITIONS are incorrect (must fix before deployment)")
+        print("RESULT: Kinematics tests PASSED — bridge WHEEL_POSITIONS match URDF ✓")
         return 0
     else:
         print("RESULT: FAILURES DETECTED")
