@@ -297,11 +297,12 @@ def evaluate(policy, device, episodes=10, max_steps=200, verbose=True,
             state_9d = np.concatenate([arm_pos, wheel_v]).astype(np.float32)
             policy_state_dim = getattr(policy, 'state_dim', 9)
             if use_goal_aware or policy_state_dim > 9:
-                # 11D: append goal position (normalized to [-1,1] range for [-0.8,0.8] goals)
+                # 11D: append goal position
                 # NOTE: For 11D goal-aware policies, we always embed the goal regardless of
                 # whether goal is fixed (--goal_x/--goal_y) or random. The policy was trained
                 # with goal conditioning and needs goal input at every step.
-                goal_norm = np.array([gx / 0.8, gy / 0.8], dtype=np.float32)
+                # Normalization matches train_task_oriented.py: goal_norm = goal / 1.0
+                goal_norm = np.array([gx, gy], dtype=np.float32)
                 state_9d = np.concatenate([state_9d, goal_norm])
 
             state_t = torch.from_numpy(state_9d).float().unsqueeze(0).to(device)
