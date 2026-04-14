@@ -467,6 +467,33 @@ class LeKiWiSimURDF:
         world_z_vel = self.data.qvel[2]  # world frame Z linear velocity
         z_force = kp_z * (z_target - base_z) - kd_z * world_z_vel
         self.data.xfrc_applied[base_body_id, 2] += z_force
+
+        # ── Phase 56: Soft joint limits ─────────────────────────────────────────
+        # URDF arm joint limits from lekiwi_modular LeKiWi.urdf:
+        #   j0: [-1.5708, 1.5708]  j1: [-3.14, 0]  j2: [0, 3.14]
+        #   j3: [0, 3.14]          j4: [-3.14, 3.14] j5: [-1.5708, 1.5708]
+        # Policy outputs ±1.0 actions → arm torques up to ±3.14Nm → joints can
+        # exceed physical limits over 200+ steps, causing instability/NaN.
+        # Apply soft clamping: zero velocity when approaching ±90% of limit.
+        ARM_LIMITS = {
+            "j0": (-1.5708, 1.5708), "j1": (-3.14, 0.0),
+            "j2": (0.0, 3.14),        "j3": (0.0, 3.14),
+            "j4": (-3.14, 3.14),      "j5": (-1.5708, 1.5708),
+        }
+        safety = 0.90  # engage soft stop at 90% of physical limit
+        for name, (lo, hi) in ARM_LIMITS.items():
+            pos = self.data.qpos[self._jpos_idx[name]]
+            vel_adr = self._jvel_idx[name]  # already dofadr from _jvel()
+            if vel_adr < 0:
+                continue
+            soft_lo = lo + (hi - lo) * (1.0 - safety)
+            soft_hi = hi - (hi - lo) * (1.0 - safety)
+            if pos > soft_hi and self.data.qvel[vel_adr] > 0:
+                self.data.qvel[vel_adr] = 0.0
+            elif pos < soft_lo and self.data.qvel[vel_adr] < 0:
+                self.data.qvel[vel_adr] = 0.0
+        # ── End Phase 56 ──────────────────────────────────────────────────────────
+
         mujoco.mj_step(self.model, self.data)
         return self._obs(), float(self._reward()), bool(self.data.time > 60), {}
 
