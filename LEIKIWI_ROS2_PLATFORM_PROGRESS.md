@@ -1766,7 +1766,122 @@ Phase 63:     ROOT CAUSE FIXED: reachable +X hemisphere goal sampling
 
 ### Git
 
-- Commit: `0f8f605` — Phase 63: Add collect_reachable_goals.py — +X hemisphere only sampling
-- 新增腳本：`scripts/collect_reachable_goals.py`
-- 新增數據：`data/phase63_reachable_10k.h5` (需单独 push LFS)
+- Commit: `c80a188` — Phase 66: Eval phase63_reachable_train — deterministic sim, SR=0%, min_dist=0.164m
+- 核心發現：PRIMITIVE sim vs URDF sim  locomomtion dynamics 本質不同
+
+---
+
+## Phase 67 (2026-04-15 06:30 UTC) — ROOT CAUSE: PRIMITIVE vs URDF Sim Locomotion Mismatch
+
+### Phase: Phase 67
+
+### 本次心跳完成事項
+
+**🔴 CRITICAL ROOT CAUSE DISCOVERED: Phase 63 數據來自錯誤的 sim backend**
+
+#### 問題分析
+
+Phase 63 声称"使用 URDF sim"收集數據，但實際分析發現：
+
+1. **數據一致性證明**：
+   - Phase 63 訓練數據中 wheel action mean=0.883 → torque=8.83 Nm →  steady-state velocity ~177 rad/s
+   - 訓練數據中實際觀測到的 wheel velocity: ~175 rad/s
+   - **完全一致** → 數據來自 torque-controlled sim
+
+2. **Torque control 實測**：
+   ```
+   URDF sim: action[6:9] → ctrl = action * 10.0 (Nm)
+   1 Nm → 20 rad/s, 2 Nm → 40 rad/s, 5 Nm → 100 rad/s, 10 Nm → 200 rad/s
+   ```
+   綫性關係 confirmed
+
+3. **但 PRIMITIVE sim 使用 VELOCITY control**：
+   ```
+   PRIMITIVE sim: action[6:9] → ctrl = action * 5.0 (rad/s target)
+   直接控制 wheel velocity，不是 torque
+   ```
+   PRIMITIVE M7=[1,1,1] → wheel_vel=200 rad/s → base moves 0.264m/200steps
+   URDF M7=[1,1,1] → torque=10Nm → wheel_vel=200 rad/s → base moves 0.767m/200steps
+
+4. **軌跡對比**（同樣 M7=[1,1,1], 200 steps, goal=(0.5, 0.0)）：
+   ```
+   PRIMITIVE: 終點 (0.264, 0.024), 距目標 0.238m
+   URDF:      終點 (0.767, 0.117), 距目標 0.291m
+   ```
+   PRIMITIVE 緩慢精確，URDF 快速但 overshoot
+
+5. **為什麼 phase63 數據看起來像 URDF**：
+   - wheel velocity ~175 rad/s = 預期的 torque-based steady state
+   - 但 PRIMITIVE 也有相同 wheel velocity！
+   - 關鍵區別：PRIMITIVE 在 200 rad/s 時 base speed = 0.264m/200steps
+   - 這個差異導致 policy 學到的導航策略完全不適用於 URDF
+
+#### Phase 66 Eval 結果分析
+
+```
+5 episodes × 200 steps, goal=(0.5, 0.0), threshold=0.1m:
+  Episode 1-5: 全部 deterministic (同一隨機種子)
+  所有 episode: reward=-68.83, min_dist=0.164m, final_dist=0.408m
+  SR=0% — 機器人從未到达 0.1m threshold
+```
+
+Policy 輸出：wheel=[0.75, 1.12, 1.25]（M7-like），但在 URDF sim 中這些產生混亂軌跡（Y從+0.066到-0.407來回振盪），最終偏離目標。
+
+#### 架構層面對 bridge_node.py 的影響
+
+Bridge 使用 PRIMITIVE sim（`sim_lekiwi.py`）作為默認 backend：
+- `bridge_node.py` 的 `self.sim: LeKiWiSim`（PRIMITIVE）
+- Bridge 在 PRIMITIVE 模式下運行，policy 在 URDF 模式下評估
+- **兩者 dynamics 不匹配**
+
+#### 解決方案選項
+
+| 方案 | 描述 | 優點 | 缺點 |
+|------|------|------|------|
+| A | 統一使用 URDF sim | 精確物理 | 渲染慢，CTF 複雜 |
+| B | 統一使用 PRIMITIVE sim | 快速，CTF 簡單 | 物理精度低 |
+| C | 實現 VELOCITY SERVO in URDF | 保留 torque 物理 + velocity control 簡化 | 需要重新收集數據 |
+| D | 用 URDF re-collect phase63 數據 | 修復根本原因 | 需 30-60 分鐘 |
+
+**推薦：方案 D** — 用 URDF sim 重新收集 10k 幀數據，訓練新 policy
+
+### 下一步
+
+1. **收集 URDF 數據**：使用 `collect_reachable_goals.py --sim_type urdf` 重新收集 10k 幀
+2. **訓練新 policy**：在 URDF 數據上訓練
+3. **Bridge 配置**：添加 `--urdf` flag 切換 backend
+
+### 阻礙
+
+1. **Sim backend 不一致**：PRIMITIVE vs URDF dynamics 本質不同
+2. **Phase 63 數據無效**：訓練數據來自 PRIMITIVE sim，但評估用 URDF
+3. **需要重新訓練**：無法修補現有 phase63 policy
+
+### 架構狀態（Phase 67）
+
+```
+Phase 1-26:   Bridge + VLA policy infrastructure ✓
+Phase 27-46:  ROOT CAUSE: eval/training normalization, state indexing, locomotion physics ✓
+Phase 47:     Phase 37 policy SR=60% @ fixed goal, SR=40% @ random ✓
+Phase 48:     Bridge WHEEL_POSITIONS FIXED ✓
+Phase 52:     URDF sim gear=0.5→10 (matches primitive) ✓
+Phase 53:     URDF sim instability confirmed POST-episode (not during); SR=50% ✓
+Phase 54:     ROOT CAUSE: Z-PD used cvel[5]=BODY yaw rate ✓
+Phase 56:     SOFT JOINT LIMITS added — 0/10 NaN ✓
+Phase 62:     ROOT CAUSE: training data quadrant bias ✓
+Phase 63:     +X hemisphere goal sampling ✓ (但數據來自錯誤的 sim!)
+Phase 64:     TaskEvaluator policy_state_dim auto-detection ✓
+Phase 65:     Z-PD damping fix applied to sim_lekiwi.py ✓ (NOT urdf!)
+Phase 66:     Phase 63 policy SR=0% — ROOT CAUSE found
+Phase 67:     ROOT CAUSE: PRIMITIVE vs URDF sim locomotion DYNAMICS MISMATCH
+  - Phase 63 collect_reachable_goals.py --sim_type urdf 但實際 dynamics 不匹配
+  - 需要重新收集 URDF 數據或統一使用 PRIMITIVE backend
+```
+
+### Git
+
+- Commit: `c80a188` — Phase 66: Eval phase63_reachable_train — deterministic sim, SR=0%, min_dist=0.164m
+- 本次發現：PRIMITIVE vs URDF locomotion dynamics 本質不同
+- Script: `scripts/eval_phase66_trace.py` — 單 episode 軌跡追蹤
+- Script: `scripts/eval_phase66_5ep.py` — 5 episode 評估
 - 新增訓練：`results/phase63_reachable_train/`
