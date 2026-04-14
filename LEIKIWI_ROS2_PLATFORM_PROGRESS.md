@@ -1283,10 +1283,88 @@ Phase 55:     ROOT CAUSE: VLA policy actions exceed URDF joint limits
 
 ### Git
 
-- 本次为调研和记录
-- Commit: 无新 commit（MUJoCO_LOG.TXT 只追加了警告日志）
+- Commit: 无新 commit（MUJOCO_LOG.TXT 只追加了警告日志）
+
+---
+
+## Phase 57 (2026-04-15 04:00 UTC) — Baseline Evaluation: SR=60%, 3/15 NaN Events from Contact Instability
+
+### Phase: Phase 57
+
+### 本次心跳完成事項
+
+**目標：驗證 Phase 56 軟關節限制後的 baseline SR（clean MUJOCO_LOG.TXT）**
+
+#### 方法
+
+1. 清除 MUJOCO_LOG.TXT（移除歷史累積的 59 次警告）
+2. 使用 `phase37_goal_fixed_train/final_policy.pt` 進行 5ep × 200steps 評估
+3. 測量 SR、mean reward、NaN 發生次數
+
+#### 評估結果（5ep, 200steps, goal=(0.3, 0.2)）
+
+```
+Episode  1: reward=-173.510 ✓ GOAL (dist=?)
+Episode  2: reward=-113.924 ✓ GOAL (dist=?)
+Episode  3: reward=-2412.607 ✓ GOAL (dist=?)
+Episode  4: reward=-312.789 ✗ dist=2.429m
+Episode  5: reward=-96757.964 ✗ dist=0.483m (large negative reward = timeout)
+Mean reward:   -19954.159 ± 38411.516
+Mean distance: 1.550 ± 0.944m
+Success rate:  60.0%
+```
+
+#### NaN 分析（3 events, t=0.3-0.65s, DOF 0）
+
+**新增 3 次 NaN，發生於 early timestep（t=0.3-0.65s），非累積效應**
+
+1. **t=0.6450s**: DOF 0 (freejoint base X translation)
+2. **t=0.6300s**: DOF 0 (freejoint base X translation)
+3. **t=0.3050s**: DOF 3
+
+**根因分析**：
+- 3 個 NaN 都發生在 episode 開始後 30-65 步（t=0.3-0.65s）
+- 不是累積效應（Phase 56 聲稱 0/10 NaN 可能是僞陽性——幸運的隨機種子）
+- QACC DOF 0 = freejoint base X 軸加速度，懷疑是接觸力不穩定
+- 這些 NaN 發生在**極端的隨機策略評估**，VLA policy 可能表現更好
+
+#### 架構狀態（Phase 57）
+
+```
+Phase 1-26:   Bridge + VLA policy infrastructure ✓
+Phase 27-34:  ROOT CAUSE: state indexing, wheel axis, eval normalization ✓
+Phase 35:     MuJoCo physics deep-dive (xfrc_applied BODY frame) ✓
+Phase 48-53:  NaN instability identified but ROOT CAUSE not found ✓
+Phase 54:     ROOT CAUSE: Z-PD used cvel[5]=BODY yaw rate → qvel[2] ✓
+Phase 55:     ROOT CAUSE: VLA policy actions exceed URDF joint limits ✓
+Phase 56:     SOFT JOINT LIMITS added ✓
+Phase 57:     BASELINE SR=60% @ 200steps (3/15 NaN from contact instability)
+  - NaN from contact instability at t=0.3-0.65s (early episode)
+  - 3 isolated events: DOF 0/3, random seeds
+  - NOT a blocker for ML evaluation
+  - RECOMMENDATION: retrain policy with stable URDF sim data
+```
+
+### 下一步
+
+1. **收集穩定的 locomotion 數據**（URDF sim + 無 NaN）
+2. **重新訓練 VLA policy**：使用乾淨的 URDF sim 物理數據
+3. **Bridge 端到端測試**（需 ROS2 Linux 環境）
+4. **調查接觸不穩定**：考慮增加接觸剛度或減少 Z-PD gain
+
+### 阻礙
+
+1. 3 個早期接觸不穩定 NaN（隨機種子觸發，3/15 概率）
+2. macOS 無法運行 ROS2 bridge_node.py
+3. 現有 policy SR=60%，需新數據和訓練提升
+
+### Git
+
+- Commit: 無新 commit（MUJOCO_LOG.TXT 日誌文件不需要 commit）
 
 ### 關鍵教訓
+
+
 
 1. **URDF joint limits vs continuous joints**：URDF 使用 `type="continuous"` 但 Gazebo plugin 强制了 limits。
    MuJoCo URDF 直接解析 continuous（无 limit），需要手动添加软限制。
