@@ -45,7 +45,7 @@ import json
 # Resize images to 224x224 for CLIP ViT-B/32 compatibility
 TARGET_SIZE = (224, 224)
 
-# ─── Proportional Controller ─────────────────────────────────────────────────
+    # ─── Proportional Controller ─────────────────────────────────────────────────
 
 class GridSearchController:
     """
@@ -67,26 +67,47 @@ class GridSearchController:
     - Wheel slip and stochastic effects
     - Model errors and uncertainties
     
-    # Phase 35 FIX: Scale up action magnitudes 5x to match URDF sim physics.
-    # Phase 34 found: action=[5,5,5] → 1.44m/200steps, but OLD M7=[0.5,0.5,0.5] → ~0.14m
-    # This explains why P-controller barely moves the robot and data has low positive rate.
-    # New scale: M7=[5,5,5] → comparable to tested torque, effective locomotion
+    Phase 36 FIX: Corrected quadrant→primitive mapping based on EMPIRICALLY MEASURED
+    wheel→direction data from LeKiWiSimURDF. Previous mapping was WRONG:
+    
+    Empirical direction mapping (URDF sim, 200 steps, action scale [-1,+1]):
+      M0=[0,0,0]   → STOP
+      M1=[1,0,0]   → +Y  (0.177m)
+      M2=[0,1,0]   → -XY diagonal (0.724m, dx=-0.417, dy=-0.592)
+      M3=[0,0,1]   → -Y  (0.054m)
+      M4=[-1,0,0]  → -Y  (0.465m)
+      M5=[0,-1,0]  → +Y  (0.498m)
+      M6=[0,0,-1]  → +Y  (0.309m)
+      M7=[1,1,1]   → +X  (1.606m, dx=+1.439, dy=-0.713) ← PRIMARY +X primitive!
+      M8=[-1,-1,-1]→ +X  (0.159m) ← also +X (backward is SLOW in +X!)
+    
+    CRITICAL DISCOVERY: M7 and M8 BOTH move in +X direction!
+    - M7=[1,1,1] → +1.606m in +X (fast, saturated)
+    - M8=[-1,-1,-1] → +0.159m in +X (slow, not saturated)
+    This means the robot CANNOT move in -X direction with any primitive!
+    
+    Correct quadrant mapping (URDF sim):
+      Goal in +X +Y quadrant: M7 (all forward, +X dominant)
+      Goal in +X -Y quadrant: M7 or M3 or M1 (mixed +X/+Y)
+      Goal in -X +Y quadrant: M1 or M6 or M5 (pure +Y)
+      Goal in -X -Y quadrant: M2 or M3 (pure -Y/-XY)
+      No -X primitive exists — robot must navigate around obstacles
     """
     
     # 9 motion primitives: (w1, w2, w3)
+    # Phase 36: Updated comments to reflect CORRECTED direction mapping
     # Phase 35: Scale to [1,1,1] — URDF sim clips at ctrl=10 (action=1.0),
-    # giving ~1.6m/200steps at saturation. Old [0.5,0.5,0.5] gave only 0.14m (too small).
-    # Single-wheel tests: M1=[1,0,0]→0.18m, M2=[0,1,0]→0.72m, M3=[0,0,1]→0.05m, M7=[1,1,1]→1.6m (diagonal)
+    # giving ~1.6m/200steps at saturation.
     PRIMITIVES = np.array([
         [0.0,  0.0,  0.0 ],  # M0: stop
-        [1.0,  0.0,  0.0 ],  # M1: w1 (front-right) → +y
-        [0.0,  1.0,  0.0 ],  # M2: w2 (back-left) → diagonal
-        [0.0,  0.0,  1.0 ],  # M3: w3 (back) → small -y
-        [-1.0, 0.0,  0.0 ],  # M4: w1 reverse
-        [0.0, -1.0,  0.0 ],  # M5: w2 reverse
-        [0.0,  0.0, -1.0 ],  # M6: w3 reverse
-        [1.0,  1.0,  1.0 ],  # M7: all forward → +x+y diagonal (1.6m/s saturated)
-        [-1.0,-1.0, -1.0 ],  # M8: all backward
+        [1.0,  0.0,  0.0 ],  # M1: w1 → +Y (0.177m/200steps)
+        [0.0,  1.0,  0.0 ],  # M2: w2 → -XY diagonal (0.724m, dx=-0.417, dy=-0.592)
+        [0.0,  0.0,  1.0 ],  # M3: w3 → -Y (0.054m)
+        [-1.0, 0.0,  0.0 ],  # M4: w1 rev → -Y (0.465m)
+        [0.0, -1.0,  0.0 ],  # M5: w2 rev → +Y (0.498m)
+        [0.0,  0.0, -1.0 ],  # M6: w3 rev → +Y (0.309m)
+        [1.0,  1.0,  1.0 ],  # M7: all forward → +X (1.606m/200steps) ← PRIMARY
+        [-1.0,-1.0, -1.0 ],  # M8: all backward → +X (0.159m/200steps) ← SLOW
     ], dtype=np.float32)
     
     def __init__(self, steps_per_move=20, exploration_noise=0.05):
@@ -141,20 +162,34 @@ class GridSearchController:
             if dist < 0.01:
                 self._current_primitive = 0  # stop
             else:
-                # Choose primitive based on which quadrant the goal is in
-                # Heuristic from empirical testing:
-                #   goal in +x +y quadrant: M7 (all forward) works best
-                #   goal in -x +y quadrant: try M4 (w1 reverse) or M8
-                #   goal in +x -y quadrant: try M6 (w3 reverse) or M8
-                #   goal in -x -y quadrant: M8 (all backward)
+                # Phase 36 FIX: Use CORRECTED quadrant mapping based on empirical URDF data.
+                # 
+                # Key insight: M7 and M8 BOTH move in +X direction!
+                # - M7=[1,1,1] → +X (1.606m/200steps) ← fast
+                # - M8=[-1,-1,-1] → +X (0.159m/200steps) ← slow
+                # The robot CANNOT move in -X direction.
+                #
+                # Correct quadrant mapping:
+                #   +X +Y quadrant: M7 (all forward, +X dominant)
+                #   +X -Y quadrant: M7 or M1 or M3 (mixed +X/+Y)
+                #   -X +Y quadrant: M1 or M6 or M5 (pure +Y)
+                #   -X -Y quadrant: M2 or M3 (pure -Y/-XY diagonal)
+                #   -X goal with large |dx|: rotate to +Y first via M1, then approach
                 if error[0] >= 0 and error[1] >= 0:
+                    # +X +Y: M7 gives +X and slight -Y (1.606m, -0.713m)
+                    self._current_primitive = 7  # all forward
+                elif error[0] >= 0 and error[1] < 0:
+                    # +X -Y: M7's -Y component helps, or M3 (small -Y)
+                    # M7 gives 1.44m in +X and -0.71m in Y (net useful)
                     self._current_primitive = 7  # all forward
                 elif error[0] < 0 and error[1] >= 0:
-                    self._current_primitive = 8  # all backward
-                elif error[0] >= 0 and error[1] < 0:
-                    self._current_primitive = 6  # w3 reverse
-                else:
-                    self._current_primitive = 8  # all backward
+                    # -X +Y: No -X primitive! Must approach from +Y
+                    # M1 gives pure +Y (0.177m/200steps), small but controllable
+                    # M6 and M5 also give +Y
+                    self._current_primitive = 1  # M1: w1 → +Y
+                else:  # error[0] < 0 and error[1] < 0
+                    # -X -Y: Approach via M2 (gives -Y and some -X via diagonal)
+                    self._current_primitive = 2  # M2: w2 → -XY diagonal
                 
                 self._best_primitive = self._current_primitive
                 self._best_dist = dist
