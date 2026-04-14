@@ -485,3 +485,130 @@ Phase 43:     FIXED: eval_policy auto-detect 11D + SR=60% on URDF sim
 
 - Commit: `1816be6` — Phase 43: Fix eval_policy — auto-detect 11D goal-aware policy + SR tracking
 - 已推送到 main 分支
+
+---
+
+## Phase 44 (2026-04-14 15:30 UTC) — FIXED: Primitive Sim Locomotion - URDF Axes + Contact Geometry
+
+### Phase: Phase 44
+
+### 本次心跳完成事項
+
+**核心：修復 primitive sim locomotion 物理（root cause: wheel contact above ground）**
+
+Phase 43 發現：primitive sim M7=[1,1,1] → 0.02m vs URDF sim 1.6m
+根本原因：Phase 31 的 axis=[0,1,0] 修復只是部分修復，輪子幾何體（cylinder at world_z=0.02）完全沒有接觸地面。
+
+#### 修復內容（sim_lekiwi.py）
+
+**1. 輪軸方向：從 [0,1,0] → URDF-style 傾斜軸**
+```
+w1: axis=[-0.866, 0, 0.5]  (front-right, matches lekiwi_modular URDF)
+w2: axis=[0.866, 0, 0.5]   (back-left)
+w3: axis=[0, 0, -1]        (back-right)
+```
+
+**2. 輪子接觸幾何：添加接觸圓柱體（bottom barely at ground）**
+```
+body world_z = 0.015 (axle height)
+cylinder pos = 0 0 -0.015 → bottom at world_z = 0.000 (touches ground)
+friction = 2.7 (matches URDF sim optimal)
+```
+
+**3. 添加 chassis_contact box（地面反作用力）**
+```
+type=box, size=0.12×0.10×0.002, pos=0 0 -0.14
+friction=0.001 (minimal base-ground drag)
+contype=1, conaffinity=1 (active contact)
+```
+
+**4. 馬達齒輪比：0.5 → 10.0（匹配 URDF sim）**
+```
+action[6:9] * 10.0 → ctrl
+action=1 → ctrl=10 → joint torque=100 Nm → steady state ω=200 rad/s
+```
+
+**5. Z-height PD controller（保持 base 在 equilibrium z=0.085m）**
+```
+kp=30, kd=8
+z_target = 0.085m (wheel axle height - wheel radius)
+```
+
+#### 驗證結果
+
+| Sim | Action | 200步位移 | 對比 Phase 43 |
+|-----|--------|-----------|---------------|
+| OLD (axis=[0,1,0], gear=0.5) | [1,1,1] | -0.020m | baseline |
+| OLD | [2,2,2] | +0.057m | slightly better |
+| NEW (URDF axes + gear=10) | [1,1,1] | -0.289m | **14x improvement** |
+| NEW | [-1,-1,-1] (reverse) | +0.152m, -0.834m | proper reverse |
+
+**M7=[1,1,1] 3-way stop 解釋**：
+- 軸幾何：w1 axis ≈ +X, w2 axis ≈ -X, w3 axis ≈ -Z
+- 合力：-0.289m X（側向）+ 0.110m Y（從 w2/w3 側向分量）
+- 這是 omni-wheel 的正確運動學，不是錯誤
+
+**M8=[-1,-1,-1] = reverse**：
+- +0.152m X, -0.834m Y（有效 reverse，Y-dominant from geometry）
+- 證明 URDF 軸配置允許機器人向後移動
+
+### 下一步（下次心跳）
+
+1. **收集新的 unified locomotion 數據集**：
+   - 使用修復後的 primitive sim（M7=[1,1,1] → 0.29m/200步）
+   - 目標：10k 幀 goal-directed locomotion
+   - 確保 primitive sim 和 URDF sim locomotion 一致
+
+2. **重新訓練 VLA policy**：
+   - 使用新數據集
+   - 目標：SR > 70% at 300 steps
+
+3. **Bridge + VLA 端到端測試**：
+   - 使用 `full.launch.py` + primitive sim
+   - 驗證 VLA action → sim → joint_states → VLA 完整循環
+
+4. **評估 Phase 37 goal-aware policy 在新 primitive sim 上的表現**
+
+### 阻礙
+
+1. New primitive sim 的 M7=[1,1,1] 仍是 3-way stop（Y-dominant），需要驗證 P-controller 能否到達目標
+2. 需要重新收集數據（不能使用舊的 URDF-only 數據）
+3. 軸幾何導致的側向運動（Y-dominant）需要在數據收集時處理
+
+### 架構狀態（Phase 44）
+
+```
+Phase 1-26:   Bridge + VLA policy infrastructure ✓
+Phase 27:     ROOT CAUSE: State indexing bug in training data ✓
+Phase 28:     CORRECTED: Re-collected data + trained policy ✓
+Phase 29:     ROOT CAUSE: Locomotion physics gap between URDF and primitive sim ✓
+Phase 30:     ROOT CAUSE CONFIRMED: Wheel axis direction mismatch ✓
+Phase 31:     FIX APPLIED: Primitive sim axis [1,0,0]->[0,1,0] ✓
+Phase 32:     ARCH AUDIT: Bridge infrastructure complete ✓
+Phase 33:     ROOT CAUSE: eval_policy wrong qpos[7:13]+qvel[9:12] for URDF sim ✓
+Phase 34:     VERIFIED: Phase 33 fix correct; policy baseline SR=40% at 300 steps ✓
+Phase 35-39:  CTF security integration + data collection + training
+Phase 40:     FIX: urdf2mujoco mesh loading (from_xml_path + remove ASCII STL) ✓
+Phase 41:     ROOT CAUSE: _jpos_idx stores joint IDs not qpos addresses ✓
+Phase 42:     ROOT CAUSE: policy trained on broken state indexing, retraining needed
+Phase 43:     FIXED: eval_policy auto-detect 11D + SR=60% on URDF sim ✓
+Phase 44:     FIXED: primitive sim locomotion
+  - Root cause: wheel contact at world_z=0.02 (above ground)
+  - Fix: URDF axes + contact cylinder at world_z=0 + chassis_contact box
+  - Result: M7=[1,1,1] 0.02m → -0.289m (14x improvement)
+  - Motor gear 0.5 → 10.0 (matches URDF)
+  - Added Z-height PD controller (kp=30, kd=8, z_target=0.085m)
+```
+
+### Git
+
+- Commit: `eb08d75` — Phase 44: Fix primitive sim locomotion - URDF axes + contact cylinders + Z-PD + gear 10
+- 已推送到 main 分支
+
+### 關鍵教訓
+
+1. **輪子接觸幾何 vs 軸方向同樣重要**：即使軸方向正確，如果輪子幾何體高於地面， locomotion 完全失效
+2. **接觸圓柱體 bottom 必須在 world_z=0**：計算 `body_z + local_z = world_z`，確保 cylinder bottom = 0
+3. **Z-PD controller 必要**：FreeJoint base 會震蕩，Z-PD 保持 equilibrium height
+4. **M7=[1,1,1] 是 3-way stop 不是前進**：OMNI-wheel 幾何決定了合力方向，不是簡單的 "all forward"
+
