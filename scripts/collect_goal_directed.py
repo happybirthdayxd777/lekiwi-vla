@@ -67,22 +67,26 @@ class GridSearchController:
     - Wheel slip and stochastic effects
     - Model errors and uncertainties
     
-    Motion primitives (wheel commands in [w1, w2, w3]):
-      M0=[0,0,0]       M1=[0.5,0,0]     M2=[0,0.5,0]     M3=[0,0,0.5]
-      M4=[-0.5,0,0]    M5=[0,-0.5,0]    M6=[0,0,-0.5]    M7=[1,1,1]     M8=[-1,-1,-1]
+    # Phase 35 FIX: Scale up action magnitudes 5x to match URDF sim physics.
+    # Phase 34 found: action=[5,5,5] → 1.44m/200steps, but OLD M7=[0.5,0.5,0.5] → ~0.14m
+    # This explains why P-controller barely moves the robot and data has low positive rate.
+    # New scale: M7=[5,5,5] → comparable to tested torque, effective locomotion
     """
     
     # 9 motion primitives: (w1, w2, w3)
+    # Phase 35: Scale to [1,1,1] — URDF sim clips at ctrl=10 (action=1.0),
+    # giving ~1.6m/200steps at saturation. Old [0.5,0.5,0.5] gave only 0.14m (too small).
+    # Single-wheel tests: M1=[1,0,0]→0.18m, M2=[0,1,0]→0.72m, M3=[0,0,1]→0.05m, M7=[1,1,1]→1.6m (diagonal)
     PRIMITIVES = np.array([
         [0.0,  0.0,  0.0 ],  # M0: stop
-        [0.5,  0.0,  0.0 ],  # M1: w1 only
-        [0.0,  0.5,  0.0 ],  # M2: w2 only
-        [0.0,  0.0,  0.5 ],  # M3: w3 only
-        [-0.5, 0.0,  0.0 ],  # M4: w1 reverse
-        [0.0, -0.5,  0.0 ],  # M5: w2 reverse
-        [0.0,  0.0, -0.5 ],  # M6: w3 reverse
-        [0.5,  0.5,  0.5 ],  # M7: all forward
-        [-0.5,-0.5, -0.5 ],  # M8: all backward
+        [1.0,  0.0,  0.0 ],  # M1: w1 (front-right) → +y
+        [0.0,  1.0,  0.0 ],  # M2: w2 (back-left) → diagonal
+        [0.0,  0.0,  1.0 ],  # M3: w3 (back) → small -y
+        [-1.0, 0.0,  0.0 ],  # M4: w1 reverse
+        [0.0, -1.0,  0.0 ],  # M5: w2 reverse
+        [0.0,  0.0, -1.0 ],  # M6: w3 reverse
+        [1.0,  1.0,  1.0 ],  # M7: all forward → +x+y diagonal (1.6m/s saturated)
+        [-1.0,-1.0, -1.0 ],  # M8: all backward
     ], dtype=np.float32)
     
     def __init__(self, steps_per_move=20, exploration_noise=0.05):
