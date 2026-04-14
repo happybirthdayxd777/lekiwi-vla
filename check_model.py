@@ -15,10 +15,10 @@ try:
 except ET.ParseError as e:
     print(f"XML valid: NO - {e}")
 
-# Then load with MuJoCo
+# Then load with MuJoCo via from_xml_path (uses absolute mesh paths in models/)
 import mujoco
 try:
-    m = mujoco.MjModel.from_xml_string(xml_str)
+    m = mujoco.MjModel.from_xml_path(str(urdf2mujoco.OUT_FILE))
     print(f"MuJoCo load: SUCCESS")
     print(f"  nq={m.nq} nv={m.nv} nbody={m.nbody} njnt={m.njnt} nctrl={m.nctrl} nmesh={m.nmesh}")
     print()
