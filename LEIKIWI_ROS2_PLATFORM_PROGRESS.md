@@ -1,5 +1,71 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
+## Phase 38 (2026-04-14 11:15 UTC) — CTF Security Audit Tool + Phase37 Training Complete
+
+### 本次心跳完成
+
+**1. Phase37 Training 完成（18 min CPU，50 epochs）**
+- Checkpoint: `results/phase37_goal_fixed_train/final_policy.pt` (611 MB)
+- 數據：10,000幀 Phase 36 校正後的 GridSearchController 數據（M7=[1,1,1]→+X，M8=[-1,-1,-1]→+X 已修正）
+- Training time: ~18 min CPU（~22s/epoch × 50）
+
+**2. CTF Security Audit Tool 創建**
+- `ctf_security_audit.py` — 獨立的資安監控工具，覆蓋 8 個 CTF 挑戰通道：
+  - C1: Forged cmd_vel (no HMAC)
+  - C2: DoS via rate flooding
+  - C3: Command injection (magnitude violation)
+  - C4: Physics DoS (acceleration spike)
+  - C5: Replay attack (identical sequence)
+  - C6: Sensor spoofing (joint_states injection)
+  - C7: Policy injection (vla_action override)
+  - C8: Policy hijacking (unauthorized switch)
+- API: `CTFSecurityAuditor` 類，可嵌入 bridge_node 作為資安後端
+- Demo 測試全部通過：每種攻擊都被正確檢測 + 發放 CTF flag
+
+**3. Policy 評估對比（Phase37 vs goal_aware）**
+- URDF sim，5 個目標，200 步：
+  - phase37: SR=0%, mean_dist=1.566m（0/5 成功）
+  - goal_aware: SR=0%, mean_dist=1.569m（0/5 成功）
+- 結論：兩個 policy 在 URDF sim 上都無法到達目標（URDF sim 物理不穩定，有 WARNING: QACC NaN）
+- 兩者表現幾乎相同，差異在 noise 範圍內
+
+### 架構現狀
+
+```
+lekiwi_ros2_bridge/
+  bridge_node.py           — ROS2↔MuJoCo 橋樑（兩種後端）
+  vla_policy_node.py       — CLIP-FM policy inference
+  real_hardware_adapter.py — 真實機器人適配器
+  ctf_security_audit.py    — CTF 資安審計工具（新增）
+  replay_node.py           — 數據回放
+
+lekiwi_modular/
+  lekiwi_controller/        — ROS2 omni_controller（真實 robot）
+  lekiwi_description/       — URDF + Gazebo
+
+lekiwi_ctf/
+  src/challenges.py        — CTF 挑戰框架
+  src/cron.py              — 自動化任務
+
+lekiwi_vla/
+  sim_lekiwi.py            — Primitive 模擬（快速穩定）
+  sim_lekiwi_urdf.py       — URDF 模擬（STL mesh）
+  ctf_security_audit.py    — 資安審計工具（新）
+```
+
+### 阻礙
+1. URDF sim 不穩定（QACC NaN）— policy 在上面幾乎無法收斂
+2. Phase 37 policy 與 goal_aware 在 URDF sim 上 SR 相同（0%）— 需在 primitive sim 評估真實 locomotion 能力差異
+3. VLA policy 的 vision encoder 未使用（CLIP 純特徵提取，無視覺 grounding）
+
+### 下一步
+1. 在 LeKiWiSim（primitive）上評估 phase37 vs goal_aware 真實 locomotion 能力
+2. 整合 CTFSecurityAuditor 到 bridge_node 替換現有 SecurityMonitor
+3. 啟動「真實模式」：ros2 launch lekiwi_ros2_bridge real_mode.launch.py
+4. 為 bridge_node 添加 `ctf_mode` parameter，開啟時記錄所有 CTF flags
+
+---
+
 ## [2026-04-13 2100]
 ### Phase: Phase 18 — VLA Policy Diagnosis + Retraining Prep
 
