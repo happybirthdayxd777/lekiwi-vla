@@ -237,10 +237,12 @@ def evaluate(policy, device, episodes=10, max_steps=200, verbose=True):
             img_t   = torch.from_numpy(img_np.transpose(2, 0, 1)).unsqueeze(0).to(device)
 
             # Use correct joint indices via _jpos_idx / _jvel_idx lookup
-            # qpos layout: [freejoint_base(6), arm_joints(6), wheel_joints(3)]
-            # arm j0..j5 → qpos[7:13], wheel w1..w3 → qvel[9:12]
-            arm_pos = sim.data.qpos[7:13]
-            wheel_v = sim.data.qvel[9:12]
+            # qpos layout: [freejoint_base(7), wheel_w1/w2/w3(3), arm_j0..j5(6)]
+            # arm j0..j5 → qpos[10:16], wheel w1..w3 → qvel[6:9]
+            # CRITICAL FIX (Phase 33): was using qpos[7:13] + qvel[9:12] which gave
+            # wheel positions for arm + wrong qvel indices. Matches _obs() output now.
+            arm_pos = sim.data.qpos[10:16]
+            wheel_v = sim.data.qvel[6:9]
             state_t = torch.from_numpy(np.concatenate([arm_pos, wheel_v])).float().unsqueeze(0).to(device)
 
             action = policy.infer(img_t, state_t, num_steps=4)
