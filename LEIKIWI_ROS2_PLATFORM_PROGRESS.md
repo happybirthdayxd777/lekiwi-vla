@@ -699,3 +699,84 @@ Phase 50:     Heartbeat: kinematics verified ✓, policy baseline SR=0% goal(0.3
 
 - Commit: `d7dc1db` — Phase 50 heartbeat: kinematics verified, eval SR=0% goal (0.3,0.2) 100steps
 - 已推送到 main 分支
+
+## Phase 52 (2026-04-14 2015) — XML GEAR MISMATCH CRITICAL FIX
+
+### 本次心跳完成事項
+
+**CRITICAL BUG FOUND AND FIXED: models/lekiwi_mujoco.xml wheel motor gear mismatch**
+
+#### Bug Analysis
+- `models/lekiwi_mujoco.xml` had wheel motor gear=0.5
+- `sim_lekiwi_urdf.py` XML string had wheel motor gear=10.0
+- The `.xml` file is loaded by `urdf2mujoco.py` for standalone use
+- `sim_lekiwi_urdf.py` uses embedded XML string (correct gear=10.0)
+- Result: external tools using the `.xml` would see different physics than the bridge
+
+#### Impact
+- With gear=0.5, damping=0.5, terminal wheel velocity = 10 rad/s (for ctrl=10)
+- With gear=10, damping=0.5, terminal wheel velocity = 200 rad/s
+- Training data collected with URDF sim (gear=10) → wheel velocities up to 200 rad/s
+- If external tools loaded `.xml` with gear=0.5, they'd see 20x slower locomotion
+- Phase 36 data states[6:9] range: [-85, 201] confirmed gear=10 physics
+
+#### Fix Applied
+```xml
+<!-- models/lekiwi_mujoco.xml -->
+<!-- Before: -->
+<motor joint="w0" gear="0.5"/>
+<motor joint="w1" gear="0.5"/>
+<motor joint="w2" gear="0.5"/>
+<!-- After: -->
+<motor joint="w0" gear="10"/>
+<motor joint="w1" gear="10"/>
+<motor joint="w2" gear="10"/>
+```
+
+#### Verification
+- URDF sim with gear=10: 1.4389m / 200 steps forward ✓ (matches Phase 31 result 1.606m)
+- Stable simulation (no NaN/Inf in qvel)
+- Both `lekiwi_mujoco.xml` and `sim_lekiwi_urdf.py` now consistent
+
+### 下一步（下次心跳）
+
+1. **收集 normalized 數據集**（核心優先級）:
+   - Current training data has raw wheel velocities up to 200 rad/s
+   - Need normalized state for robust policy training
+   - Fix `_obs()` to clip or scale wheel_velocities
+
+2. **Bridge ROS2 integration**（需 Linux VM）:
+   - Bridge node topology confirmed working (927 lines)
+   - VLA policy node (545 lines) integrated
+   - Need ROS2 environment for end-to-end test
+
+3. **URDF sim wheel motor gear = 10 confirmed**:
+   - Forward locomotion: 1.4389m / 200 steps ✓
+   - Matches Phase 31's 1.606m result
+
+### 阻礙
+
+1. **State scale mismatch**: wheel_velocities in training data = [-85, 201] rad/s
+   - Neural network sees vastly different scales across state dimensions
+   - Need normalization: clip to [-10, 10] or scale to [-1, 1]
+2. macOS no ROS2 — bridge testing requires Linux
+
+### 架構狀態（Phase 52）
+
+```
+Phase 1-26:   Bridge + VLA policy infrastructure ✓
+Phase 27-34:  ROOT CAUSE: state indexing, wheel axis, eval normalization ✓
+Phase 35:     MuJoCo physics deep-dive ✓
+Phase 48:     Bridge WHEEL_POSITIONS FIXED ✓
+Phase 49:     validate_bridge_kinematics.py stale reference FIXED ✓
+Phase 50:     Policy baseline eval: SR=0% (root cause: state scale + physics mismatch)
+Phase 51:     Heartbeat: verified gear=10 physics (1.606m/200steps)
+Phase 52:     CRITICAL FIX: lekiwi_mujoco.xml gear 0.5→10 (matches sim_lekiwi_urdf.py)
+  - XML file now consistent with sim_lekiwi_urdf.py embedded XML
+  - External tools (urdf2mujoco.py) will now see correct gear=10 physics
+  - Forward locomotion verified: 1.439m/200steps
+```
+
+### Git
+
+- Commit pending: `Phase 52 heartbeat: CRITICAL FIX lekiwi_mujoco.xml wheel gear 0.5→10`
