@@ -28,7 +28,7 @@ import numpy as np
 import sys
 import os
 import time
-from typing import Optional
+from typing import Optional, Union
 
 # ── LeKiWi action limits (mirrors lerobot_policy_inference.py) ────────────────
 LEKIWI_ARM_LIMITS = np.array([
@@ -59,6 +59,93 @@ def normalize_action(raw_action: np.ndarray) -> np.ndarray:
     wheel_n = LEKIWI_WHEEL_LIMITS[:, 0] + (wheel + 1) / 2 * (
         LEKIWI_WHEEL_LIMITS[:, 1] - LEKIWI_WHEEL_LIMITS[:, 0])
     return np.concatenate([arm_n, wheel_n]).astype(np.float32)
+
+
+# ── Action Smoother (Phase 61) ─────────────────────────────────────────────────
+class ActionSmoother:
+    """
+    Exponential moving average smoother for VLA policy actions.
+    
+    Reduces jerky wheel commands that cause URDF sim instability.
+    Uses separate smoothing factors for arms (stiffer) vs wheels (softer).
+    
+    Phase 61: Addresses SR=33% root cause — raw policy output has high-frequency
+    wheel velocity oscillations that destabilize the URDF simulation after step 50.
+    """
+
+    def __init__(
+        self,
+        wheel_alpha: float = 0.25,   # EMA coefficient for wheels (0=wet, 1=no smooth)
+        arm_alpha: float  = 0.70,   # EMA coefficient for arms (less smoothing needed)
+        wheel_max_delta: float = 0.8,  # Max wheel action change per step (rad/s)
+        arm_max_delta: float  = 0.5,  # Max arm action change per step (rad)
+        warmup_steps: int = 10,       # No smoothing for first N steps (let policy settle)
+    ):
+        self.wheel_alpha    = wheel_alpha
+        self.arm_alpha      = arm_alpha
+        self.wheel_max_delta = wheel_max_delta
+        self.arm_max_delta   = arm_max_delta
+        self.warmup_steps    = warmup_steps
+        self._wheel_smoothed: Optional[np.ndarray] = None
+        self._arm_smoothed:  Optional[np.ndarray]  = None
+        self._step = 0
+
+    def smooth(self, action: np.ndarray) -> np.ndarray:
+        """
+        Apply EMA smoothing + delta clipping to action.
+        
+        Parameters
+        ----------
+        action : np.ndarray (9,)
+            Native-unit action [arm*6, wheel*3]
+            
+        Returns
+        -------
+        np.ndarray (9,)
+            Smoothed action with clamped deltas
+        """
+        arm_action   = action[:6]
+        wheel_action = action[6:9]
+        
+        # Warmup: no smoothing, just store
+        if self._step < self.warmup_steps:
+            if self._wheel_smoothed is None:
+                self._wheel_smoothed = wheel_action.copy()
+                self._arm_smoothed   = arm_action.copy()
+            else:
+                self._wheel_smoothed = wheel_action.copy()
+                self._arm_smoothed    = arm_action.copy()
+            self._step += 1
+            return action
+        
+        # ── Wheel smoothing (lower alpha = more smoothing) ─────────────────
+        delta_wheel = wheel_action - self._wheel_smoothed
+        # Clamp large changes to prevent jerky starts
+        delta_wheel_clamped = np.clip(
+            delta_wheel,
+            -self.wheel_max_delta,
+            self.wheel_max_delta
+        )
+        self._wheel_smoothed = self._wheel_smoothed + self.wheel_alpha * delta_wheel_clamped
+        
+        # ── Arm smoothing (higher alpha = less smoothing — arms need responsiveness) ─
+        delta_arm = arm_action - self._arm_smoothed
+        delta_arm_clamped = np.clip(
+            delta_arm,
+            -self.arm_max_delta,
+            self.arm_max_delta
+        )
+        self._arm_smoothed = self._arm_smoothed + self.arm_alpha * delta_arm_clamped
+        
+        result = np.concatenate([self._arm_smoothed, self._wheel_smoothed])
+        self._step += 1
+        return result
+
+    def reset(self):
+        """Reset smoothing state (called on episode boundary)."""
+        self._wheel_smoothed = None
+        self._arm_smoothed   = None
+        self._step = 0
 
 
 # ── Mock policy (no GPU needed) ───────────────────────────────────────────────
@@ -383,6 +470,12 @@ class LeKiWiVLAPolicyNode(Node):
         # Phase 16: goal_xy for goal-aware 11D state
         self.declare_parameter("goal_x",    0.5)
         self.declare_parameter("goal_y",    0.0)
+        # Phase 61: action smoothing parameters
+        self.declare_parameter("wheel_alpha",   0.25)
+        self.declare_parameter("arm_alpha",     0.70)
+        self.declare_parameter("wheel_max_delta", 0.8)
+        self.declare_parameter("arm_max_delta",  0.5)
+        self.declare_parameter("smooth_warmup",  10)
 
         policy_name  = str(self.get_parameter("policy").value)
         pretrained_v = self.get_parameter("pretrained").value
@@ -399,6 +492,25 @@ class LeKiWiVLAPolicyNode(Node):
         self.get_logger().info(f"Loading VLA policy: '{policy_name}' on {device}")
         self.policy = _load_policy(policy_name, pretrained, device)
         self.get_logger().info(f"Policy '{policy_name}' loaded.")
+
+        # ── Phase 61: Action Smoother ────────────────────────────────────────
+        wheel_alpha      = float(self.get_parameter("wheel_alpha").value)
+        arm_alpha        = float(self.get_parameter("arm_alpha").value)
+        wheel_max_delta  = float(self.get_parameter("wheel_max_delta").value)
+        arm_max_delta    = float(self.get_parameter("arm_max_delta").value)
+        smooth_warmup    = int(self.get_parameter("smooth_warmup").value)
+        self._smoother = ActionSmoother(
+            wheel_alpha=wheel_alpha,
+            arm_alpha=arm_alpha,
+            wheel_max_delta=wheel_max_delta,
+            arm_max_delta=arm_max_delta,
+            warmup_steps=smooth_warmup,
+        )
+        self.get_logger().info(
+            f"ActionSmoother active: wheel_alpha={wheel_alpha}, arm_alpha={arm_alpha}, "
+            f"wheel_max_delta={wheel_max_delta}, arm_max_delta={arm_max_delta}, "
+            f"warmup={smooth_warmup}"
+        )
 
         # ── ROS2 publishers ──────────────────────────────────────────────────
         qos = QoSProfile(
@@ -515,9 +627,16 @@ class LeKiWiVLAPolicyNode(Node):
         raw_action = self.policy.predict(obs)         # (9,) in [-1, 1]
         native_action = normalize_action(raw_action)   # (9,) in native units
 
+        # ── Phase 61: Action Smoother ─────────────────────────────────────────
+        # Apply EMA smoothing + delta clipping to reduce jerky wheel commands
+        # that destabilize URDF simulation after step 50.
+        # Arms: less smoothing (alpha=0.70) to preserve manipulation responsiveness
+        # Wheels: more smoothing (alpha=0.25) to reduce high-frequency oscillations
+        smoothed_action = self._smoother.smooth(native_action)
+
         # Publish
         msg = Float64MultiArray()
-        msg.data = native_action.tolist()
+        msg.data = smoothed_action.tolist()
         self.action_pub.publish(msg)
 
         self._inference_count += 1

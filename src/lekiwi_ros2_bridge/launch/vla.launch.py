@@ -46,6 +46,30 @@ def generate_launch_description() -> LaunchDescription:
         "device", default_value="cpu",
         description="Device for VLA inference: cpu, cuda, mps",
     )
+    goal_x_arg = DeclareLaunchArgument(
+        "goal_x", default_value="0.3",
+        description="Goal X position for task_oriented policy (meters)",
+    )
+    goal_y_arg = DeclareLaunchArgument(
+        "goal_y", default_value="0.2",
+        description="Goal Y position for task_oriented policy (meters)",
+    )
+    wheel_alpha_arg = DeclareLaunchArgument(
+        "wheel_alpha", default_value="0.25",
+        description="ActionSmoother wheel EMA coefficient (0=smooth, 1=no smooth)",
+    )
+    arm_alpha_arg = DeclareLaunchArgument(
+        "arm_alpha", default_value="0.70",
+        description="ActionSmoother arm EMA coefficient",
+    )
+    wheel_max_delta_arg = DeclareLaunchArgument(
+        "wheel_max_delta", default_value="0.8",
+        description="Max wheel action change per step (rad/s)",
+    )
+    arm_max_delta_arg = DeclareLaunchArgument(
+        "arm_max_delta", default_value="0.5",
+        description="Max arm action change per step (rad)",
+    )
 
     vla_node = Node(
         package="lekiwi_ros2_bridge",
@@ -55,6 +79,12 @@ def generate_launch_description() -> LaunchDescription:
             "policy":     LaunchConfiguration("policy"),
             "pretrained": LaunchConfiguration("pretrained"),
             "device":     LaunchConfiguration("device"),
+            "goal_x":     LaunchConfiguration("goal_x"),
+            "goal_y":     LaunchConfiguration("goal_y"),
+            "wheel_alpha":    LaunchConfiguration("wheel_alpha"),
+            "arm_alpha":      LaunchConfiguration("arm_alpha"),
+            "wheel_max_delta": LaunchConfiguration("wheel_max_delta"),
+            "arm_max_delta":   LaunchConfiguration("arm_max_delta"),
         }],
         remappings=[
             ("/lekiwi/joint_states",    "/lekiwi/joint_states"),
@@ -67,5 +97,11 @@ def generate_launch_description() -> LaunchDescription:
         policy_arg,
         pretrained_arg,
         device_arg,
+        goal_x_arg,
+        goal_y_arg,
+        wheel_alpha_arg,
+        arm_alpha_arg,
+        wheel_max_delta_arg,
+        arm_max_delta_arg,
         vla_node,
     ])

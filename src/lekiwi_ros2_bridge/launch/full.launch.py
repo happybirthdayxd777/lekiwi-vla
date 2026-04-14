@@ -97,6 +97,30 @@ def generate_launch_description() -> LaunchDescription:
         "replay_hz", default_value="20.0",
         description="Replay frequency in Hz",
     )
+    goal_x = DeclareLaunchArgument(
+        "goal_x", default_value="0.3",
+        description="Goal X for task_oriented policy (meters)",
+    )
+    goal_y = DeclareLaunchArgument(
+        "goal_y", default_value="0.2",
+        description="Goal Y for task_oriented policy (meters)",
+    )
+    wheel_alpha = DeclareLaunchArgument(
+        "wheel_alpha", default_value="0.25",
+        description="ActionSmoother wheel EMA coefficient (0=smooth, 1=no smooth)",
+    )
+    arm_alpha = DeclareLaunchArgument(
+        "arm_alpha", default_value="0.70",
+        description="ActionSmoother arm EMA coefficient",
+    )
+    wheel_max_delta = DeclareLaunchArgument(
+        "wheel_max_delta", default_value="0.8",
+        description="Max wheel action change per step (rad/s)",
+    )
+    arm_max_delta = DeclareLaunchArgument(
+        "arm_max_delta", default_value="0.5",
+        description="Max arm action change per step (rad)",
+    )
 
     enable_hmac = DeclareLaunchArgument(
         "enable_hmac", default_value="false",
@@ -131,9 +155,15 @@ def generate_launch_description() -> LaunchDescription:
         executable="vla_policy_node",
         name="lekiwi_vla_policy_node",
         parameters=[{
-            "policy":     LaunchConfiguration("policy"),
-            "pretrained": LaunchConfiguration("pretrained"),
-            "device":     LaunchConfiguration("device"),
+            "policy":         LaunchConfiguration("policy"),
+            "pretrained":    LaunchConfiguration("pretrained"),
+            "device":        LaunchConfiguration("device"),
+            "goal_x":        LaunchConfiguration("goal_x"),
+            "goal_y":        LaunchConfiguration("goal_y"),
+            "wheel_alpha":   LaunchConfiguration("wheel_alpha"),
+            "arm_alpha":     LaunchConfiguration("arm_alpha"),
+            "wheel_max_delta": LaunchConfiguration("wheel_max_delta"),
+            "arm_max_delta":   LaunchConfiguration("arm_max_delta"),
         }],
         remappings=[
             # VLA node reads from bridge's joint_states output
@@ -176,6 +206,12 @@ def generate_launch_description() -> LaunchDescription:
         replay_hz,
         enable_hmac,
         cmd_vel_secret,
+        goal_x,
+        goal_y,
+        wheel_alpha,
+        arm_alpha,
+        wheel_max_delta,
+        arm_max_delta,
         bridge_node,
         vla_node,
         replay_node,
