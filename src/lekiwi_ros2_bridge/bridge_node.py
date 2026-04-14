@@ -82,25 +82,33 @@ URDF_ARM_JOINT_NAMES = [
 ]
 
 
-# ── Kinematics constants (from omni_controller.py) ──────────────────────────────
-WHEEL_RADIUS   = 0.05    # m
+# ── Kinematics constants (Phase 48: fixed from URDF sim_lekiwi_urdf.xml) ───────
+# These MUST match the MuJoCo URDF model geometry for cmd_vel → wheel_speeds
+# to correctly drive the simulation. Previous values were approximations.
+#
+# Wheel positions (base_link frame, from <body> definitions in sim_lekiwi_urdf.xml):
+#   wheel_0 (→w1, Revolute-64):  pos="0.0866 0.10 -0.06",  axis="-0.866 0 0.5"
+#   wheel_1 (→w2, Revolute-62):  pos="-0.0866 0.10 -0.06", axis="0.866 0 0.5"
+#   wheel_2 (→w3, Revolute-60):  pos="-0.0866 -0.10 -0.06", axis="0 0 -1"
+#
+# Bug fix (Phase 48): Bridge WHEEL_POSITIONS were wrong:
+#   OLD: [0.1732,0,0], [-0.0866,0.15,0], [-0.0866,-0.15,0]  ← these don't match URDF
+#   NEW: [0.0866,0.10,-0.06], [-0.0866,0.10,-0.06], [-0.0866,-0.10,-0.06]  ← URDF geometry
+WHEEL_RADIUS   = 0.05    # m (wheel roller radius)
 WHEEL_POSITIONS = np.array([
-    [ 0.1732,  0.0,    0.0 ],   # wheel 0 — front
-    [-0.0866,  0.15,   0.0 ],   # wheel 1 — back-left
-    [-0.0866, -0.15,   0.0 ],   # wheel 2 — back-right
+    [ 0.0866,  0.10,  -0.06 ],   # wheel_0 — back-right (Revolute-64)
+    [-0.0866,  0.10,  -0.06 ],   # wheel_1 — back-left  (Revolute-62)
+    [-0.0866, -0.10,  -0.06 ],   # wheel_2 — front      (Revolute-60)
 ], dtype=np.float64)
 
-# Roller axes extracted from LeKiWi.urdf (meters, already normalised)
-# Bridge wheel indices → URDF joint → MuJoCo/joint axis:
-#   wheel_0 → Revolute-64 → [-0.866025,  0, 0.5]    (back-right motor)
-#   wheel_1 → Revolute-62 → [ 0.866025,  0, 0.5]    (back-left motor)
-#   wheel_2 → Revolute-60 → [ 0,         0, -1.0]   (front motor — pure Z spin)
-# Note: wheel_2 axis=[0,0,-1] is the OMNI ROLLER axis (roller spins around Z to move forward/back).
-# Previous code had wheel_0 and wheel_2 axes swapped — fixed 2026-04-12.
+# Roller axes from URDF (continuous revolute joints):
+#   wheel_0 Revolute-64:  axis=[-0.866025,  0,  0.5]
+#   wheel_1 Revolute-62:  axis=[ 0.866025,  0,  0.5]
+#   wheel_2 Revolute-60:  axis=[ 0,         0, -1.0]   (pure Z roller for forward/back)
 _JOINT_AXES = np.array([
-    [-0.866025,  0.0,  0.5      ],   # wheel_0 — Revolute-64
-    [ 0.866025,  0.0,  0.5      ],   # wheel_1 — Revolute-62
-    [ 0.0,       0.0, -1.0      ],   # wheel_2 — Revolute-60
+    [-0.866025,  0.0,  0.5 ],   # wheel_0 — Revolute-64
+    [ 0.866025,  0.0,  0.5 ],   # wheel_1 — Revolute-62
+    [ 0.0,       0.0, -1.0 ],   # wheel_2 — Revolute-60
 ], dtype=np.float64)
 
 
