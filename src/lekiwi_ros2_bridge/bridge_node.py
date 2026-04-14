@@ -51,6 +51,7 @@ sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
 from sim_lekiwi import LeKiwiSim
 from sim_lekiwi_urdf import LeKiWiSimURDF
 from security_monitor import SecurityMonitor
+from ctf_security_audit import CTFSecurityAuditor
 from policy_guardian import PolicyGuardian
 from trajectory_logger import TrajectoryRecorder
 
@@ -161,6 +162,7 @@ class LeKiWiBridge(Node):
         self.declare_parameter("record_images", True)
         self.declare_parameter("enable_hmac", False)
         self.declare_parameter("cmd_vel_secret", "")
+        self.declare_parameter("ctf_mode", False)  # when True, records all CTF flags to JSONL
 
         p_enable_hmac = self.get_parameter("enable_hmac")
         p_cmd_vel_secret = self.get_parameter("cmd_vel_secret")
@@ -170,6 +172,14 @@ class LeKiWiBridge(Node):
             cmd_vel_secret_bytes = cmd_vel_secret.encode()
         else:
             cmd_vel_secret_bytes = None
+        p_ctf_mode = self.get_parameter("ctf_mode")
+        ctf_mode = bool(p_ctf_mode.value) if p_ctf_mode.value else False
+        if ctf_mode:
+            ctf_log_path = os.path.join(
+                os.path.expanduser("~"), "hermes_research", "lekiwi_vla", "ctf_flags.jsonl"
+            )
+        else:
+            ctf_log_path = None
         p_sim = self.get_parameter("sim_type")
         p_mode = self.get_parameter("mode")
         p_record = self.get_parameter("record")
@@ -209,15 +219,29 @@ class LeKiWiBridge(Node):
             self.get_logger().info("Primitive simulation initialised.")
             self.hw = None
 
-        # CTF security monitor
+        # CTF security monitor — full 8-channel CTF auditor
+        self.ctf_auditor = CTFSecurityAuditor(
+            alert_callback=self._on_security_alert,
+            enable_flags=True,
+            log_path=ctf_log_path,
+        )
+        self.get_logger().info(
+            "CTFSecurityAuditor active — monitoring 8 CTF channels: "
+            "C1(cmd_vel_hmac) C2(rate_flood) C3(magnitude) C4(accel) "
+            "C5(replay) C6(sensor_spoof) C7(vla_inject) C8(policy_hijack)."
+        )
+        if ctf_mode:
+            self.get_logger().info(f"CTF mode ON — flags will be logged to {ctf_log_path}")
+
+        # Legacy SecurityMonitor — kept for backward compat with existing callbacks
         self.security_monitor = SecurityMonitor(
             enable_hmac=enable_hmac,
             cmd_vel_secret=cmd_vel_secret_bytes,
         )
         if enable_hmac:
-            self.get_logger().info("SecurityMonitor active with HMAC cmd_vel verification (Challenge 1 defense).")
+            self.get_logger().info("SecurityMonitor (legacy compat) active with HMAC verification.")
         else:
-            self.get_logger().info("SecurityMonitor active (raw cmd_vel anomaly detection).")
+            self.get_logger().info("SecurityMonitor (legacy compat) active.")
 
         # Active policy guardian — blocks unknown policy fingerprints
         self.policy_guardian = PolicyGuardian()
@@ -326,6 +350,25 @@ class LeKiWiBridge(Node):
             "  /lekiwi/wheel_N/cmd_vel → publish"
         )
 
+    # ── Security alert callback (used by CTFSecurityAuditor) ──────────────────
+
+    def _on_security_alert(self, alert) -> None:
+        """
+        Called by CTFSecurityAuditor when a CTF-relevant attack is detected.
+        Publishes the alert to /lekiwi/security_alert and logs it.
+        """
+        import json
+        self._blocked_count += 1
+        self.get_logger().warn(
+            f"[{alert.challenge_id}] {alert.channel}: {alert.description} "
+            f"(severity={alert.severity}, flag={alert.flag or 'none'})",
+            throttle_duration_sec=3.0,
+        )
+        # Publish to ROS2 topic for external monitors
+        alert_msg = String()
+        alert_msg.data = alert.to_json()
+        self.alert_pub.publish(alert_msg)
+
     # ── HMAC-signed cmd_vel callback (Challenge 1 defense) ─────────────────────
 
     def _on_cmd_vel_hmac(self, msg) -> None:
@@ -369,6 +412,14 @@ class LeKiWiBridge(Node):
             })
             self.alert_pub.publish(alert_msg)
             return
+
+        # CTF SecurityAuditor — C1/C2/C3/C4/C5 detection on HMAC-verified cmd_vel
+        ctf_alert = self.ctf_auditor.on_cmd_vel(
+            vx=vx, vy=vy, wz=wz, timestamp=stamp, hmac_verified=True
+        )
+        if ctf_alert is not None:
+            self.get_logger().debug(
+                f"CTF [{ctf_alert.challenge_id}] on verified cmd_vel — {ctf_alert.description}")
 
         # HMAC verified — reset watchdog and apply command
         self._last_cmd_vel_time = self.get_clock().now()
@@ -423,6 +474,16 @@ class LeKiWiBridge(Node):
                     self._blocked_count, verdict.event_type, verdict.severity, vx, vy, wz),
                 throttle_duration_sec=2.0)
             return
+
+        # CTF SecurityAuditor — C1/C2/C3/C4/C5 detection on raw cmd_vel
+        ctf_alert = self.ctf_auditor.on_cmd_vel(
+            vx=vx, vy=vy, wz=wz, timestamp=stamp, hmac_verified=False
+        )
+        if ctf_alert is not None:
+            # Logged + published by _on_security_alert callback; command still allowed
+            # (CTF auditors run in detect-only mode for raw cmd_vel; HMAC is the blocker)
+            self.get_logger().debug(
+                f"CTF [{ctf_alert.challenge_id}] on raw cmd_vel — hmac_verified=False (allowed by policy)")
 
         # Compute wheel angular velocities from kinematics
         wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
@@ -511,6 +572,17 @@ class LeKiWiBridge(Node):
             # VLA action = native units; clamp to safe limits
             action[:6] = np.clip(action[:6], self.ARM_CTRL_MIN,  self.ARM_CTRL_MAX)
             action[6:] = np.clip(action[6:], self.WHEEL_CTRL_MIN, self.WHEEL_CTRL_MAX)
+
+            # CTF SecurityAuditor — C7: VLA action injection detection
+            stamp = self.get_clock().now().nanoseconds / 1e9
+            ctf_alert = self.ctf_auditor.on_vla_action(
+                action=list(action),
+                policy_name=getattr(self, '_current_policy_name', 'unknown'),
+                timestamp=stamp,
+            )
+            if ctf_alert is not None:
+                self.get_logger().debug(f"CTF [{ctf_alert.challenge_id}] VLA action — {ctf_alert.description}")
+
             self._last_action = action
             self._vla_action_fresh = True
         except Exception as e:
@@ -683,6 +755,17 @@ class LeKiWiBridge(Node):
         urdf_msg.velocity = list(obs.get("arm_velocities", np.zeros(6))) + list(wheel_vel)
         self.joint_state_urdf_pub.publish(urdf_msg)
 
+        # ── CTF SecurityAuditor — C6: sensor spoofing detection ──────────────
+        stamp = now.seconds_nanoseconds()[0] + now.seconds_nanoseconds()[1] * 1e-9
+        ctf_alert = self.ctf_auditor.on_joint_states(
+            position=urdf_msg.position,
+            velocity=urdf_msg.velocity,
+            timestamp=stamp,
+        )
+        if ctf_alert is not None:
+            self.get_logger().debug(
+                f"CTF [{ctf_alert.challenge_id}] sensor — {ctf_alert.description}")
+
         # ── Camera Images (throttled to 4 Hz to avoid URDF render overhead) ────
         self._frame_count += 1
         if self._frame_count % 5 == 0:   # publish every 5th frame (4 Hz @ 20 Hz timer)
@@ -760,6 +843,18 @@ class LeKiWiBridge(Node):
 
         # ── Layer 1: Passive SecurityMonitor (log-only, backward compat) ────
         sec_verdict = self.security_monitor.check_policy(policy_bytes, stamp)
+
+        # ── CTF Layer: C8 policy hijacking detection ─────────────────────────
+        old_policy = getattr(self, '_current_policy_name', 'unknown')
+        ctf_alert = self.ctf_auditor.on_policy_switch(
+            old_policy=old_policy,
+            new_policy=guardian_verdict.details.get("policy_name", "unknown"),
+            timestamp=stamp,
+            authorized=(guardian_verdict.action == "allow"),
+        )
+        if ctf_alert is not None:
+            self.get_logger().debug(
+                f"CTF [{ctf_alert.challenge_id}] policy switch — {ctf_alert.description}")
 
         # ── Layer 2: Active PolicyGuardian (blocks, alerts, rolls back) ────
         guardian_verdict = self.policy_guardian.check_and_guard(policy_bytes, stamp)

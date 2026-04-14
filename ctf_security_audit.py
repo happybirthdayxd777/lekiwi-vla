@@ -466,6 +466,12 @@ class CTFSecurityAuditor:
         self.alerts.append(alert)
         if self.alert_callback:
             self.alert_callback(alert)
+        if self.log_path:
+            try:
+                with open(self.log_path, "a") as f:
+                    f.write(json.dumps(alert.to_dict()) + "\n")
+            except Exception:
+                pass  # non-fatal
 
     def _get_rate(self, times_deque: deque, window: float = 1.0) -> float:
         """Calculate rate (events/second) from a times deque over a sliding window."""
