@@ -241,3 +241,65 @@ Policy 行為：
 - 評估目標 (0.5, 0.0) 不在訓練分佈 → 根本原因是數據分佈，非架構
 - 缺乏 ROS2 runtime 環境
 - lekiwi_modular remote 404
+
+---
+
+## Phase 39 (2026-04-14 11:38 UTC) — CTFSecurityAuditor Integration
+
+### 本次心跳完成
+
+**CTFSecurityAuditor 完整集成進 bridge_node.py（8 通道資安監控）**
+
+bridge_node.py 新增 `self.ctf_auditor: CTFSecurityAuditor`，監控所有 CTF 攻擊通道：
+
+| Challenge | Channel | 檢測內容 | bridge_node 調用位置 |
+|-----------|---------|---------|---------------------|
+| C1 | `/lekiwi/cmd_vel` | 無 HMAC 的 cmd_vel（forged） | `_on_cmd_vel()` raw |
+| C2 | `/lekiwi/cmd_vel` | Rate flooding (>100Hz) | `_on_cmd_vel()` |
+| C3 | `/lekiwi/cmd_vel` | Magnitude violation (>1.5m/s) | `_on_cmd_vel()` / `_on_cmd_vel_hmac()` |
+| C4 | `/lekiwi/cmd_vel` | Acceleration spike (>5m/s²) | `_on_cmd_vel()` / `_on_cmd_vel_hmac()` |
+| C5 | `/lekiwi/cmd_vel` | Replay attack (3x identical) | `_on_cmd_vel()` / `_on_cmd_vel_hmac()` |
+| C6 | `/lekiwi/joint_states` | Sensor spoofing (velocity/position jump) | `_on_timer()` publish |
+| C7 | `/lekiwi/vla_action` | Policy injection (arm/wheel action limit) | `_on_vla_action()` |
+| C8 | `/lekiwi/policy` | Policy hijacking (unauthorized switch) | `_on_policy_input()` |
+
+**代碼變更：**
+- `bridge_node.py`: 824 → 919 lines (+95)
+  - 新增 `ctf_mode` parameter：開啟時寫入 `ctf_flags.jsonl`
+  - 新增 `_on_security_alert()` callback：將 `SecurityAlert` 發布至 `/lekiwi/security_alert`
+  - C1/C2/C3/C4/C5 集成至 `_on_cmd_vel()` 和 `_on_cmd_vel_hmac()`
+  - C6 集成至 `_on_timer()` joint_states 發布
+  - C7 集成至 `_on_vla_action()`
+  - C8 集成至 `_on_policy_input()`
+- `ctf_security_audit.py`: `_record()` 修復 — log_path 為 None 時不寫入，設定後寫入 JSONL
+
+**Legacy 相容性：**
+- `SecurityMonitor`（舊版 6-channel）保留用於現有 `check_cmd_vel()` / `check_cmd_vel_hmac()` / `check_policy()` 回調
+- `PolicyGuardian` 保留用於 `_on_policy_input()` 的主動阻斷邏輯
+
+### 架構現狀
+
+```
+lekiwi_ros2_bridge/
+  bridge_node.py           — ROS2↔MuJoCo 橋樑（919行，含 CTFSecurityAuditor）
+  vla_policy_node.py       — CLIP-FM policy inference
+  real_hardware_adapter.py — 真實機器人適配器
+  ctf_security_audit.py   — CTF 資安審計工具（已修復 log_path）
+  replay_node.py           — 數據回放
+
+lekiwi_vla/
+  sim_lekiwi.py            — Primitive 模擬
+  sim_lekiwi_urdf.py       — URDF 模擬（STL mesh）
+  ctf_security_audit.py   — CTF 資安審計工具
+  phase37_goal_fixed_train/ — 已訓練 policy (611MB, 50 epochs)
+```
+
+### 阻礙
+1. URDF sim 不穩定（QACC NaN）— policy 在上面 SR=0%
+2. 缺乏 ROS2 runtime 環境做端到端驗證
+3. lekiwi_modular remote 404（需更換 remote URL）
+
+### 下一步
+1. 測試 bridge_node + CTFSecurityAuditor 在有 ROS2 的環境（colcon build + ros2 run）
+2. 在 primitive sim 上評估 phase37 policy 的真實 locomotion 能力
+3. 收集寬範圍多目標訓練數據（goal range [-0.8, 0.8]²）並重新訓練
