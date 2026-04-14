@@ -455,11 +455,17 @@ class LeKiWiSimURDF:
         # Equilibrium: wheel_body_z = base_z - 0.06, contact_cylinder_bottom = wheel_body_z - 0.025
         # For contact_cylinder_bottom=0 (ground): base_z = 0.085m
         base_body_id = self.model.body('base').id
+        # NOTE (Phase 54): xpos is WORLD frame — stable regardless of base rotation.
+        # Previous Phase 35 code used cvel[base_body_id, 5] which is YAW RATE in BODY frame,
+        # NOT vertical velocity. This caused random instability as base rotated.
+        # Fix: use qvel[2] = world frame Z linear velocity (cvel translation to world).
         base_z = self.data.xpos[base_body_id, 2]
         kp_z = 30.0   # proportional: upward force when base_z < 0.085
-        kd_z = 8.0    # derivative: damping on vertical velocity
+        kd_z = 8.0    # derivative: damping on world Z velocity
         z_target = 0.085  # equilibrium height (wheel axle - wheel radius)
-        z_force = kp_z * (z_target - base_z) - kd_z * self.data.cvel[base_body_id, 5]
+        # Use world-frame Z velocity (qvel[2]) for damping, NOT body-frame cvel[5] (yaw rate)
+        world_z_vel = self.data.qvel[2]  # world frame Z linear velocity
+        z_force = kp_z * (z_target - base_z) - kd_z * world_z_vel
         self.data.xfrc_applied[base_body_id, 2] += z_force
         mujoco.mj_step(self.model, self.data)
         return self._obs(), float(self._reward()), bool(self.data.time > 60), {}
