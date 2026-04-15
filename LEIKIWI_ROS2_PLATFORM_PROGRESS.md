@@ -2182,3 +2182,104 @@ Phase 83:      Phase 82 quaternion fix VERIFIED (identity confirmed, XY=0.264m)
 
 - No code changes (eval only — Phase 82 already pushed)
 - Commit 2e9a571: Phase 82 quaternion fix
+
+## [Phase 90 - 2026-04-16 03:30 UTC] — CRITICAL: k_omni Overlay Masks Real Physics; Both Sims Have Arm Tip-Over Problem
+
+### ✅ 已完成
+
+**兩項關鍵實驗揭示 URDF sim locomotion 失敗的真正根源：**
+
+#### 實驗 1: 禁用 k_omni overlay — 純接觸物理
+
+測試 URDF sim (`sim_lekiwi_urdf.py`) 在移除 `k_omni=15` 運動學 overlay 後的 locomotion 表現：
+
+| Wheel Action | base_xy | dist | z | 觀察 |
+|---|---|---|---|---|
+| `[0.5,0.5,0.5]` sym | (-0.130, -0.105) | 0.167m | 0.342 | **base 完全飄在空中！** |
+| `[1,0,0]` w1 only | (-0.108, -0.205) | 0.232m | 0.311 | 同樣飄空 |
+| `[1,1,-1]` asym | (-0.109, +0.043) | 0.117m | 0.375 | 更嚴重 |
+| `[0,1,0]` w2 only | (-0.106, +0.303) | 0.321m | 0.225 | 最好但仍是飄空 |
+| `[0,0,1]` w3 only | (-0.008, -0.001) | 0.008m | 0.083 | 幾乎不動 |
+
+**結論**：純接觸物理下，base 幾乎立即失去與地面的接觸並向上飄升至 z=0.3m（wheel 懸空），
+輪子完全失去 traction，locomotion 完全失效。
+
+**原始 URDF sim (k_omni=15)**: dist=0.278m，但這是假的——純粹由運動學疊加力和地面接觸的組合效應。
+
+#### 實驗 2: Primitive sim locomotion 測試
+
+| Wheel Action | base_xy | dist |
+|---|---|---|
+| `[0.5,0.5,0.5]` sym | (-0.010, +0.077) | **0.077m** |
+| `[1,1,1]` sym | (-0.023, 0.000) | **0.023m** |
+| `w1 only` | (-0.021, -0.021) | 0.029m |
+| `w2 only` | (-0.003, +0.012) | 0.012m |
+| `w3 only` | (-0.014, +0.004) | 0.015m |
+
+**Primitive sim 也有 locomotion 問題！** 對稱 action 只產生 0.023-0.077m 移動，而 Phase 63 訓練聲稱在 primitive sim 上 SR=20%。
+
+#### 實驗 3: Phase 63 Policy 評估
+
+- **Primitive sim**: SR=0% (3/3 goals failed, dist 0.37-0.50m, policy 幾乎無反應)
+- **URDF sim (k_omni)**: SR=0% (3/3 goals failed, dist 1.3-1.8m, policy 推離目標)
+- **兩個 sim 都無法支持有效 locomotion**
+
+#### 實驗 4: 運動學疊加分析 (Phase 89 數據)
+
+Phase 89 commit message 顯示：
+- `[1,1,-1]` 在 URDF sim 中產生 `base=(0.178, 0.058), dist=0.327m`
+- **沒有接觸**：輪子完全懸空，所有運動都來自 k_omni 疊加力
+- 這意味著 URDF sim 輪子 ground contact 完全失效
+
+#### 實驗 5: Wheel Contact Geometry 深入分析
+
+```
+URDF contact cylinder: size=(0.025, 0.008), local_z=-0.015
+  → world_z of contact bottom = base_z - 0.06 + (-0.015) - 0.008
+  → For base_z=0.075: contact_bottom_world = 0.075 - 0.06 - 0.015 - 0.008 = -0.008m
+  → Contact bottom 0.8cm BELOW ground → impossible to touch ground!
+```
+
+**URDF 接觸幾何有幾何錯誤**：contact cylinder 的 bottom 實際上低於地面，導致輪子從未真正接觸地面。
+
+### 🔍 根本原因總結
+
+**所有問題的根源是 arm 重力導致 base 不穩定：**
+
+1. **URDF sim**: arm gravity → base tilt → 輪子離地 → k_omni 補丁掩蓋問題
+2. **Primitive sim**: 同樣 arm gravity → base 不穩定 → locomotion 受損
+3. **Phase 63 policy**: 訓練在有缺陷的數據上（arm tip-over），所以 policy 學不到有效 locomotion
+
+**所有後續的翻譯層（Phase 88/89）、integrator 修復（Phase 79-84）都是徒勞的——因為底層物理模型（arm tip-over + 差的接觸幾何）從未真正修復。**
+
+### 🧭 下一步（下次心跳）
+
+1. **修復 arm tip-over 問題**（最優先）：
+   - 方案 A: 增加 base 質量（提高 base inertia 或加配重）
+   - 方案 B: 降低 arm 質量或重心（視覺反饋 + PD 控制）
+   - 方案 C: 在接觸物理中測試"接地"輪子的真實效果（wheel 與 chassis geometry）
+2. **收集乾淨的 locomotion 數據**：修復後重新收集 10k 幀
+3. **重新訓練 policy**：用修復後的 sim 數據
+
+### 🚫 阻礙
+
+- ~~翻譯層 (Phase 88/89)~~ → **廢棄（物理模型本身就錯）**
+- ~~URDF locomotion 差~~ → **根本原因：arm tip-over + 接觸幾何**
+- **Arm tip-over**: 從一開始就存在，但被 k_omni overlay 掩蓋
+
+### 📊 實驗記錄
+
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p79 | RK4→Euler fix | 消除爆炸 |
+| p82 | Quaternion fix | 機器人正確直立 |
+| p84 | Air resistance + torque ramp | 修復 Z-damping |
+| p85 | k_omni overlay | SR=20%（假的！）|
+| p86 | Omni-kinematics | 確認 k_omni 是 overlay |
+| p88/89 | Translation layer | 嘗試橋接錯誤物理 |
+| **p90** | **禁用 k_omni，純接觸測試** | **Base 飄空，完全失效** |
+
+### Git
+- 4b83a17 Phase 89 (pending)
+- 本次為診斷和發現，無新 commit
+
