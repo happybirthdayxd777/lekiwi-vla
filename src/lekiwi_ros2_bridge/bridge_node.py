@@ -54,6 +54,7 @@ from security_monitor import SecurityMonitor
 from ctf_security_audit import CTFSecurityAuditor
 from policy_guardian import PolicyGuardian
 from trajectory_logger import TrajectoryRecorder
+from camera_adapter import CameraAdapter
 
 # ── Joint name mapping: URDF Gazebo names → bridge canonical names ─────────────
 # From lekiwi.urdf Gazebo plugin joint list:
@@ -345,6 +346,15 @@ class LeKiWiBridge(Node):
             self.sim: LeKiWiSim | LeKiWiSimURDF = LeKiWiSimURDF()
             self.get_logger().info("URDF simulation initialised.")
             self.hw = None
+            # Phase 96: Start background camera adapter for 20 Hz image publishing
+            self.camera_adapter = CameraAdapter(
+                self.sim, self,
+                front_topic="/lekiwi/camera/image_raw",
+                wrist_topic="/lekiwi/wrist_camera/image_raw",
+                fps=20,
+            )
+            self.camera_adapter.start()
+            self._camera_stats_every = 100  # log stats every N frames
         else:
             self.get_logger().info("Starting LeKiWiSim (cylinder primitives)…")
             self.sim = LeKiwiSim()
@@ -906,34 +916,16 @@ class LeKiWiBridge(Node):
             self.get_logger().debug(
                 f"CTF [{ctf_alert.challenge_id}] sensor — {ctf_alert.description}")
 
-        # ── Camera Images (throttled to 4 Hz to avoid URDF render overhead) ────
+        # Phase 96: Camera images now handled by background CameraAdapter thread
+        # (20 Hz front + wrist rendering, no longer blocks main step loop)
+        # Log camera adapter stats every N frames
         self._frame_count += 1
-        if self._frame_count % 5 == 0:   # publish every 5th frame (4 Hz @ 20 Hz timer)
-            try:
-                # Front camera (render() takes no args — resolution hardcoded in sim)
-                img_pil = self.sim.render()
-                img_np  = np.asarray(img_pil)
-                ros_img = self.bridge.cv2_to_imgmsg(img_np, encoding="rgb8")
-                ros_img.header.stamp = msg.header.stamp
-                ros_img.header.frame_id = "lekiwi_camera"
-                self.camera_pub.publish(ros_img)
-
-                # ── Trajectory recording: capture image for HDF5 ───────────────
-                if self._recorder is not None and self._recorder.is_recording:
-                    ts = now.seconds_nanoseconds()
-                    img_ts = ts[0] + ts[1] * 1e-9
-                    self._recorder.record_image(img_np, timestamp=img_ts)
-
-                # Wrist camera (URDF model only)
-                if hasattr(self.sim, 'render_wrist'):
-                    wrist_pil = self.sim.render_wrist()
-                    wrist_np  = np.asarray(wrist_pil)
-                    wrist_ros = self.bridge.cv2_to_imgmsg(wrist_np, encoding="rgb8")
-                    wrist_ros.header.stamp = msg.header.stamp
-                    wrist_ros.header.frame_id = "wrist_camera"
-                    self.wrist_cam_pub.publish(wrist_ros)
-            except Exception as e:
-                self.get_logger().warn(f"Camera render failed: {e}", once=True)
+        if hasattr(self, 'camera_adapter') and self._frame_count % self._camera_stats_every == 0:
+            stats = self.camera_adapter.get_stats()
+            self.get_logger().debug(
+                f"Camera stats: frames={stats['frames_rendered']}, "
+                f"errors={stats['render_errors']}, running={stats['running']}"
+            )
 
         # Clear VLA freshness flag at end of each tick so stale VLA actions
         # (e.g., if the VLA node crashes) are automatically ignored.
@@ -1034,7 +1026,10 @@ class LeKiWiBridge(Node):
         self.policy_guardian.flush()
 
     def destroy_node(self):
-        """Flush trajectory recording on shutdown."""
+        """Stop camera adapter and flush trajectory recording on shutdown."""
+        if hasattr(self, 'camera_adapter'):
+            self.camera_adapter.stop()
+            self.get_logger().info("CameraAdapter stopped.")
         if self._recorder is not None and self._recorder.num_frames > 0:
             self._recorder.stop()
             self._recorder.flush()
