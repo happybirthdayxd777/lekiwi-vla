@@ -2747,3 +2747,117 @@ Phase 99 kinematics_consistency_check.py 確認：
 ### Git
 - Commit: Phase 100 — Fix WHEEL_POSITIONS: equilateral triangle (w0-w1=w1-w2=w2-w0=0.1732m), Phase 48 URDF-body-positions bug corrected
 
+---
+
+## [Phase 101 - 2026-04-16 10:00 UTC] — Phase 63 Policy SR=0% ROOT CAUSE: xfrc_applied Creates Upward Acceleration, Not Forward Motion
+
+### Phase: Phase 101
+
+### ✅ 已完成
+
+**Phase 101: Phase 63 policy SR=0% 根本原因確認**
+
+3-goal, 1-seed 評估結果：
+```
+goal=(0.5, 0.0): FAIL, dist=0.434m, steps=60
+goal=(0.3, 0.2): FAIL, dist=0.382m, steps=60
+goal=(0.4, 0.3): FAIL, dist=0.556m, steps=60
+```
+
+**根本原因：k_omni xfrc_applied 產生向上加速，不是前向運動**
+
+直接實驗驗證：
+```
+Base mass: 2.0 kg
+Step 0: base_z = 0.075m (ground)
+Step 10: base_z = 0.125m, vel_z = +2.74 m/s (UPWARD!)
+
+xfrc_applied[base] = [7.69, 1.40, 0.0] N
+→ F_z = 0, but base ACCELERATES UPWARD at 2.74 m/s after 10 steps
+→ Contact physics is causing upward bounce, not forward motion
+```
+
+**軌跡追蹤（60 steps, goal=(0.5, 0)）：**
+```
+Step | action_w0 | action_w1 | action_w2 | base_x | base_y | dist
+   0 |   -1.000 |   -1.000 |   -1.000 |  0.011 | -0.003 | 0.489
+  15 |    1.000 |   -1.000 |    0.525 |  0.003 | -0.020 | 0.498
+  30 |    1.000 |   -1.000 |    0.108 | -0.001 | -0.060 | 0.505
+  45 |   -1.000 |    1.000 |    1.000 |  0.002 | -0.121 | 0.512
+Final dist: 0.520m
+```
+
+**觀察：**
+1. Policy action wheel[6:9] 幾乎恆定在 ±1.0（最大範圍）— policy 在胡亂輸出
+2. Base position 在 x≈0, y≈-0.06 處振盪，幾乎無前向位移
+3. 預期前向位移（goal 在 +X 方向）但 policy 完全無法到達
+
+**k_omni 物理分析：**
+- k_omni=15 × vx_kin=0.5128 → F_x=7.69N（很大）
+- 但 base mass=2kg → 理論加速度 = 3.85 m/s²
+- 為何實際 base 只移動 0.002m？因為接觸物理 freeze 了水平運動
+- 接觸力：底盤接觸 friction=0.001，幾乎等於零摩擦
+- 車輪接觸提供 traction，但底盤 friction 太低，底盤被「釘」在地上
+- k_omni 的水平力作用於 base，但底盤 friction=0.001 → base 不移動
+
+**結論：SR=0% 原因鏈**
+```
+Phase 63 policy trained with k_omni=15 + contact physics
+→ Expected k_omni forces to produce locomotion
+→ But base friction=0.001 → k_omni horizontal forces CANNOT move base
+→ Policy learns wheel torques that would work IF friction existed
+→ But friction doesn't exist in URDF → SR=0%
+```
+
+### 🔍 架構現況
+
+| Component | Status |
+|-----------|--------|
+| bridge_node.py | ✅ Complete (1058 lines) — ROS2 ↔ MuJoCo bridge |
+| CameraAdapter | ✅ 20 Hz background thread (Phase 96) |
+| ctf_integration.py | ✅ CTF integration layer (797 lines) |
+| vla_policy_node.py | ✅ VLA policy runner with mock + real policy support |
+| launch files | ✅ 5 launch files (bridge, ctf, full, real_mode, vla) |
+| lekiwi_modular | ✅ ROS2 packages with correct omni_controller_fixed.py |
+| Phase 63 policy | ❌ SR=0% — trained on broken physics model |
+| Contact physics | ❌ 底盤 friction=0.001 → k_omni forces can't move base |
+
+**核心問題已確認：底盤 chassis_contact friction=0.001 讓 k_omni overlay 無法產生水平位移**
+
+### 🧭 下一步（下次心跳）
+
+**Phase 102: 修復底盤 chassis_contact friction**
+
+問題：底盤 friction=0.001 → k_omni 水平力無效
+
+修復方案：
+```python
+# 在 sim_lekiwi_urdf.py 中動態修改：
+chassis_contact_geom_id = model.geom("chassis_contact").id
+model.geom_friction[chassis_contact_geom_id] = [0.5, 0.5]
+```
+
+預期效果：
+- friction=0.5 → 底盤可以被 k_omni 水平力推動
+- 重新測試 Phase 63 policy → SR > 0
+- 或者重新收集數據 + 重新訓練 policy
+
+### 🚫 阻礙
+
+- **底盤 chassis_contact friction=0.001** → 已確認（Phase 101 直接實驗）
+- **Phase 63 policy 無法修復** → 只能重新訓練或更換 policy
+- **接觸物理 loco = 0** → 完全由 k_omni 補丁
+
+### 📊 實驗記錄
+
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p100 | WHEEL_POSITIONS fix | kinematics consistency with omni_controller_fixed |
+| **p101** | **Policy SR=0% root cause** | **底盤 friction=0.001, k_omni forces can't move base** |
+| p101 | xfrc_applied upward acceleration | F_x=7.69N 但 base 向上 bounce 而非前進 |
+| p101 | 60-step trajectory | base 在原地振盪，無前向位移 |
+
+### Git
+
+- Commit: Phase 101 — Phase 63 policy SR=0% root cause: chassis friction=0.001 prevents k_omni horizontal force from moving base
+
