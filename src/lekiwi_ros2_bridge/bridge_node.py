@@ -853,6 +853,10 @@ class LeKiWiBridge(Node):
         # ── Layer 1: Passive SecurityMonitor (log-only, backward compat) ────
         sec_verdict = self.security_monitor.check_policy(policy_bytes, stamp)
 
+        # ── Layer 2: Active PolicyGuardian (blocks, alerts, rolls back) ────
+        # MUST be called BEFORE ctf_alert so guardian_verdict is defined
+        guardian_verdict = self.policy_guardian.check_and_guard(policy_bytes, stamp)
+
         # ── CTF Layer: C8 policy hijacking detection ─────────────────────────
         old_policy = getattr(self, '_current_policy_name', 'unknown')
         ctf_alert = self.ctf_auditor.on_policy_switch(
@@ -864,9 +868,6 @@ class LeKiWiBridge(Node):
         if ctf_alert is not None:
             self.get_logger().debug(
                 f"CTF [{ctf_alert.challenge_id}] policy switch — {ctf_alert.description}")
-
-        # ── Layer 2: Active PolicyGuardian (blocks, alerts, rolls back) ────
-        guardian_verdict = self.policy_guardian.check_and_guard(policy_bytes, stamp)
 
         # Publish security alert to /lekiwi/security_alert
         alert_msg = String()
