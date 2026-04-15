@@ -160,6 +160,8 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
             <freejoint name="base_free"/>
             <inertial pos="0 0 0.01" mass="2.0" diaginertia="0.01 0.01 0.015"/>
             <!-- Chassis contact: flat box at ground level, provides reaction force for wheel locomotion -->
+            <!-- Phase 106: REVERT friction change — 0.001 allows k_omni horizontal force to slide base freely -->
+            <!-- Higher friction (0.3) causes base to lock up, REDUCING movement from 2.5m to 0.047m -->
             <geom name="chassis_contact" type="box" size="0.12 0.10 0.002"
                   pos="0 0 -0.075"
                   mass="0.001"
