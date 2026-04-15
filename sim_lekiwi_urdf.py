@@ -545,23 +545,26 @@ class LeKiWiSimURDF:
         # With motor gear=10.0, max joint torque = 100 Nm (for wheel) or 31.4 Nm (for arm)
         ctrl = np.clip(ctrl, -10.0, 10.0)
         self.data.ctrl[:] = ctrl
-        # ── Phase 80 FIX: Z-Damping (replaces Phase 54 Z-PD) ───────────────────
-        # ROOT CAUSE of zero locomotion: kp_z=30 PUSHED base UP → airborne → no contact.
-        # The base launches to z=0.165m, bounces, loses all wheel contact → zero motion.
+        # ── Phase 84 FIX: Air Resistance (replaces Phase 80 Z-Damping) ───────────
+        # ROOT CAUSE of upward drift: wheel torque tips base → contacts break at step 5-7 →
+        # MuJoCo applies upward separation impulse → base gains +3 m/s upward velocity →
+        # Phase 80 Z-damping (+0.15N upward when below equilibrium) ADDS to this upward
+        # momentum, causing robot to drift to z=0.7m and stay airborne.
         #
-        # NEW APPROACH: Only apply UPWARD force when base is BELOW equilibrium.
-        # This PREVENTS falling (which causes bouncing/uncontrolled dynamics).
-        # When base is at or above equilibrium, NO vertical force is applied,
-        # allowing natural wheel-ground contact to drive locomotion.
-        # kp_z=2.0: gentle upward support (weak enough not to launch robot)
-        # kd_z=1.5: light damping (prevents oscillation but allows contact dynamics)
+        # NEW APPROACH: Air resistance model — when airborne (no contacts) and moving UP,
+        # apply DOWNWARD force proportional to vertical velocity. This models the
+        # aerodynamic drag of a robot falling through air and quickly halts the upward
+        # drift momentum, causing the robot to fall back to ground naturally.
+        #
+        # Phase 80 Z-damping was counterproductive: it pushed the robot AWAY from
+        # ground equilibrium when it was already falling.
         base_body_id = self.model.body('base').id
-        base_z = self.data.xpos[base_body_id, 2]
         world_z_vel = self.data.qvel[2]
-        z_equilibrium = 0.075  # equilibrium z (wheel contact point at ground)
-        if base_z < z_equilibrium:  # only when below equilibrium — no force when airborne
-            z_force = 2.0 * (z_equilibrium - base_z) - 1.5 * world_z_vel
-            self.data.xfrc_applied[base_body_id, 2] += z_force
+        # Only apply air resistance when airborne and moving upward (positive z velocity)
+        # This quickly damps the upward momentum from contact-break impulse
+        if self.data.ncon == 0 and world_z_vel > 0:
+            kv_air = 6.0  # air drag coefficient — tuned to halt upward drift in ~20 steps
+            self.data.xfrc_applied[base_body_id, 2] -= kv_air * world_z_vel
 
         # ── Phase 56: Soft joint limits ─────────────────────────────────────────
         # URDF arm joint limits from lekiwi_modular LeKiWi.urdf:
@@ -605,10 +608,18 @@ class LeKiWiSimURDF:
             if abs(self.data.qvel[dof_adr]) > limit:
                 self.data.qvel[dof_adr] = np.sign(self.data.qvel[dof_adr]) * limit
 
-        # ── Phase 77: Zero action on contact-init step to prevent base explosion ──
-        _CONTACT_SETTLE_STEPS = 5
-        if self.data.time < _CONTACT_SETTLE_STEPS * self.model.opt.timestep:
-            ctrl = np.array([ctrl[0], ctrl[1], ctrl[2], ctrl[3], ctrl[4], ctrl[5], 0.0, 0.0, 0.0])
+        # ── Phase 84 FIX: Gradual torque ramp (replaces Phase 77 zero-action) ───────
+        # Phase 77 zeroed wheel torques for first 5 steps to prevent contact explosion.
+        # BUT: this causes zero locomotion because the robot tips when torques finally
+        # apply at step 5 (sudden impulse), breaking contacts and making robot airborne.
+        #
+        # NEW: Ramps wheel torques gradually from 0 to target over 20 steps.
+        # This allows contacts to form progressively without sudden impulse.
+        _TORQUE_RAMP_STEPS = 20
+        ramp_t = min(1.0, self.data.time / (_TORQUE_RAMP_STEPS * self.model.opt.timestep))
+        if ramp_t < 1.0:
+            ctrl = np.array([ctrl[0], ctrl[1], ctrl[2], ctrl[3], ctrl[4], ctrl[5],
+                             ctrl[6] * ramp_t, ctrl[7] * ramp_t, ctrl[8] * ramp_t])
             self.data.ctrl[:] = ctrl
 
         # ── Phase 77: Snapshot state before mj_step as last-resort instability defense ──
