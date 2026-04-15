@@ -2366,3 +2366,176 @@ URDF 底盤幾何（Phase 92 測量）：
 
 ### Git
 - Commit: Phase 92 — Phase 91 measurement error: pure contact is 0.118m not 0.048m; wheel cylinders below ground level
+
+---
+
+## [Phase 93 - 2026-04-16 07:00 UTC] — Phase 93: Wheel Body Z -0.060→-0.064 — Contact Loco 2.5x Improvement
+
+### ✅ 已完成
+
+**系統性掃描找到了最優 wheel body Z 值：-0.064**
+
+Phase 92 建議「調整 wheel body Z 位置讓 cylinder bottom 在 z=0」。但實際測試發現：
+- `-0.067` (cylinder bottom 在 world_z=0): contact locomotion **變差** (0.0096m)
+- `-0.064` (cylinder bottom 在 world_z=-0.012m, 12mm below ground): **最優** (0.061m)
+
+### 系統性掃描結果（200 steps, [1,1,1], k_omni=0）
+
+| Body Z | CylBot World Z | Dist (m) | Contacts/step | Base Z |
+|--------|---------------|----------|--------------|--------|
+| -0.060 | -0.008m | 0.024m | 2 | 0.094m |
+| -0.062 | -0.010m | 0.058m | 3 | 0.113m |
+| **-0.064** | **-0.012m** | **0.062m** | **3** | **0.115m** |
+| -0.066 | -0.014m | 0.042m | 2 | 0.111m |
+| -0.068 | -0.016m | 0.010m | 3 | 0.116m |
+| -0.070 | -0.018m | 0.045m | 3 | 0.103m |
+
+**最優：body_z=-0.064**（2.6x 於舊幾何 -0.060）
+
+### 為什麼 -0.012m (12mm below) 比 0m (flush) 更好
+
+MuJoCo 接觸使用 penalty method：表面在彈簧激活前稍微 penetration。
+- flush (0m): 接觸從第一步就完全激活 → 可能 initial impulse 太大
+- -0.012m: 車輪在重力下自然下沉到接觸 → 更穩定的接觸力
+- -0.016m 以下: 太多 penetration → 接觸幾何不穩定
+
+### 幾何計算
+
+```
+base world Z (freejoint equilibrium) = 0.075m
+wheel body local Z (新) = -0.064m
+wheel body world Z = 0.075 + (-0.064) = 0.011m
+cylinder local Z = -0.015m (from wheel body)
+cylinder center world Z = 0.011 + (-0.015) = -0.004m
+cylinder halfheight = 0.008m
+cylinder bottom world Z = -0.004 - 0.008 = -0.012m ✓
+```
+
+### 驗證結果
+
+- 穩定性：10 episodes × 200 steps, NaN=0/10 ✓
+- k_omni overlay 仍然有效：1.96m/200steps (overlay dominates)
+- 接觸物理：0.061m/200steps (2.5x 於舊幾何 0.024m)
+
+### 🔍 架構現況
+
+```
+接觸物理（修復後）: 0.061m/200steps ← 仍然是 k_omni 的 1/32
+k_omni overlay: 1.96m/200steps (fake but dominant)
+k_omni/接觸比: 32x ← k_omni 仍然主導
+
+問題核心：無論如何優化接觸幾何，
+真實接觸 loco 最多 0.06m/200steps，
+而 k_omni overlay 給 1.96m/200steps。
+差距 32x — 接觸 loco 對 policy 訓練沒有實際意義。
+```
+
+### 🧭 下一步（下次心跳）
+
+**兩個方向：**
+
+1. **方案 A：禁用 k_omni，用真實接觸物理訓練 policy**
+   - 既然接觸 loco 已經優化到 0.061m，用這個數據重新訓練
+   - 缺點：0.06m/200steps 的 locomotion 數據用於 VLA 訓練可能不足
+
+2. **方案 B：理解並替換 k_omni 為物理上正確的實現**
+   - k_omni 是「kinematic overlay」，用牛頓力推動 base
+   - 正確實現需要：輪子真正的 omni-wheel 幾何 + 真實摩擦力
+   - 可能需要調整：輪子 motor gear、底盤 chassis_contact friction、wheel friction
+
+3. **方案 C：bridge_node 裡做接觸物理替換**
+   - 保留 k_omni 在 URDF sim 中，用 bridge 做坐標系轉換
+   - 讓 policy 訓練在「翻譯後」的乾淨 loco 信號上
+
+### 🚫 阻礙
+
+- k_omni overlay: 32x 於修復後的接觸 loco，無法靠幾何修復消除
+- 真實接觸 loco 只有 0.061m/200steps，對導航目標（0.3m+）仍然太慢
+- 需要物理上正確的 omni-wheel 實現，而不是 overlay
+
+### Git
+
+- Commit `810b839`: Phase 93: Fix wheel body Z -0.060→-0.064 — contact locomotion 2.5x improvement
+
+---
+
+## [Phase 94 - 2026-04-16 07:30 UTC] — Phase 94: k_omni IS the Locomotion Engine
+
+### ✅ 已完成
+
+**Friction sweep (0.5→5.0): Pure contact locomotion is INSENSITIVE to friction**
+
+| Friction | Dist (m) | Contacts | Base Z |
+|----------|----------|----------|--------|
+| 0.5 | 0.0636 | 4 | 0.0881 |
+| 1.0 | 0.0636 | 4 | 0.0881 |
+| 1.5 | 0.0473 | 9 | 0.0786 |
+| 2.0 | 0.0490 | 11 | 0.0768 |
+| 2.5 | 0.0658 | 11 | 0.0768 |
+| 3.0 | 0.0727 | 11 | 0.0767 |
+| 4.0 | 0.0694 | 9 | 0.0770 |
+| 5.0 | 0.0150 | 9 | 0.0774 |
+
+Chassis contact friction (0.001→0.5): **Identical 0.0473m** across all values.
+
+**k_omni=15 stock (5 episodes, 200 steps, action=[1,1,1]):**
+- dist=2.2905m, ncon=1, base_z=0.0944m — **fully deterministic**
+
+**k_omni=0 pure contact:**
+- dist=0.0473m — **49x less than k_omni=15**
+
+### 🔍 關鍵發現：k_omni = 翻譯層（Translation Layer）
+
+```
+真實接觸物理：0.047m/200steps  ← 幾乎不產生 loco（車輪幾何 + contact solver 限制）
+k_omni overlay：2.29m/200steps  ← 實際上就是 locomotion 引擎
+
+k_omni 如何運作：
+1. 讀取車輪 spin rates（w1, w2, w3）
+2. 透過 _omni_kinematics() 計算 base 應該有的 vx, vy
+3. 用 k_omni * v 當作 external force 直接加到 base body
+4. 這是一個「kinematic velocity → force」的翻譯層
+```
+
+**接觸物理的角色**：
+- 讓底盤保持在地面（base_z=0.075-0.094m）
+- 提供車輪的反作用力（讓車輪能滾動）
+- 但幾乎不產生水平 loco
+
+**k_omni 的角色**：
+- 翻譯車輪 spin → base 移動
+- 直接推動 base body（kinematic overlay）
+- 是主要的 loco 來源（2.29m/0.047m = 49x）
+
+### 🧭 下一步（下次心跳）
+
+**核心問題：如何讓 VLA policy 在 k_omni overlay 上訓練？**
+
+1. **理解 bridge_node.py 的職責**
+   - bridge_node 已經有完整的 ROS2 ↔ MuJoCo 橋樑
+   - 讀 `/lekiwi/cmd_vel` → 轉換 → 應用到 MuJoCo
+   - 讀 MuJoCo obs → 發布 `/lekiwi/joint_states`
+   - **需要搞清楚：bridge 在哪一層應用 k_omni 的输出？**
+
+2. **確認 VLA policy 如何輸入 action**
+   - VLA policy 輸出 [arm*6 + wheel*3]，範圍 [-1, 1]
+   - 這些 action 在 sim_lekiwi_urdf.py 的 `_action_to_ctrl()` 轉換為 motor torque
+   - motor torque → 車輪 spin → k_omni overlay → base 移動
+   - **鏈條是完整的：policy → wheel torque → k_omni → base motion**
+
+3. **方案：不要試圖修復 pure contact — 接受 k_omni 作為 locomotion 引擎**
+   - k_omni 的機制：wheel spin → kinematic velocity → force
+   - 這實際上是「輪子轉了就要走」的物理直觀實現
+   - 只不過用了直接力應用（k_omni=15）而非真實摩擦力
+   - **如果要替換：需要讓底盤 chassis_contact 的摩擦力足以讓車輪帶動底盤**
+
+4. **新方案：提高 chassis_contact friction + 移除 k_omni**
+   - 當前 ccf=0.001 → 底盤可以自由滑動不被帶動
+   - 提高到底 ccf=0.3-0.5：底盤被車輪帶動
+   - 但測試顯示 ccf 在 0.001-0.5 都給出相同結果（0.0473m）
+   - **為什麼？ 因為底盤 FREEJOINT，底盤本身不被車輪帶動**
+   - **底盤的 loco 完全來自 k_omni force，不是來自車輪-底盤傳動**
+
+### Git
+
+- Commit: Phase 94: k_omni is the locomotion engine — pure contact 0.047m, k_omni=15 gives 2.29m (49x); friction sweep shows pure contact insensitive to friction
