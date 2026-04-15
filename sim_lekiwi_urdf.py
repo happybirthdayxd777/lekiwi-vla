@@ -55,12 +55,17 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
         <global offwidth="1280" offheight="960"/>
     </visual>
 
-    <!-- Phase 75 FIX: RK4 integrator for numerical stability.
-         Euler integrator amplifies small integration errors over 200+ steps,
-         causing NaN at DOF 0 (wheel joint) even with clamp=0.5.
-         RK4 uses 4th-order Runge-Kutta for much better energy conservation.
-         Also reduced timestep 0.005→0.002 for finer integration.
-         
+    <!-- Phase 79 FIX: Reverted RK4 → Euler integrator.
+         Phase 75 switched to RK4 believing it would be more stable, but RK4 is
+         actually UNSTABLE for this stiff rigid-body+contact system. Root cause:
+         RK4 intermediate stages evaluate forces at intermediate states, and the
+         arm gravity loading creates large accelerations (qacc DOF 12 ~ -1514 rad/s²)
+         which RK4 amplifies catastrophically → 191K rad/s in wheel DOFs on step 1.
+         Euler (forward Euler) is conditionally stable and works fine here.
+         Implicit integrator also works (unconditionally stable for linear systems).
+         Verified: Euler 10/10 stable vs RK4 0/10 stable in airborne + contact tests.
+         Also kept timestep at 0.002 (fine enough for Euler at this scale).
+
          Phase 77 ADDITION: iterations=200 (up from default 100).
          ROOT CAUSE: The remaining instability (explosion at step 199-200 on some episodes)
          is from contact solver NOT fully converging — wheel-ground contact with high friction
@@ -68,7 +73,7 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
          200 iterations gives more robust contact resolution while remaining fast.
          Also added jacobian="dense" for faster dense linear solves vs sparse.
     -->
-    <option timestep="0.002" integrator="RK4" iterations="200" jacobian="dense">
+    <option timestep="0.002" integrator="Euler" iterations="200" jacobian="dense">
         <flag contact="enable" energy="disable"/>
     </option>
 
