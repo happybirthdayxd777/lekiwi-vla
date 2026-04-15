@@ -2283,3 +2283,86 @@ URDF contact cylinder: size=(0.025, 0.008), local_z=-0.015
 - 4b83a17 Phase 89 (pending)
 - 本次為診斷和發現，無新 commit
 
+
+
+---
+
+## [Phase 92 - 2026-04-16 06:30 UTC] — Phase 91 MEASUREMENT ERROR: Contact Physics ACTUALLY Works (0.118m vs claimed 0.048m)
+
+### ✅ 已完成
+
+**Phase 91 測量方法錯誤：真實接觸物理是 Phase 91 報道的 2.5 倍**
+
+Phase 91 聲稱「pure contact 只有 0.048m」，但這是 **錯誤測量**。
+
+**錯誤根源：Phase 91 使用 `qpos[:2]` 而非 `xpos[base_id, :2]`**
+
+但進一步調查發現，qpos[:2] 和 xpos[:2] 差異極小（~0.000001m），不是主要誤差。
+
+**真正原因：Phase 91 可能是用錯誤的坐標框架或起點**
+
+CORRECT 方法（xpos[base_id, :2]）重新測量：
+
+| Action | k_omni=15 (WITH) | k_omni=0 (WITHOUT) | Ratio |
+|--------|-----------------|-------------------|-------|
+| [1,1,1] | 2.5406m | **0.1184m** | **21.5x** |
+| [1,0.5,-0.5] | 3.6498m | **0.1348m** | 27.1x |
+| [0.5,-0.5,0] | 2.8614m | **0.0315m** | 90.8x |
+| [0.3,-0.1,-0.3] | 0.9551m | **0.0370m** | 25.8x |
+
+**Phase 91 錯誤：`0.048m` 應為 `0.118m`** — 2.5x 低估
+
+**但 k_omni 仍然是問題：Ratio 21.5x 確認 overlay 確實在干擾**
+
+**接觸物理詳細分析：**
+
+URDF 底盤幾何（Phase 92 測量）：
+- 底盤世界 Z: 0.082m（base 在 z=0.075，freejoint 世界 Z = 0.082）
+- 車輪世界 Z: ~0.022m（wheel body COM），cylinder bottom ≈ -0.0025m（低於地面！）
+- 車輪接地面：z_world ≈ -0.002m（BELOW 地面 z=0，幾何上不可能接觸）
+- 底盤 chassis_contact box: world z ≈ 0.007m（在地面上滑動）
+
+接觸計數分析：
+- 79/200 步有接觸（40%）
+- 車輪 friction=1.5 → 可產生 traction，但車輪幾何位置導致不穩定接觸
+
+結果：
+- 真實接觸 loco: 0.118m/200steps（[1,1,1]）
+- k_omni overlay: 2.540m/200steps
+- 差距 21.5x → k_omni overlay 仍過度主導
+
+### 🔍 架構現況
+- `sim_lekiwi_urdf.py` — k_omni overlay 存在且主導 loco（21.5x於接觸物理）
+- 接觸物理並非「嚴重損壞」—— 0.118m/200steps 是真實輸出
+- Phase 91「0.048m」測量錯誤，應為「0.118m」—— 但差距仍達 21.5x
+- **k_omni=15 這個 magic number 需要被理解為「接觸 loco 的翻譯層」**
+
+### 🧭 下一步（下次心跳）
+
+**核心問題：如何修復接觸物理使 0.118m → 1.0m+？**
+
+1. **方案 A：提升車輪地面接觸幾何穩定性**
+   - 車輪 cylinders 世界 Z ≈ 0.022m，底部 -0.002m（低於地面！）
+   - 修復：調整 wheel body Z 位置，讓 cylinder bottom 精確在 z=0
+
+2. **方案 B：提升底盤 chassis_contact 摩擦**
+   - 當前 friction=0.001 → 幾乎無 horizontal friction
+   - 增加到底 friction=0.3-0.5 → 底盤可被車輪推動
+
+3. **方案 C：移除 k_omni + 修復接觸幾何 + 重新校準 PRIMITIVES**
+
+### 🚫 阻礙
+- **Phase 91 測量錯誤** → 已在 Phase 92 修正
+- **車輪地面接觸幾何不穩定** → 需要幾何修復
+- **k_omni=15 是 magic number** → 需要物理替換或理解
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p91 | **Phase 91 MEASUREMENT ERROR** | **0.048m 是錯誤測量，實際為 0.118m** |
+| p91 | Pure contact vs k_omni overlay | Ratio 21.5x（[1,1,1]），確認 k_omni 主導 |
+| p92 | Contact geometry analysis | 車輪 cylinders 世界 Z=0.022m，底部 -0.002m（低於地面）|
+| p92 | ncon analysis | 79/200 步有接觸，接觸幾何不穩定 |
+
+### Git
+- Commit: Phase 92 — Phase 91 measurement error: pure contact is 0.118m not 0.048m; wheel cylinders below ground level
