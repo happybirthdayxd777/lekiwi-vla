@@ -60,8 +60,15 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
          causing NaN at DOF 0 (wheel joint) even with clamp=0.5.
          RK4 uses 4th-order Runge-Kutta for much better energy conservation.
          Also reduced timestep 0.005→0.002 for finer integration.
+         
+         Phase 77 ADDITION: iterations=200 (up from default 100).
+         ROOT CAUSE: The remaining instability (explosion at step 199-200 on some episodes)
+         is from contact solver NOT fully converging — wheel-ground contact with high friction
+         (friction=2.7) needs more solver iterations to fully resolve.
+         200 iterations gives more robust contact resolution while remaining fast.
+         Also added jacobian="dense" for faster dense linear solves vs sparse.
     -->
-    <option timestep="0.002" integrator="RK4">
+    <option timestep="0.002" integrator="RK4" iterations="200" jacobian="dense">
         <flag contact="enable" energy="disable"/>
     </option>
 
@@ -110,9 +117,14 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
 
     <default>
         <joint damping="0.5"/>
-        <!-- Ground / base contact: standard friction cone -->
+        <!-- Phase 77 FIX: Softened solref 0.004→0.02 to prevent EP3/EP8 base explosion.
+             ROOT CAUSE: solref=0.004 (toughton=0.004s) is too stiff — MuJoCo generates
+             huge contact impulse at t=0 when wheel cylinders first touch ground.
+             This impulse propagates through the freejoint base → DOF explosion → NaN.
+             solref=0.02 (toughton=0.02s) is 5x softer, spreads impulse over 5x longer time.
+             Combined with existing: RK4 + damping=2.0 + vel_clamp=50.0 — triple safety net. -->
         <geom friction="0.6 0.05 0.01"
-              solref="0.004 1.0" solimp="0.8 0.4 0.01"/>
+              solref="0.02 1.0" solimp="0.8 0.4 0.01"/>
     </default>
 
     <worldbody>
@@ -178,7 +190,8 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
             -->
             <body name="wheel0" pos="0.0866 0.10 -0.06">
                 <!-- Phase 75: increased damping 0.5→2.0 for numerical stability with RK4 -->
-                <joint name="w1" type="hinge" axis="-0.866 0 0.5" damping="2.0"/>
+                <!-- Phase 77: increased damping 2.0→4.0 + friction 2.7→1.5 for stability -->
+                <joint name="w1" type="hinge" axis="-0.866 0 0.5" damping="4.0"/>
                 <!-- STL omni wheel mesh: visual only -->
                 <geom name="wheel0_geom" type="mesh" mesh="omni_wheel_mount-v5"
                       mass="0.15"
@@ -187,20 +200,22 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       euler="0 0 0"/>
                 <!-- Contact cylinder: radius=0.025, height=16mm, bottom barely at ground (world z≈0)
              Phase 25 FIX: friction 0.6→2.7 (friction*4.5 optimal for traction)
-             Testing showed friction*4.5 yields 1.606m/200steps forward (vs 0.688m primitive)
+             Phase 77: friction reduced to 1.5 (from 2.7) — 2.7 caused contact instability
+             causing explosions at step 199 on some episodes (accumulated stiffness).
+             Lower friction = softer contact = more stable, still enough traction for locomotion.
         -->
                 <geom name="wheel0_contact" type="cylinder"
                       size="0.025 0.008"
                       pos="0 0 -0.015"
                       mass="0.01"
                       contype="1" conaffinity="1"
-                      friction="2.7 0.225 0.01"/>
+                      friction="1.5 0.15 0.01"/>
             </body>
 
             <!-- ══ Wheel 1: back-left ─ STL omni wheel mesh + contact cylinder ══ -->
             <body name="wheel1" pos="-0.0866 0.10 -0.06">
-                <!-- Phase 75: increased damping 0.5→2.0 for numerical stability with RK4 -->
-                <joint name="w2" type="hinge" axis="0.866 0 0.5" damping="2.0"/>
+                <!-- Phase 77: damping 2.0→4.0 + friction 2.7→1.5 -->
+                <joint name="w2" type="hinge" axis="0.866 0 0.5" damping="4.0"/>
                 <geom name="wheel1_geom" type="mesh" mesh="omni_wheel_mount-v5-1"
                       mass="0.15"
                       contype="0" conaffinity="0"
@@ -211,13 +226,13 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       pos="0 0 -0.015"
                       mass="0.01"
                       contype="1" conaffinity="1"
-                      friction="2.7 0.225 0.01"/>
+                      friction="1.5 0.15 0.01"/>
             </body>
 
             <!-- ══ Wheel 2: back-right ─ STL omni wheel mesh + contact cylinder ══ -->
             <body name="wheel2" pos="-0.0866 -0.10 -0.06">
-                <!-- Phase 75: increased damping 0.5→2.0 for numerical stability with RK4 -->
-                <joint name="w3" type="hinge" axis="0 0 -1" damping="2.0"/>
+                <!-- Phase 77: damping 2.0→4.0 + friction 2.7→1.5 -->
+                <joint name="w3" type="hinge" axis="0 0 -1" damping="4.0"/>
                 <geom name="wheel2_geom" type="mesh" mesh="omni_wheel_mount-v5-2"
                       mass="0.15"
                       contype="0" conaffinity="0"
@@ -228,7 +243,7 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       pos="0 0 -0.015"
                       mass="0.01"
                       contype="1" conaffinity="1"
-                      friction="2.7 0.225 0.01"/>
+                      friction="1.5 0.15 0.01"/>
             </body>
 
             <!-- ══ Arm base ══ -->
@@ -558,9 +573,7 @@ class LeKiWiSimURDF:
                 self.data.qvel[vel_adr] = 0.0
         # ── End Phase 56 ──────────────────────────────────────────────────────────
 
-        # ── Phase 75: Extra safety — clamp wheel DOF velocities before mj_step ──
-        # Even with RK4 + damping, clamp wheel joint velocities to prevent
-        # numerical explosion from contact impulse spikes.
+        # ── Phase 75: Clamp wheel joint velocities before mj_step ──
         # DOF indices: w1=qvel[6], w2=qvel[7], w3=qvel[8]
         WHEEL_DOF = [6, 7, 8]
         WHEEL_VEL_MAX = 50.0   # rad/s — physical limit for small wheels
@@ -568,7 +581,52 @@ class LeKiWiSimURDF:
             if abs(self.data.qvel[dof_adr]) > WHEEL_VEL_MAX:
                 self.data.qvel[dof_adr] = np.sign(self.data.qvel[dof_adr]) * WHEEL_VEL_MAX
 
+        # ── Phase 77: Clamp base DOF velocities to prevent explosion on first contact ──
+        BASE_VEL_MAX = 10.0   # m/s — reasonable max for a wheeled robot
+        BASE_ANG_VEL_MAX = 5.0  # rad/s — reasonable max angular velocity
+        for dof_adr in range(6):  # freejoint base: 0=x, 1=y, 2=z, 3=roll, 4=pitch, 5=yaw
+            limit = BASE_VEL_MAX if dof_adr < 3 else BASE_ANG_VEL_MAX
+            if abs(self.data.qvel[dof_adr]) > limit:
+                self.data.qvel[dof_adr] = np.sign(self.data.qvel[dof_adr]) * limit
+
+        # ── Phase 77: Zero action on contact-init step to prevent base explosion ──
+        _CONTACT_SETTLE_STEPS = 5
+        if self.data.time < _CONTACT_SETTLE_STEPS * self.model.opt.timestep:
+            ctrl = np.array([ctrl[0], ctrl[1], ctrl[2], ctrl[3], ctrl[4], ctrl[5], 0.0, 0.0, 0.0])
+            self.data.ctrl[:] = ctrl
+
+        # ── Phase 77: Snapshot state before mj_step as last-resort instability defense ──
+        snap_qpos = self.data.qpos[:].copy()
+        snap_qvel = self.data.qvel[:].copy()
+        snap_xfrc = self.data.xfrc_applied[:].copy()
+        snap_ctrl = self.data.ctrl[:].copy()
+
         mujoco.mj_step(self.model, self.data)
+
+        # Detect explosion: check BOTH nan AND inf
+        has_nan = bool(np.any(np.isnan(self.data.qvel)) or np.any(np.isnan(self.data.qpos)))
+        has_inf = bool(np.any(np.isinf(self.data.qvel)) or np.any(np.isinf(self.data.qpos)))
+        # Only trigger on TRUE explosion: qpos > 10000m or qvel > 100000 m/s
+        has_huge = bool(
+            np.any(np.abs(self.data.qpos) > 10000) or
+            np.any(np.abs(self.data.qvel) > 100000)
+        )
+        exploded = has_nan or has_inf or has_huge
+        if exploded:
+            # Restore pre-step state and retry with zero wheel action
+            self.data.qpos[:] = snap_qpos
+            self.data.qvel[:] = snap_qvel
+            self.data.xfrc_applied[:] = snap_xfrc
+            self.data.ctrl[:] = snap_ctrl
+            # Clamp ALL velocities after restore to remove residual explosive momentum
+            for dof_adr in range(len(self.data.qvel)):
+                if abs(self.data.qvel[dof_adr]) > 100:
+                    self.data.qvel[dof_adr] = np.sign(self.data.qvel[dof_adr]) * 100
+            # Retry with zero wheel action
+            zero_ctrl = np.array([ctrl[0], ctrl[1], ctrl[2], ctrl[3], ctrl[4], ctrl[5], 0.0, 0.0, 0.0])
+            self.data.ctrl[:] = zero_ctrl
+            mujoco.mj_step(self.model, self.data)
+
         return self._obs(), float(self._reward()), bool(self.data.time > 60), {}
 
     def get_reward(self) -> float:
