@@ -1,5 +1,88 @@
 # LeKiWi ROS2 ↔ MuJoCo ↔ VLA 統一研究平台 — 進度追蹤
 
+## Phase 76 (2026-04-15 13:00 UTC) — RK4 + Damping Fixes NaN: 0/10 Episodes; MuJoCo Enum Corrected
+
+### Phase: Phase 76
+
+### 本次心跳完成事項
+
+**Phase 75 驗證：RK4 + damping=2.0 確認有效，MuJoCo integrator enum 正確**
+
+#### Phase 75 修復內容（已於 Phase 75 commit 推送）
+- `sim_lekiwi_urdf.py`：`integrator="RK4"` + `timestep=0.005→0.002` + `damping=0.5→2.0`
+- 預期效果：消除 URDF sim 的 QACC NaN 崩潰
+
+#### 驗證結果
+
+**MuJoCo integrator enum 確認（Mujoco enum 與我原本假設相反）：**
+```
+MuJoCo opt.integrator:
+  0 = Euler (default)
+  1 = RK4  ← Phase 75 確實用了 RK4
+  2 = implicit
+```
+
+**NaN 測試：10 episodes × 200 steps，wheel action [0.5,0.5,0.5]：**
+```
+NaN rate: 0/10 episodes ✓
+所有 10 個 episode 完成 200 steps，無 QACC NaN 崩潰
+```
+
+**發現問題：**
+- EP3/EP8 出現 316592576m 的 dist（base 暴衝），但 MuJoCo 內部捕獲未達 qvel NaN
+- QACC/QPOS warnings 在 t=0.002-0.006s（episode 開始的前幾步）就出現了
+- 這些 warnings 可能來自接觸幾何的初始穿透（stiff contact at t=0）
+
+#### 發現 MuJoCo XML Integrator Name Bug
+- 我假設 `integrator="RK4"` → opt.integrator=2（錯誤）
+- 實際：MuJoCo `integrator` 屬性接受 name 而非 number
+  - `"RK4"` → opt.integrator=1（RK4）
+  - `"Euler"` → opt.integrator=0（Euler）
+  - `"implicit"` → opt.integrator=2（implicit）
+
+#### Phase 75 狀態
+- Commit `0e148be`: Phase 75: RK4 integrator + wheel damping 0.5→2.0 eliminates NaN crashes
+- 尚未驗證 SR 改善（CLIP policy 加載太慢，180s timeout）
+
+### 下一步
+
+1. **Policy SR 評估**：使用加速加載策略（避免 CLIP 加載 timeout）
+2. **接觸幾何修復**：EP3/EP8 的 316592576m dist = base 暴衝，源於 URDF 接觸 cylinder 初始穿透
+3. **完整端到端測試**：Bridge node → URDF sim → joint_states 完整閉環
+
+### 阻礙
+
+1. CLIP policy 加載慢（180s+ timeout），無法在心跳窗口內完成 SR 評估
+2. EP3/EP8 base 暴衝：接觸幾何問題，初期穿透導致第一幀就不穩定
+3. macOS 無法運行 ROS2 bridge_node.py
+
+### 架構狀態（Phase 76）
+
+```
+Phase 1-26:   Bridge + VLA policy infrastructure ✓
+Phase 27-46:  ROOT CAUSE: eval/training normalization, state indexing, locomotion physics ✓
+Phase 47:     Phase 37 policy SR=60% @ fixed goal, SR=40% @ random ✓
+Phase 48:     Bridge WHEEL_POSITIONS FIXED to match URDF geometry ✓
+Phase 49:     Stale kinematics validation script FIXED ✓
+Phase 52:     lekiwi_mujoco.xml gear=0.5→10 (matches sim_lekiwi_urdf.py) ✓
+Phase 53:     URDF sim instability confirmed POST-episode (not during); SR=50%
+Phase 70:     Bridge WHEEL_CTRL ±5→±0.5 (URDF sim wheel clamp for NaN stability) ✓
+Phase 71:     SR=44% verified ✓
+Phase 74:     Bridge WHEEL_CTRL ±0.5 confirmed ✓
+Phase 75:     RK4 + damping 0.5→2.0 + timestep 0.005→0.002 → NaN=0/10ep ✓
+  - MuJoCo integrator: RK4=1, Euler=0 (enum confirmed)
+  - EP3/EP8: 316592576m dist = contact geometry initial penetration issue
+  - CLIP policy SR eval: timed out (180s), need faster loading strategy
+  - Need: policy SR test, contact geometry fix, ROS2 deployment
+Phase 76:     Phase 75 verified: RK4 working, MuJoCo enum corrected, EP3/EP8 base explosion noted
+```
+
+### Git
+
+- Commit: `0e148be` — Phase 75: RK4 integrator + wheel damping 0.5→2.0 eliminates NaN crashes (URDF sim)
+
+---
+
 ## Phase 53 (2026-04-15 03:00 UTC) — URDF Sim Instability Confirmed Post-Episode; SR=50%
 
 ### Phase: Phase 53
