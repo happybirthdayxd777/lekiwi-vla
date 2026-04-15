@@ -55,7 +55,13 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
         <global offwidth="1280" offheight="960"/>
     </visual>
 
-    <option timestep="0.005" integrator="Euler">
+    <!-- Phase 75 FIX: RK4 integrator for numerical stability.
+         Euler integrator amplifies small integration errors over 200+ steps,
+         causing NaN at DOF 0 (wheel joint) even with clamp=0.5.
+         RK4 uses 4th-order Runge-Kutta for much better energy conservation.
+         Also reduced timestep 0.005→0.002 for finer integration.
+    -->
+    <option timestep="0.002" integrator="RK4">
         <flag contact="enable" energy="disable"/>
     </option>
 
@@ -171,7 +177,8 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                  Phase 24 ALSO: wheel motor gear 1.0→10.0 (matches LeKiWiSim primitive)
             -->
             <body name="wheel0" pos="0.0866 0.10 -0.06">
-                <joint name="w1" type="hinge" axis="-0.866 0 0.5" damping="0.5"/>
+                <!-- Phase 75: increased damping 0.5→2.0 for numerical stability with RK4 -->
+                <joint name="w1" type="hinge" axis="-0.866 0 0.5" damping="2.0"/>
                 <!-- STL omni wheel mesh: visual only -->
                 <geom name="wheel0_geom" type="mesh" mesh="omni_wheel_mount-v5"
                       mass="0.15"
@@ -192,7 +199,8 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
 
             <!-- ══ Wheel 1: back-left ─ STL omni wheel mesh + contact cylinder ══ -->
             <body name="wheel1" pos="-0.0866 0.10 -0.06">
-                <joint name="w2" type="hinge" axis="0.866 0 0.5" damping="0.5"/>
+                <!-- Phase 75: increased damping 0.5→2.0 for numerical stability with RK4 -->
+                <joint name="w2" type="hinge" axis="0.866 0 0.5" damping="2.0"/>
                 <geom name="wheel1_geom" type="mesh" mesh="omni_wheel_mount-v5-1"
                       mass="0.15"
                       contype="0" conaffinity="0"
@@ -208,7 +216,8 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
 
             <!-- ══ Wheel 2: back-right ─ STL omni wheel mesh + contact cylinder ══ -->
             <body name="wheel2" pos="-0.0866 -0.10 -0.06">
-                <joint name="w3" type="hinge" axis="0 0 -1" damping="0.5"/>
+                <!-- Phase 75: increased damping 0.5→2.0 for numerical stability with RK4 -->
+                <joint name="w3" type="hinge" axis="0 0 -1" damping="2.0"/>
                 <geom name="wheel2_geom" type="mesh" mesh="omni_wheel_mount-v5-2"
                       mass="0.15"
                       contype="0" conaffinity="0"
@@ -548,6 +557,16 @@ class LeKiWiSimURDF:
             elif pos < soft_lo and self.data.qvel[vel_adr] < 0:
                 self.data.qvel[vel_adr] = 0.0
         # ── End Phase 56 ──────────────────────────────────────────────────────────
+
+        # ── Phase 75: Extra safety — clamp wheel DOF velocities before mj_step ──
+        # Even with RK4 + damping, clamp wheel joint velocities to prevent
+        # numerical explosion from contact impulse spikes.
+        # DOF indices: w1=qvel[6], w2=qvel[7], w3=qvel[8]
+        WHEEL_DOF = [6, 7, 8]
+        WHEEL_VEL_MAX = 50.0   # rad/s — physical limit for small wheels
+        for dof_adr in WHEEL_DOF:
+            if abs(self.data.qvel[dof_adr]) > WHEEL_VEL_MAX:
+                self.data.qvel[dof_adr] = np.sign(self.data.qvel[dof_adr]) * WHEEL_VEL_MAX
 
         mujoco.mj_step(self.model, self.data)
         return self._obs(), float(self._reward()), bool(self.data.time > 60), {}
