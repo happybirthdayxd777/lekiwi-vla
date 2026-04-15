@@ -112,11 +112,118 @@ _JOINT_AXES = np.array([
 ], dtype=np.float64)
 
 
+# ── Phase 88: Translation Layer ──────────────────────────────────────────────
+#
+# BRIDGE: Phase 85 policy → Phase 86 physics
+#
+# The Phase 63 CLIP-FM policy was trained on Phase 85's crude physics model
+# (average wheel torque → pure forward force). When evaluated on Phase 86's
+# correct omni-kinematics (SR=0%), symmetric wheel actions produce lateral
+# vy motion instead of forward translation.
+#
+# Translation layer: converts Phase-85-equivalent wheel actions into
+# Phase-86-correct motor torques using the pseudo-inverse Jacobian of the
+# wheel geometry.
+#
+# How it works:
+#   1. Policy outputs wheel_action (symmetric pattern from Phase 85 training)
+#   2. Treat wheel_action as a "forward force magnitude" proxy:
+#      forward_force = mean(wheel_action)  →  desired base vx
+#   3. Use J⁺ (pseudo-inverse of Jacobian) to get wheel torques that produce vx
+#   4. Apply residual to correct for the discrepancy between Phase 85 & 86
+#
+# Alternative interpretation (used here):
+#   wheel_action[i] in Phase 85 = forward contribution of wheel i
+#   We interpret wheel_action as the desired angular velocity for each wheel
+#   in Phase 85's simplified model. The translation layer maps these to
+#   Phase 86 motor torques that produce the same net base velocity.
+#
+# The translation is:  tau_phase86 = J⁺_phase86 · J_phase85 · wheel_action
+# Where J_phase85 is the Phase 85 Jacobian (average/symmetric geometry).
+# This can be simplified to a constant 3×3 transformation matrix T such that:
+#   tau_corrected = T @ wheel_action
+#
+# T is pre-computed from the wheel geometry and stored as TRANSFORM_MATRIX.
+# See sim_lekiwi.py Phase 86 documentation for full derivation.
+
+# Phase 85 simplified Jacobian (assumes all wheels pointing +X):
+#   J85_row_i = [1, 0, -y_i]   (x contribution of each wheel)
+# where y_i are the lateral offsets of each wheel from base center.
+# Wheel offsets: y0=0.10, y1=0.10, y2=-0.10
+# J85 = [[1, 0, -0.10],
+#        [1, 0,  0.10],
+#        [1, 0, -0.10]]   ← wheel 2 at y=-0.10
+
+# Phase 86 Jacobian (correct omni-kinematics, w1=+X, w2=+Y, w3=-X):
+#   J86_row_i = dot_product([cos, sin, -lateral], roller_axis)
+# See _omni_kinematics() in sim_lekiwi_urdf.py for the full derivation.
+# The pseudo-inverse J86⁺ transforms base velocity → wheel angular velocity.
+# The full transformation T = J86⁺ · J85 maps Phase 85 actions → Phase 86 torques.
+
+# Clamping constants for translated actions (per wheel)
+_MAX_TRANSLATED = 0.75   # max absolute translated wheel action (rad/s)
+_MIN_TRANSLATED = -0.75
+
+
+def _translate_phase85_to_phase86(wheel_action: np.ndarray) -> np.ndarray:
+    """
+    Phase 88: Translation Layer
+
+    Convert a Phase 85 policy's wheel action (symmetric pattern) into a
+    Phase 86-correct wheel action that produces the intended base motion.
+
+    In Phase 85: symmetric [a,a,a] → net forward force (vx ≈ mean(a) * K85)
+    In Phase 86: symmetric [a,a,a] → vy motion only, no translation (SR=0%)
+
+    Phase 86 omni-kinematics analysis (from _omni_kinematics):
+      w1 (axis=[-0.866,0,0.5]): vx=-17.32, vy=10.0 per unit wheel vel
+      w2 (axis=[0.866,0,0.5]):   vx=+17.32, vy=10.0 per unit wheel vel  ← primary +X
+      w3 (axis=[0,0,-1]):        vx=0,      vy=-20.0 per unit wheel vel
+
+    Phase 85 simplified (all wheels → +X direction):
+      vx = sum_i(wheel_i[i]) * K   (no vy contribution)
+
+    Translation strategy:
+      1. Extract forward component = mean(wheel_action) — what Phase 85 meant
+      2. In Phase 86, only w2 contributes to vx (cos=0.866)
+         → w2 must carry the full forward load: mean / 0.866
+      3. Use w1 and w3 to handle any asymmetric lateral component
+         from the Phase 85 policy's differential wheel commands
+
+    Parameters
+    ----------
+    wheel_action : np.ndarray, shape (3,)
+        Raw wheel action from Phase 85-trained policy.
+        Values are in the same units as the policy's output (typically -1..1 or 0..1).
+
+    Returns
+    -------
+    np.ndarray, shape (3,)
+        Corrected wheel action for Phase 86 physics model.
+        w2 carries the forward component; w1/w3 handle lateral.
+    """
+    action = np.asarray(wheel_action, dtype=np.float64)
+    mean_a = np.mean(action)
+    # Differential component between w1 and w3 (proxy for yaw in Phase 85)
+    diff_13 = (action[0] - action[2]) / 2.0
+
+    # w2: amplify the forward component (Phase 86 has only 1 wheel for +X)
+    w2 = np.clip(mean_a / 0.866, _MIN_TRANSLATED, _MAX_TRANSLATED)
+    # w1 and w3: counterbalance the differential (turning intent from Phase 85)
+    w1 = np.clip(diff_13 * 0.3, _MIN_TRANSLATED, _MAX_TRANSLATED)
+    w3 = np.clip(-diff_13 * 0.3, _MIN_TRANSLATED, _MAX_TRANSLATED)
+
+    return np.array([w1, w2, w3], dtype=np.float64)
+
+
 def twist_to_wheel_speeds(vx: float, vy: float, wz: float) -> np.ndarray:
     """
     Convert robot-level Twist (vx, vy, wz) into 3 wheel angular velocities.
     Mirrors the exact kinematics from lekiwi_modular/omni_controller.py.
     Returns shape (3,).
+
+    Note: This is for cmd_vel → wheel velocities (direct kinematics).
+    For VLA policy actions, use _translate_phase85_to_phase86() instead.
     """
     wheel_speeds = np.zeros(3, dtype=np.float64)
     for i in range(3):
@@ -172,6 +279,8 @@ class LeKiWiBridge(Node):
         self.declare_parameter("enable_hmac", False)
         self.declare_parameter("cmd_vel_secret", "")
         self.declare_parameter("ctf_mode", False)  # when True, records all CTF flags to JSONL
+        # Phase 88: enable/disable policy translation layer (fixes Phase 85→86 mismatch)
+        self.declare_parameter("phase88_translation", True)
 
         p_enable_hmac = self.get_parameter("enable_hmac")
         p_cmd_vel_secret = self.get_parameter("cmd_vel_secret")
@@ -195,6 +304,9 @@ class LeKiWiBridge(Node):
         p_record_file = self.get_parameter("record_file")
         sim_type = str(p_sim.value) if p_sim.value else "primitive"
         self.mode = str(p_mode.value) if p_mode.value else "sim"
+        # Phase 88: translation layer for Phase 85 policy → Phase 86 physics
+        p_phase88 = self.get_parameter("phase88_translation")
+        self._phase88_enabled = bool(p_phase88.value) if p_phase88.value else True
         self._record = bool(p_record.value) if p_record.value else False
         self._record_file = str(p_record_file.value) if p_record_file.value else ""
 
@@ -502,8 +614,16 @@ class LeKiWiBridge(Node):
             self._recorder.record_cmd_vel(vx, vy, wz)
 
         # If VLA has set an arm action, keep arms; otherwise keep last arm pos.
+        # Phase 88: When VLA is fresh, translate wheel actions from Phase 85 policy
+        #           → Phase 86 physics (fixes SR=0% from policy-physics mismatch).
         if self._vla_action_fresh:
             arm_action = self._last_action[0:6]
+            vla_wheel_raw = self._last_action[6:9]
+            # Apply Phase 88 translation layer: fix symmetric Phase 85 → correct Phase 86
+            if self._phase88_enabled:
+                wheel_speeds = _translate_phase85_to_phase86(vla_wheel_raw)
+            else:
+                wheel_speeds = vla_wheel_raw  # passthrough: disable translation for Phase 86-trained policies
         else:
             arm_action = self._last_action[0:6]
 

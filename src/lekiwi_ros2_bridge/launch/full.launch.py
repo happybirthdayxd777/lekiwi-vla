@@ -132,6 +132,13 @@ def generate_launch_description() -> LaunchDescription:
         description="HMAC secret key for cmd_vel signing (required if enable_hmac=true)",
     )
 
+    # Phase 88: policy translation layer (fixes Phase 85 policy → Phase 86 physics)
+    phase88_translation = DeclareLaunchArgument(
+        "phase88_translation", default_value="true",
+        description="Enable Phase 88 translation layer for Phase 85-trained policies "
+                    "(disable when using policies trained on Phase 86 or later)",
+    )
+
     bridge_node = Node(
         package="lekiwi_ros2_bridge",
         executable="bridge_node",
@@ -146,6 +153,7 @@ def generate_launch_description() -> LaunchDescription:
             "record_images": LaunchConfiguration("record_images"),
             "enable_hmac": LaunchConfiguration("enable_hmac"),
             "cmd_vel_secret": LaunchConfiguration("cmd_vel_secret"),
+            "phase88_translation": LaunchConfiguration("phase88_translation"),
         }],
         output="screen",
     )
