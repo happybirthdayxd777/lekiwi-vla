@@ -204,11 +204,14 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
                       rgba="0.15 0.15 0.15 1"
                       euler="0 0 0"/>
                 <!-- Contact cylinder: radius=0.025, height=16mm, bottom barely at ground (world z≈0)
-             Phase 25 FIX: friction 0.6→2.7 (friction*4.5 optimal for traction)
-             Phase 77: friction reduced to 1.5 (from 2.7) — 2.7 caused contact instability
-             causing explosions at step 199 on some episodes (accumulated stiffness).
-             Lower friction = softer contact = more stable, still enough traction for locomotion.
-        -->
+                     Phase 25 FIX: friction 0.6→2.7 (friction*4.5 optimal for traction)
+                     Phase 77: friction reduced to 1.5 (from 2.7) — 2.7 caused contact instability
+                     causing explosions at step 199 on some episodes (accumulated stiffness).
+                     Lower friction = softer contact = more stable, still enough traction for locomotion.
+                     Phase 81: local_z=-0.015 keeps contact bottom at world_z≈+0.013mm (3mm above
+                     ground) with slight ground penetration — maintains wheel-ground contact for
+                     locomotion. Geometrically imperfect but generates needed traction.
+                -->
                 <geom name="wheel0_contact" type="cylinder"
                       size="0.025 0.008"
                       pos="0 0 -0.015"
