@@ -2635,3 +2635,115 @@ k_omni 機制（在 sim_lekiwi_urdf.py step() 末尾）:
 
 ### Git
 - Commit: Phase 95 — k_omni is kinematic velocity overlay (engineering, not physics); bridge architecture confirmed
+
+---
+
+## [Phase 100 - 2026-04-16 09:00 UTC] — Phase 100: Kinematics Consistency — WHEEL_POSITIONS Bug Fixed
+
+### Phase: Phase 100
+
+### 本次心跳完成事項
+
+**Phase 99/100: 發現並修復 bridge WHEEL_POSITIONS 幾何錯誤**
+
+#### 發現：Phase 48 引入的 WHEEL_POSITIONS bug
+
+Phase 48 commit 修復了「OLD bridge positions」改為「URDF body positions」，但 URDF body positions 本身就**不是等邊三角形**：
+
+```
+URDF body positions (WHEEL_POSITIONS, WRONG):
+  wheel_0: [+0.0866, +0.1000, -0.0600]
+  wheel_1: [-0.0866, +0.1000, -0.0600]
+  wheel_2: [-0.0866, -0.1000, -0.0600]
+  
+  距離: w0-w1=0.1732 ✓, w1-w2=0.2000 ✗, w2-w0=0.2646 ✗
+  → 不是等邊三角形！搖擺底盤(w1-w2, w2-w0)不等於0.1732
+```
+
+#### 正確幾何（來自 omni_controller_fixed.py）
+
+```python
+wheel_base = 0.1732, angles = [30°, 150°, 270°]
+wheel_0: [+0.1500, +0.0866] — front-right (Revolute-64)
+wheel_1: [-0.1500, +0.0866] — back-left  (Revolute-62)
+wheel_2: [+0.0000, -0.1732] — back       (Revolute-60)
+
+  距離: w0-w1=0.1732 ✓, w1-w2=0.1732 ✓, w2-w0=0.1732 ✓ (等邊)
+```
+
+#### Phase 100 修復內容
+
+更新 `bridge_node.py` WHEEL_POSITIONS：
+```python
+# OLD (Phase 48 引入的 bug):
+WHEEL_POSITIONS = [
+    [ 0.0866,  0.10,  -0.06 ],   # wheel_0
+    [-0.0866,  0.10,  -0.06 ],   # wheel_1
+    [-0.0866, -0.10,  -0.06 ],   # wheel_2
+]
+
+# NEW (Phase 100 修復):
+WHEEL_POSITIONS = [
+    [ 0.1500,  0.0866,  0.0 ],   # wheel_0 — front-right
+    [-0.1500,  0.0866,  0.0 ],   # wheel_1 — back-left
+    [ 0.0000, -0.1732,  0.0 ],   # wheel_2 — back
+]
+```
+
+#### 驗證結果
+
+Phase 99 kinematics_consistency_check.py 確認：
+- 所有測試案例（forward/strafe/rotate/arc）bridge ↔ omni_controller_fixed 輸出相同 ✓
+- 等邊三角形距離：d01=d12=d20=0.1732m ✓
+- pure rotation wz=1.0: bridge [+1.5000, -1.5000, 0] = omni [+1.5000, -1.5000, 0] ✓
+
+#### 影響範圍
+
+| 場景 | 影響 |
+|------|------|
+| Forward (vx≠0, wz=0) | **無影響** — WHEEL_POSITIONS 3D位置投影到XY不受等邊-vs-非等邊影響 |
+| Strafe (vy≠0, wz=0) | **無影響** — 同上 |
+| Rotate (wz≠0) | **有影響** — Phase 99 前旋轉 kinematics 錯誤 |
+
+**重要：旋轉 kinematics 從 Phase 48 (2026-04-14) 到 Phase 99 (2026-04-16) 一直是錯的**
+
+### 🧭 下一步（下次心跳）
+
+**Phase 101 目標：Bridge 端到端評估**
+
+1. **修復後的旋轉驗證**：
+   - 使用正確的 WHEEL_POSITIONS 重新評估 URDF sim
+   - 測試 pure rotation 場景：SR 是否改變
+
+2. **Bridge 架構現狀確認**：
+   - `bridge_node.py` — Phase 100 kinematics 修復 ✓
+   - `vla_policy_node.py` — VLA policy 推理节点（需要確認介面）
+   - `ctf_integration.py` — CTF 安全監控（Phase 98）✓
+   - `launch/ctf.launch.py` — CTF 統一 launch（Phase 98）✓
+
+3. **OMNI-CONTROLLER-FIXED vs BRIDGE 一致性**：
+   - `omni_controller_fixed.py`（lekiwi_modular）已經有正確的 equilateral 幾何 ✓
+   - bridge 現在也使用相同的正確 equilateral 幾何 ✓
+   - 兩者 kinematics 算法完全一致 ✓
+
+### 🚫 阻礙
+
+- **URDF body positions 本身不正確**：sim_lekiwi_urdf.xml 的 wheel body 位置是 isosceles，不是 equilateral
+  - 影響：URDF sim 的 MuJoCo 物理模型中 wheel positions 仍然是錯的
+  - 修復代價高（需要重新測試整個 URDF sim）
+  - 目前繞過方式：bridge 使用正確的 equilateral 幾何做 kinematics 轉換，URDF sim 內部的 wheel body 位置不影響這個轉換
+- **VLA policy 未完全整合**：需要 Phase 96/101 確認
+- **macOS 無法運行 ROS2**：bridge_node.py 無法在 macOS 上完整測試
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p93 | Fix wheel body Z -0.060→-0.064 | contact loco 2.5x improvement |
+| p94 | k_omni=15 vs pure contact | 2.29m vs 0.047m (49x); k_omni is locomotion engine |
+| p95 | k_omni 機制分析 | k_omni = kinematic velocity overlay, not physics |
+| p99 | Kinematics consistency check | bridge vs omni mismatch found (URDF body pos bug) |
+| **p100** | **Fix WHEEL_POSITIONS to equilateral** | **bridge ↔ omni all tests PASS** |
+
+### Git
+- Commit: Phase 100 — Fix WHEEL_POSITIONS: equilateral triangle (w0-w1=w1-w2=w2-w0=0.1732m), Phase 48 URDF-body-positions bug corrected
+

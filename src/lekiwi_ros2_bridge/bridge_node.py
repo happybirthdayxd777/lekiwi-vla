@@ -83,23 +83,26 @@ URDF_ARM_JOINT_NAMES = [
 ]
 
 
-# ── Kinematics constants (Phase 48: fixed from URDF sim_lekiwi_urdf.xml) ───────
-# These MUST match the MuJoCo URDF model geometry for cmd_vel → wheel_speeds
-# to correctly drive the simulation. Previous values were approximations.
+# ── Kinematics constants (Phase 100: corrected to equilateral triangle) ─────────
+# Phase 99 finding: URDF body positions in sim_lekiwi_urdf.xml are WRONG —
+# they form an isosceles triangle (w0-w1=0.1732, w1-w2=0.2000, w2-w0=0.2646m)
+# instead of the correct equilateral 120°-separated triangle.
 #
-# Wheel positions (base_link frame, from <body> definitions in sim_lekiwi_urdf.xml):
-#   wheel_0 (→w1, Revolute-64):  pos="0.0866 0.10 -0.06",  axis="-0.866 0 0.5"
-#   wheel_1 (→w2, Revolute-62):  pos="-0.0866 0.10 -0.06", axis="0.866 0 0.5"
-#   wheel_2 (→w3, Revolute-60):  pos="-0.0866 -0.10 -0.06", axis="0 0 -1"
+# The correct geometry (confirmed by omni_controller_fixed.py) is:
+#   wheel_base = 0.1732m,  angles = [30°, 150°, 270°]
+#   wheel_0: [+0.1500, +0.0866] — front-right (Revolute-64)
+#   wheel_1: [-0.1500, +0.0866] — back-left  (Revolute-62)
+#   wheel_2: [+0.0000, -0.1732] — back        (Revolute-60)
 #
-# Bug fix (Phase 48): Bridge WHEEL_POSITIONS were wrong:
-#   OLD: [0.1732,0,0], [-0.0866,0.15,0], [-0.0866,-0.15,0]  ← these don't match URDF
-#   NEW: [0.0866,0.10,-0.06], [-0.0866,0.10,-0.06], [-0.0866,-0.10,-0.06]  ← URDF geometry
+# Phase 48 introduced the URDF-body-position bug: it "matched URDF" but the
+# URDF body positions themselves are wrong (not equilateral).
+# Phase 100 fixes this: use correct equilateral positions.
+#
 WHEEL_RADIUS   = 0.05    # m (wheel roller radius)
 WHEEL_POSITIONS = np.array([
-    [ 0.0866,  0.10,  -0.06 ],   # wheel_0 — back-right (Revolute-64)
-    [-0.0866,  0.10,  -0.06 ],   # wheel_1 — back-left  (Revolute-62)
-    [-0.0866, -0.10,  -0.06 ],   # wheel_2 — front      (Revolute-60)
+    [ 0.1500,  0.0866,  0.0 ],   # wheel_0 — front-right (Revolute-64), 30° from X
+    [-0.1500,  0.0866,  0.0 ],   # wheel_1 — back-left  (Revolute-62), 150° from X
+    [ 0.0000, -0.1732,  0.0 ],   # wheel_2 — back       (Revolute-60), 270° from X
 ], dtype=np.float64)
 
 # Roller axes from URDF (continuous revolute joints):
