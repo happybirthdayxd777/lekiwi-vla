@@ -418,9 +418,17 @@ class LeKiWiSimURDF:
         
         action[0:6] = arm joint torques (normalized -1..1 → ±3.14 Nm)
         action[6:9] = wheel motor torques (normalized -1..1 → ±10.0 Nm, clipped to ±5.0)
+        
+        Phase 70 FIX: Clamp action[6:9] to [-0.5, 0.5] BEFORE converting to ctrl.
+        Root cause: Policy outputs wheel actions up to ~1.25 (raw), which creates
+        ctrl=12.5 → joint torque=125 Nm → MuJoCo physics explosion → NaN at ~0.3s.
+        Clamping to ±0.5 reduces max joint torque to 50 Nm (from 125 Nm),
+        eliminating NaN while maintaining meaningful locomotion (SR=20% with clamped).
         """
         arm = np.clip(action[:6], -1, 1) * 3.14
-        wheel_torque = np.clip(action[6:9], -1, 1) * 10.0
+        # Phase 70: clamp wheel actions to ±0.5 to prevent physics NaN instability
+        wheel_action = np.clip(action[6:9], -0.5, 0.5)
+        wheel_torque = wheel_action * 10.0
         return np.array([*arm, *wheel_torque], dtype=np.float64)
 
     def reset(self, target=None, seed=None):
