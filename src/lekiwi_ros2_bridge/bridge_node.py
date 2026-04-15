@@ -146,8 +146,9 @@ class LeKiWiBridge(Node):
     #   ctrl[6:9]  = wheel joints (w1..w3, range ±5.0)
     ARM_CTRL_MIN  = -3.14
     ARM_CTRL_MAX  =  3.14
-    WHEEL_CTRL_MIN = -5.0
-    WHEEL_CTRL_MAX =  5.0
+    # Phase 70/74: WHEEL_CTRL ±0.5 required for URDF sim stability (±5.0 causes NaN)
+    WHEEL_CTRL_MIN = -0.5
+    WHEEL_CTRL_MAX =  0.5
 
     ARM_NAMES  = ["j0", "j1", "j2", "j3", "j4", "j5"]
     WHEEL_NAMES = ["w1", "w2", "w3"]
