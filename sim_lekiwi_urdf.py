@@ -481,6 +481,14 @@ class LeKiWiSimURDF:
         """
         mujoco.mj_resetData(self.model, self.data)
         
+        # ── Phase 82 CRITICAL FIX: Force correct upright orientation ──────────────
+        # The URDF freejoint base is defined with quaternion [1,0,0,0] = 180° around X
+        # This means the robot starts UPSIDE DOWN, causing it to fly up (contact
+        # forces push an inverted robot upward instead of rolling it forward).
+        # Fix: Set identity quaternion [0,0,0,1] = upright orientation.
+        # This matches the expected real-world robot pose where wheels face down.
+        self.data.qpos[3:7] = [0.0, 0.0, 0.0, 1.0]
+        
         # ── Phase 67: Stochastic perturbation when seed is set ──────────────────
         if seed is not None and seed != 0:
             rng = np.random.default_rng(seed)
