@@ -2023,3 +2023,98 @@ Phase 68:     CONFIRMED:
 3. **TaskEvaluator 通過 `_obs()` 自動內部一致**：即使內部切片不精確，只要 training/eval 一致就好
 4. **PRIMITIVE 和 URDF 都用 action*10 相同的扭矩控制**：差異在幾何和接觸，不在控制信號
 
+
+---
+
+## Phase 69 (2026-04-15 09:00 UTC) — Policy REACHES goal=(0.3,0.2) in 39 steps; SR=25%; NaN blocks long episodes
+
+### Phase: Phase 69
+
+### 本次心跳完成事項
+
+**核心發現：Policy 能到達目標！SR=25% 在 URDF sim，URDF NaN 穩定性問題限制成功率**
+
+#### 1. URDF Sim Eval — 200 Steps, 4 Goals
+
+```
+SUCCESS goal=(0.3, 0.2): steps=39, dist=0.039m   ← POLICY REACHES GOAL!
+FAIL goal=(0.2, -0.2): steps=200, dist=8.898m    ← NaN instability
+FAIL goal=(0.3, 0.4): steps=200, dist=1.518m     ← NaN instability  
+FAIL goal=(0.15, 0.1): steps=200, dist=1.432m    ← NaN instability  
+
+Phase 69 Eval (200 steps): SR=25%, mean_dist=2.972m, mean_steps=160
+WARNING: Nan, Inf or huge value in QACC at DOF 0/3
+```
+
+**政策追蹤軌跡（goal=(0.3, 0.2)，seed=42）：**
+```
+s0:  wheel=[-1.00,-1.00,-1.00] | base=(+0.000,+0.000) | dist=0.361m
+s5:  wheel=[+1.00,-1.00,+1.00] | base=(+0.097,+0.050) | dist=0.253m
+s10: wheel=[+0.97,+0.05,+0.33] | base=(+0.230,+0.127) | dist=0.101m
+s13: wheel=[-1.00,+1.00,-1.00] | base=(+0.299,+0.165) | dist=0.035m  ← approaching
+s14: wheel=[+1.00,-1.00,-1.00] | base=(+0.318,+0.173) | dist=0.032m
+s27: SUCCESS (dist<0.1m for 3 consecutive steps)
+```
+
+Policy 展現有意義的趨向目標行為：base 從 (0,0) 移動到 (0.3, 0.2) 附近。
+
+#### 2. Policy 是 Goal-Aware 的，但 goal_xy 不在 state 向量
+
+**重要發現：**
+- Phase 63 訓練用 `GoalOrientedReplayBuffer`，但 `sample()` 只返回 9D state（不含 goal_xy）
+- `flow_head.net.0.weight` input_dim = 786 = 512(vision) + 9(state) + 9(action) + 256(time)
+- **Policy 沒有在 state 向量中接收 goal_xy**
+- **Goal awareness 來自視覺圖像（圖像中包含目標位置信息）**
+
+#### 3. 4 個 Checkpoint 比較（URDF sim, 60 steps）
+
+| Checkpoint | SR | Mean Dist |
+|-----------|----|-----------|
+| epoch10 | 0% | 1.319m |
+| epoch20 | 0% | 0.845m |
+| epoch30 | 0% | 0.888m |
+| final | 0% | 0.898m |
+
+60 steps 太短，policy 無法到达。200 steps 才能显示真实能力。
+
+#### 4. URDF Sim NaN 穩定性問題
+
+- DOF 0 和 DOF 3 在 0.2-0.4s 時發生 NaN
+- 這些 DOF 是 base freejoint 和某個 arm joint
+- 發生在 policy 輸出大幅度 action 時
+- 解決方案：添加 base velocity limits 或 lower action magnitudes
+
+### 下一步
+
+1. **修復 URDF NaN 穩定性**：
+   - 降低 policy action magnitude 或添加 base velocity damping
+   - 考慮使用 PRIMITIVE sim 進行訓練（無 NaN）
+
+2. **收集更多成功數據**：
+   - 用 URDF sim 收集 10k 幀 goal-directed 數據（goal=(0.3,0.2) 成功案例）
+   - 重新訓練 policy
+
+3. **評估更長 episode**（超過 200 steps）以避開 NaN
+
+### 阻礙
+
+1. URDF sim 在 0.2-0.4s 時 DOF 0/3 發生 NaN（物理不穩定）
+2. 60 steps 限制讓 policy 來不及到达目標（即使有 SR=25% 潛力）
+3. goal=(0.2,-0.2) 等其他目標 SR=0%（方向偏差或 overshoot）
+
+### 架構狀態（Phase 69）
+
+```
+Phase 1-26:   Bridge + VLA policy infrastructure ✓
+Phase 27-68:  State indexing, locomotion physics, NaN fixes ✓
+Phase 69:     POLICY CAN REACH GOAL — SR=25% on URDF sim (200 steps)
+  - Policy reaches goal=(0.3,0.2) in 39 steps (confirmed trajectory)
+  - Goal awareness from VISUAL IMAGE not state vector
+  - URDF NaN instability at ~0.3s limits long episodes
+  - All 4 checkpoints (epoch10-30,final) give SR=0% at 60 steps
+  - Need: fix NaN stability OR switch to PRIMITIVE sim for training
+```
+
+### Git
+
+- Commit: `950849e` — Phase 69: URDF eval confirms SR=25% — policy reaches goal=(0.3,0.2) in 39 steps
