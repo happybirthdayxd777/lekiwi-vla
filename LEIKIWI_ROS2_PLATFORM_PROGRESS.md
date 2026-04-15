@@ -2539,3 +2539,99 @@ k_omni 如何運作：
 ### Git
 
 - Commit: Phase 94: k_omni is the locomotion engine — pure contact 0.047m, k_omni=15 gives 2.29m (49x); friction sweep shows pure contact insensitive to friction
+
+---
+
+## [Phase 95 - 2026-04-16 08:00 UTC] — Phase 95: k_omni Kinematic Overlay — Engineering NOT Physics
+
+### ✅ 已完成
+
+**確認：k_omni 是 ENGINEERING CHOICE，不是 physics simulation**
+
+Phase 94 發現 k_omni=15 給予 2.29m/200steps，而 pure contact 只有 0.047m (49x 差距)。
+Phase 95 深入分析 k_omni 的實際運作機制：
+
+```
+k_omni 機制（在 sim_lekiwi_urdf.py step() 末尾）:
+  wheel_vels = [w1, w2, w3] from qvel
+  vx_kin, vy_kin, wz_kin = _omni_kinematics(wheel_vels)
+  xfrc_applied[base] += k_omni * [vx_kin, vy_kin, 0]
+```
+
+**為什麼 pure contact 很差：**
+1. 底盤 chassis_contact friction=0.001 → 幾乎無水平摩擦力
+2. 車輪 cylinder bottom 低於地面（world z ≈ -0.002m）
+3. 接觸幾何不穩定（車輪浮在地面上方）
+4. 結果：底盤被 freeze，車輪轉動但底盤不動
+
+**k_omni 的物理意義：**
+- k_omni 不是「contact force」，是「kinematic velocity overlay」
+- 它從車輪 spin 計算「車輪期望 base 移動多快」
+- 然後用 xfrc_applied 直接推 base
+- 這本質上是「假底盤力」（fake base force）—— 不是從 wheel-ground contact 產生的
+
+**橋接架構確認：**
+
+| 組件 | 職責 |
+|------|------|
+| `bridge_node._on_cmd_vel()` | Twist (vx,vy,wz) → wheel_speeds via twist_to_wheel_speeds() |
+| `LeKiWiSimURDF.step()` | wheel_speeds → wheel rotation via motor torque |
+| `k_omni overlay` | wheel rotation → base motion (kinematic) |
+| `bridge_node._publish_joint_states()` | MuJoCo obs → /lekiwi/joint_states |
+
+**Bridge 對 k_omni 的處理：**
+- Bridge 不需要修改 k_omni機制
+- Bridge 只需要確保 wheel velocities 正確傳遞到 MuJoCo
+- k_omni 會自動處理 wheel rotation → base motion
+
+**接下來的優先級：**
+1. VLA policy 集成 — 讓 policy 通過 bridge 輸出 action
+2. 真實 URDF 幾何驗證 — 確保 lekiwi_modular URDF 和 lekiwi_vla URDF 同步
+3. Bridge 在真實 ROS2 環境測試（不是只做本地模擬）
+
+### 🔍 架構現況
+
+- `bridge_node.py` — 完整的 ROS2↔MuJoCo bridge，CTF 安全監控
+- `sim_lekiwi_urdf.py` — k_omni=15 kinematic overlay 作為 locomotion 引擎
+- `launch/bridge.launch.py` — 一鍵啟動 bridge
+- `vla_policy_node.py` — VLA policy 推理节点（未完全整合）
+- CTF 安全監控 — 8 channels (C1-C8) 全部active
+
+### 🧭 下一步（下次心跳）
+
+**Phase 96 目標：Bridge 真實 ROS2 環境測試**
+
+1. **確認 bridge_node.py 能正確編譯為 ROS2 package**
+   ```
+   cd ~/hermes_research/lekiwi_vla/src/lekiwi_ros2_bridge
+   colcon build --packages-select lekiwi_ros2_bridge
+   ```
+
+2. **確認 topics 正確映射**
+   - Input: `/lekiwi/cmd_vel` (Twist)
+   - Output: `/lekiwi/joint_states` (JointState)
+   - 與 lekiwi_modular 的 omni_controller.py 一致
+
+3. **確認 VLA policy 輸出途徑**
+   - VLA policy node → `/lekiwi/vla_action` → bridge_node → MuJoCo
+   - 驗證 action 格式：9-element [arm*6, wheel*3]
+
+4. **如果時間允許：修復 VLA policy node**
+   - 檢查 vla_policy_node.py 與 bridge_node.py 的接口
+   - 確保 CLIP-FM policy 正確加載和推理
+
+### 🚫 阻礙
+
+- **k_omni 是 engineering choice**：需要文檔說明，不試圖修復
+- **接觸物理差的問題被 k_omni 遮蓋**：不修復（有意義的設計選擇）
+- **VLA policy 未完全整合**：需要 Phase 96 確認
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p93 | Fix wheel body Z -0.060→-0.064 | contact loco 2.5x improvement |
+| p94 | k_omni=15 vs pure contact | 2.29m vs 0.047m (49x); k_omni is locomotion engine |
+| **p95** | **k_omni 機制分析** | **k_omni = kinematic velocity overlay, not physics** |
+
+### Git
+- Commit: Phase 95 — k_omni is kinematic velocity overlay (engineering, not physics); bridge architecture confirmed
