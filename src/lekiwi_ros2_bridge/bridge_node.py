@@ -161,8 +161,14 @@ _JOINT_AXES = np.array([
 # The full transformation T = J86⁺ · J85 maps Phase 85 actions → Phase 86 torques.
 
 # Clamping constants for translated actions (per wheel)
-_MAX_TRANSLATED = 0.75   # max absolute translated wheel action (rad/s)
-_MIN_TRANSLATED = -0.75
+# Phase 89 FIX: Increased from ±0.75 to ±6.0 rad/s.
+# ROOT CAUSE (Phase 88): ±0.75 rad/s cap is ~7-8x too restrictive.
+# Phase 86 omni-kinematics: vx = R/3 * 1.732 * (w2 - w3), R=0.0508.
+# For Phase 85-level forward motion (~0.2 m/s), need w2-w3 ≈ 6.8 rad/s.
+# Previous max w2 = 0.75/0.866 = 0.866 → vx ≈ 0.025 m/s (8x too slow).
+# Phase 89: No internal clamp in translation; scale happens in _on_cmd_vel.
+_MAX_TRANSLATED = 6.0   # max absolute translated wheel speed (rad/s)
+_MIN_TRANSLATED = -6.0
 
 
 def _translate_phase85_to_phase86(wheel_action: np.ndarray) -> np.ndarray:
@@ -207,11 +213,16 @@ def _translate_phase85_to_phase86(wheel_action: np.ndarray) -> np.ndarray:
     # Differential component between w1 and w3 (proxy for yaw in Phase 85)
     diff_13 = (action[0] - action[2]) / 2.0
 
-    # w2: amplify the forward component (Phase 86 has only 1 wheel for +X)
-    w2 = np.clip(mean_a / 0.866, _MIN_TRANSLATED, _MAX_TRANSLATED)
-    # w1 and w3: counterbalance the differential (turning intent from Phase 85)
-    w1 = np.clip(diff_13 * 0.3, _MIN_TRANSLATED, _MAX_TRANSLATED)
-    w3 = np.clip(-diff_13 * 0.3, _MIN_TRANSLATED, _MAX_TRANSLATED)
+    # Phase 89 FIX: Gain factor increased from 1.15 (1/0.866) to 10.0.
+    # Phase 86 omni-kinematics: vx = R/3 * 1.732 * (w2 - w3), R=0.0508.
+    # Phase 85 model: forward force ≈ K85 * mean_a, achieving ~0.2 m/s at mean=0.5.
+    # This requires w2-w3 ≈ 6.8 rad/s → gain ≈ 6.8/0.5 ≈ 13.6.
+    # Using gain=10 as safe starting point (gives ~0.15 m/s forward at mean=0.5).
+    # w1 and w3 handle differential (turning), scaled proportionally.
+    _GAIN = 10.0
+    w2 = np.clip(mean_a * _GAIN, _MIN_TRANSLATED, _MAX_TRANSLATED)
+    w1 = np.clip(diff_13 * _GAIN * 0.3, _MIN_TRANSLATED, _MAX_TRANSLATED)
+    w3 = np.clip(-diff_13 * _GAIN * 0.3, _MIN_TRANSLATED, _MAX_TRANSLATED)
 
     return np.array([w1, w2, w3], dtype=np.float64)
 
