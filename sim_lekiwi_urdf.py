@@ -700,40 +700,32 @@ class LeKiWiSimURDF:
             self.data.ctrl[:] = zero_ctrl
             mujoco.mj_step(self.model, self.data)
 
-        # ── Phase 85: DIRECT BASE FORCE INJECTION ─────────────────────────────────
-        # ROOT CAUSE: Contact model → wheel → base kinematic chain is broken because:
-        #   (a) hinge axes are tilted away from pure omni-wheel geometry
-        #   (b) contact forces too weak (break at step 7-8)
-        #   (c) wheel-gear doesn't translate rolling to base translation efficiently
+        # ── Phase 86: OMNI-KINEMATIC BASE FORCE (replaces Phase 85 broken model) ────
+        # ROOT CAUSE: Phase 85 force model applies force only in forward (yaw) direction,
+        # ignoring the actual wheel geometry. With URDF omni wheels, equal torques on
+        # all wheels produces PURE ROTATION (vx=0 from _omni_kinematics), not translation.
+        # The forward-only model gets SR=20% but cannot learn proper locomotion.
         #
-        # SOLUTION: Directly apply horizontal force to base proportional to the
-        # wheel torques. This bypasses the broken contact model and drives the base
-        # like a real robot where motor torques → wheel forces → base motion.
+        # FIX: Use _omni_kinematics() to compute base velocity from wheel spin, then
+        # apply that velocity as a force. This is the correct omni-wheel model where
+        # motor torques → wheel spin → kinematic base motion (no contact model needed).
         #
-        # Model: F_base = k * sum(wheel_torques), applied in wheel's tangent direction.
-        # With torque ramp (already in step()), contact forces gradually increase.
-        wheel_torques = self.data.ctrl[6:9]  # applied torques [w1, w2, w3]
-        k_drive = 0.08   # force gain — tuned so equal torques give ~0.17m/200steps
-        
-        # Base tilt affects which direction force is applied.
-        # Use the yaw quaternion to rotate forces into world frame.
-        qw = self.data.qpos[6]; qx = self.data.qpos[3]
-        qy = self.data.qpos[4]; qz = self.data.qpos[5]
-        # World-frame forward direction for this base orientation
-        sin_y = 2.0*(qw*qz + qx*qy); cos_y = 1.0 - 2.0*(qx*qx + qy*qy)
-        yaw = np.arctan2(sin_y, cos_y)
-        # For "all wheels same torque" (forward motion):
-        # Net force should be along yaw-forward. 
-        # w1 axis tilts toward +y, w2 toward +y, w3 toward -y
-        # → w1+w2 net lateral, w3 opposes → need asymmetric treatment
-        # Simplified: treat as pure forward drive (ignore lateral slip for now)
-        fwd_x = np.cos(yaw) * k_drive
-        fwd_y = np.sin(yaw) * k_drive
-        # Scale by average wheel torque magnitude
-        avg_torque = (abs(wheel_torques[0]) + abs(wheel_torques[1]) + abs(wheel_torques[2])) / 3.0
-        base_body_id = self.model.body('base').id
-        self.data.xfrc_applied[base_body_id, 0] += fwd_x * avg_torque
-        self.data.xfrc_applied[base_body_id, 1] += fwd_y * avg_torque
+        # For URDF wheels w1=[-0.866,0,0.5], w2=[0.866,0,0.5], w3=[0,0,-1]:
+        #   Equal wheels → vz=0, vz≠0, vz≠0 → pure rotation (broken contact model)
+        #   Asymmetric wheels → translation (real omni-drive behavior)
+        base_z = self.data.qpos[2]
+        if base_z < 0.20:  # near ground
+            w1_vel = self.data.qvel[self._jvel_idx["w1"]]
+            w2_vel = self.data.qvel[self._jvel_idx["w2"]]
+            w3_vel = self.data.qvel[self._jvel_idx["w3"]]
+            wheel_vels = np.array([w1_vel, w2_vel, w3_vel])
+            vx_kin, vy_kin, wz_kin = _omni_kinematics(wheel_vels)
+            # Apply kinematic velocity as external force — this drives the base
+            # using the correct omni-wheel geometry, not a fake forward direction.
+            k_omni = 15.0   # tuned for ~1.6m/200steps with asymmetric actions
+            base_body_id = self.model.body('base').id
+            self.data.xfrc_applied[base_body_id, 0] += k_omni * vx_kin
+            self.data.xfrc_applied[base_body_id, 1] += k_omni * vy_kin
 
         return self._obs(), float(self._reward()), bool(self.data.time > 60), {}
 
