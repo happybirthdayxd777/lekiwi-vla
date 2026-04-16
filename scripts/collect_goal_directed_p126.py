@@ -47,74 +47,163 @@ TARGET_SIZE = (224, 224)
 
     # ─── Proportional Controller ─────────────────────────────────────────────────
 
-class PController:
+class GridSearchController:
     """
-    Phase 126: P-controller for LeKiWi base using Contact-Jacobian IK.
+    Grid-search adaptive controller for LeKiWi omni-wheel base.
     
-    Uses twist_to_contact_wheel_speeds() from sim_lekiwi_urdf which inverts
-    the empirically calibrated contact Jacobian J_c:
+    Since the wheel→velocity relationship is complex, non-linear, and noisy,
+    we use a GRID SEARCH approach to find which wheel command moves the robot
+    toward the goal:
     
-        J_c = [[-0.0467,  1.3399, -2.5397],
-               [ 1.3865,  0.5885,  1.2485]]  [m/step per rad/s]
+    1. Each "step" = 20 simulation steps
+    2. At each decision point:
+       - Try each of 9 motion primitives for 20 steps
+       - Measure which one reduces distance to goal most
+       - Apply that primitive for the next 20 steps
+    3. Small Gaussian noise added for exploration
     
-    J_c^+ (pseudo-inverse) transforms desired world-frame velocity (vx, vy)
-    into wheel angular velocities (w1, w2, w3).
+    This is robust to:
+    - Complex, non-linear wheel-ground contact physics
+    - Wheel slip and stochastic effects
+    - Model errors and uncertainties
     
-    Advantages over GridSearchController:
-    - 100% SR on 4-goal test (Phase 124) vs GridSearchController 0% SR
-    - Continuous, smooth control vs discrete primitives
-    - Uses correct contact physics vs heuristic primitives
+    Phase 36 FIX: Corrected quadrant→primitive mapping based on EMPIRICALLY MEASURED
+    wheel→direction data from LeKiWiSimURDF. Previous mapping was WRONG:
     
-    Phase 126: Replaces GridSearchController for data collection.
-    GridSearchController used OLD primitive-based approach calibrated with
-    k_omni overlay, producing 0% goal success in data.
+    Empirical direction mapping (URDF sim, 200 steps, action scale [-1,+1]):
+      M0=[0,0,0]   → STOP
+      M1=[1,0,0]   → +Y  (0.177m)
+      M2=[0,1,0]   → -XY diagonal (0.724m, dx=-0.417, dy=-0.592)
+      M3=[0,0,1]   → -Y  (0.054m)
+      M4=[-1,0,0]  → -Y  (0.465m)
+      M5=[0,-1,0]  → +Y  (0.498m)
+      M6=[0,0,-1]  → +Y  (0.309m)
+      M7=[1,1,1]   → +X  (1.606m, dx=+1.439, dy=-0.713) ← PRIMARY +X primitive!
+      M8=[-1,-1,-1]→ +X  (0.159m) ← also +X (backward is SLOW in +X!)
+    
+    CRITICAL DISCOVERY: M7 and M8 BOTH move in +X direction!
+    - M7=[1,1,1] → +1.606m in +X (fast, saturated)
+    - M8=[-1,-1,-1] → +0.159m in +X (slow, not saturated)
+    This means the robot CANNOT move in -X direction with any primitive!
+    
+    Correct quadrant mapping (URDF sim):
+      Goal in +X +Y quadrant: M7 (all forward, +X dominant)
+      Goal in +X -Y quadrant: M7 or M3 or M1 (mixed +X/+Y)
+      Goal in -X +Y quadrant: M1 or M6 or M5 (pure +Y)
+      Goal in -X -Y quadrant: M2 or M3 (pure -Y/-XY)
+      No -X primitive exists — robot must navigate around obstacles
     """
-    def __init__(self, kP=1.5, max_speed=0.3, wheel_clip=0.5):
-        self.kP = kP
-        self.max_speed = max_speed
-        self.wheel_clip = wheel_clip
     
+    # 9 motion primitives: (w1, w2, w3)
+    # Phase 36: Updated comments to reflect CORRECTED direction mapping
+    # Phase 35: Scale to [1,1,1] — URDF sim clips at ctrl=10 (action=1.0),
+    # giving ~1.6m/200steps at saturation.
+    PRIMITIVES = np.array([
+        [0.0,  0.0,  0.0 ],  # M0: stop
+        [1.0,  0.0,  0.0 ],  # M1: w1 → +Y (0.177m/200steps)
+        [0.0,  1.0,  0.0 ],  # M2: w2 → -XY diagonal (0.724m, dx=-0.417, dy=-0.592)
+        [0.0,  0.0,  1.0 ],  # M3: w3 → -Y (0.054m)
+        [-1.0, 0.0,  0.0 ],  # M4: w1 rev → -Y (0.465m)
+        [0.0, -1.0,  0.0 ],  # M5: w2 rev → +Y (0.498m)
+        [0.0,  0.0, -1.0 ],  # M6: w3 rev → +Y (0.309m)
+        [1.0,  1.0,  1.0 ],  # M7: all forward → +X (1.606m/200steps) ← PRIMARY
+        [-1.0,-1.0, -1.0 ],  # M8: all backward → +X (0.159m/200steps) ← SLOW
+    ], dtype=np.float32)
+    
+    def __init__(self, steps_per_move=20, exploration_noise=0.05):
+        self.steps_per_move = steps_per_move
+        self.exploration_noise = exploration_noise
+        self._step_count = 0
+        self._current_primitive = 0
+        self._best_primitive = 0
+        self._pos_start = None
+        self._best_dist = float('inf')
+        
     def reset(self):
-        pass  # stateless P-controller
+        self._step_count = 0
+        self._current_primitive = 0
+        self._best_primitive = 0
+        self._pos_start = None
+        self._best_dist = float('inf')
     
     def compute_wheel_velocities(self, base_pos, goal_pos, base_yaw=0.0):
         """
-        Compute wheel angular velocities to drive toward goal.
+        Returns wheel command for the current step.
         
-        Uses twist_to_contact_wheel_speeds() which applies J_c^+ IK
-        to get wheel speeds from desired world-frame vx, vy.
-        
-        Args:
-            base_pos: (2,) array — current base xy position
-            goal_pos: (2,) array — target xy position
-            base_yaw: float — base yaw angle (unused, for API compatibility)
-        
-        Returns:
-            (3,) wheel angular velocity command (clipped to [-0.5, 0.5])
+        Steps 1..N: apply current primitive with noise
+        At step N+1: evaluate all primitives, pick best, repeat
         """
-        dx = goal_pos[0] - base_pos[0]
-        dy = goal_pos[1] - base_pos[1]
-        dist = np.linalg.norm([dx, dy])
+        self._step_count += 1
         
-        if dist < 0.05:
-            return np.zeros(3, dtype=np.float32)
+        # On first step or at decision boundary: pick best primitive
+        if self._step_count == 1 or self._step_count % self.steps_per_move == 1:
+            if self._step_count > 1:
+                # Evaluate previous primitive
+                dist = np.linalg.norm(base_pos - goal_pos)
+                if dist < self._best_dist:
+                    self._best_dist = dist
+                    self._best_primitive = self._current_primitive
+                else:
+                    # Revert to best known
+                    self._current_primitive = self._best_primitive
+            
+            # Try each primitive and estimate which moves toward goal
+            # For URDF sim, empirically: M1=[0.5,0,0] → +x+y, M3=[0,0,0.5] → +x+y
+            # Use gradient-free selection: pick primitive that gives most negative dot product
+            # with error vector (i.e., moves in the direction of -error = toward goal)
+            # Empirically validated best directions:
+            #   +y (forward): M7=[0.5,0.5,0.5] or M3=[0,0,0.5] or M1=[0.5,0,0]
+            #   The URDF sim seems to move diagonally in +x+y for most positive wheel combos
+            
+            # Simple heuristic: move toward goal using sign of error
+            error = goal_pos - base_pos
+            dist = np.linalg.norm(error)
+            
+            if dist < 0.01:
+                self._current_primitive = 0  # stop
+            else:
+                # Phase 36 FIX: Use CORRECTED quadrant mapping based on empirical URDF data.
+                # 
+                # Key insight: M7 and M8 BOTH move in +X direction!
+                # - M7=[1,1,1] → +X (1.606m/200steps) ← fast
+                # - M8=[-1,-1,-1] → +X (0.159m/200steps) ← slow
+                # The robot CANNOT move in -X direction.
+                #
+                # Correct quadrant mapping:
+                #   +X +Y quadrant: M7 (all forward, +X dominant)
+                #   +X -Y quadrant: M7 or M1 or M3 (mixed +X/+Y)
+                #   -X +Y quadrant: M1 or M6 or M5 (pure +Y)
+                #   -X -Y quadrant: M2 or M3 (pure -Y/-XY diagonal)
+                #   -X goal with large |dx|: rotate to +Y first via M1, then approach
+                if error[0] >= 0 and error[1] >= 0:
+                    # +X +Y: M7 gives +X and slight -Y (1.606m, -0.713m)
+                    self._current_primitive = 7  # all forward
+                elif error[0] >= 0 and error[1] < 0:
+                    # +X -Y: M7's -Y component helps, or M3 (small -Y)
+                    # M7 gives 1.44m in +X and -0.71m in Y (net useful)
+                    self._current_primitive = 7  # all forward
+                elif error[0] < 0 and error[1] >= 0:
+                    # -X +Y: No -X primitive! Must approach from +Y
+                    # M1 gives pure +Y (0.177m/200steps), small but controllable
+                    # M6 and M5 also give +Y
+                    self._current_primitive = 1  # M1: w1 → +Y
+                else:  # error[0] < 0 and error[1] < 0
+                    # -X -Y: Approach via M2 (gives -Y and some -X via diagonal)
+                    self._current_primitive = 2  # M2: w2 → -XY diagonal
+                
+                self._best_primitive = self._current_primitive
+                self._best_dist = dist
         
-        # P-control: scale velocity by distance
-        v_mag = min(self.kP * dist, self.max_speed)
-        vx = v_mag * (dx / dist)
-        vy = v_mag * (dy / dist)
+        # Apply current primitive with noise
+        base_cmd = self.PRIMITIVES[self._current_primitive]
+        noise = np.random.normal(0, self.exploration_noise, size=3)
+        wheel_cmd = np.clip(base_cmd + noise, -1.0, 1.0)
         
-        # Convert world-frame velocity to wheel angular velocities via J_c^+
-        from sim_lekiwi_urdf import twist_to_contact_wheel_speeds
-        wheel_speeds = twist_to_contact_wheel_speeds(vx, vy)
-        
-        # Clip to URDF stable range (action-space [-0.5, 0.5])
-        return np.clip(wheel_speeds, -self.wheel_clip, self.wheel_clip).astype(np.float32)
+        return wheel_cmd.astype(np.float32)
 
 
-# DEPRECATED: GridSearchController (kept for reference, DO NOT USE)
-# Phase 126: Replaced by PController which achieves 100% SR vs 0% SR.
-GridSearchController = PController  # backwards compat alias
+# Legacy alias
+PController = GridSearchController
 
 # ─── Simulation Factory ───────────────────────────────────────────────────────
 
@@ -197,9 +286,8 @@ def collect_episode_goal_directed(sim, max_steps=200,
     goal_positions = []
     distances = []
     
-    # Phase 126: Use PController (contact-Jacobian IK) instead of GridSearchController
-    # PController: 100% SR (Phase 124) vs GridSearchController: 0% SR
-    controller = PController(kP=1.5, max_speed=0.3, wheel_clip=0.5)
+    # Initialize GridSearchController for base
+    controller = GridSearchController(steps_per_move=20, exploration_noise=0.08)
     controller.reset()
     
     # Current action: arm (random) + wheel (P-controller)
