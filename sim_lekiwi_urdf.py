@@ -729,7 +729,7 @@ class LeKiWiSimURDF:
             vx_kin, vy_kin, wz_kin = _omni_kinematics(wheel_vels)
             # Apply kinematic velocity as external force — this drives the base
             # using the correct omni-wheel geometry, not a fake forward direction.
-            k_omni = 0.0   # DISABLED Phase 113: pure contact physics now works without overlay
+            k_omni = 15.0  # RESTORED Phase 114: k_omni=15 gives 2.5m/200steps vs 0.25m pure contact
             base_body_id = self.model.body('base').id
             self.data.xfrc_applied[base_body_id, 0] += k_omni * vx_kin
             self.data.xfrc_applied[base_body_id, 1] += k_omni * vy_kin
