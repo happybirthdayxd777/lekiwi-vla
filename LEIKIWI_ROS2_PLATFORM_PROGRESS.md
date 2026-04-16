@@ -3275,3 +3275,77 @@ The Phase 118 claim that "2D controller fails because omni-wheels can't do pure 
 ### Git
 - Commit: Phase 119 — Omni-kinematics deep dive: pure rotation impossible (vy contamination), M7-forward is base-frame, rotate+forward needed for 2D goals
 
+
+---
+
+## Phase 120 (2026-04-17 01:00 UTC) — Rotate+Forward 2D Controller: SR=20%
+
+### Phase: Phase 120
+
+### ✅ 本次心跳完成事項
+
+**Phase 120: Rotate+Forward Controller Evaluation**
+
+Phase 119 發現 M7-forward [0,+a,-a] 是 BASE FRAME 運動，Phase 120 實現並評估旋轉+前向控制器。
+
+**1. 單 episode 測試（goal=(0.3, 0.2)）：**
+- Final: (0.997, 1.210), dist=1.2273m, max_reward=0.7242
+- 200 steps 完成，耗時 0.1s
+
+**2. 10-episodes 評估（隨機 2D goals）：**
+- SR=2/10 = 20.0%（2 次成功）
+- Mean final dist: 0.9723m
+- 評估耗時 0.2s
+
+**3. Omni-kinematics 深入發現：**
+
+| 發現 | 細節 |
+|------|------|
+| Base 初始偏航角 ≈ 180° | xmat 分析確認 base +X 指向 world -X |
+| M7-forward [0,+a,-a] → +X world | 100 steps: dx=0.44m, dy=0.05m（88% 純度）|
+| 旋轉速度上限 ≈ 16°/100 steps | [a,a,a] pos 從 180° 只能到 -152°，然後停止 |
+| k_omni=15 飽和限制 | 速度超過 0.3 後 wheel vel 到達 WHEEL_VEL_MAX=50，k_omni 不再增加 |
+| 旋轉方向不對稱 | [a,a,a] pos → +16°，neg → -43°（不同的接觸幾何） |
+| Y 方向運動受限 | w2=w3=[a,a] 產生 dy=0.22m/100 steps，側向運動不佳 |
+
+**4. M7-forward 是 base-frame 確認：**
+- Base 旋轉 90° 後，M7-forward 產生 (dx=0.36, dy=1.02) → 主要是 +Y world
+- 證明 M7-forward 在 base frame 運作
+
+### 🔍 架構現況
+
+| Component | Status |
+|-----------|--------|
+| k_omni=15 velocity physics | ✅ 確認 base-frame locomotion |
+| M7-forward [0,+a,-a] | ✅ 88% +X 純度，base-frame |
+| Rotate+Forward controller | ✅ SR=20% on 2D goals |
+| Rotation speed limit | ⚠️ ~16°/100 steps（k_omni 飽和）|
+| Y-direction locomotion | ❌ w2=w3 gives poor +Y (0.22m/100 steps vs 2.76m/200 steps for X) |
+
+### 🧭 下一步（下次心跳）
+
+**Phase 121: Combined P-Control + Yaw Correction**
+
+基於 Phase 120 發現，嘗試：
+1. **P-control forward**: action[7] = kP * dist，控制前向速度
+2. **Yaw correction during forward**: 持續微調旋轉以對準目標
+3. **Combined action**: 旋轉 + 前向同時進行
+
+目標：SR > 50%（當前 20%）
+
+### 🚫 阻礙
+
+- **k_omni 速度飽和**：wheel_vel 到 WHEEL_VEL_MAX=50 後，無法更快旋轉
+- **Y 方向 locomotion 差**：側向運動受限，影響斜方向 goals
+
+### 📊 實驗記錄
+
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p118 | 1D goal eval | P=100%, 2D P=0% |
+| p119 | Omni-kinematics 分析 | M7-forward 是 base-frame |
+| **p120** | **Rotate+Forward eval** | **SR=20% on 2D, 0.97m mean dist** |
+
+### Git
+- Modified: `scripts/collect_phase120.py` (RotateForwardController + eval)
+- Commit: Phase 120 — Rotate+Forward 2D controller, SR=20%, M7-forward confirmed base-frame
