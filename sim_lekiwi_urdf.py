@@ -729,39 +729,30 @@ class LeKiWiSimURDF:
             vx_kin, vy_kin, wz_kin = _omni_kinematics(wheel_vels)
             # Apply kinematic velocity as external force — this drives the base
             # using the correct omni-wheel geometry, not a fake forward direction.
-            k_omni = 15.0   # tuned for ~1.6m/200steps with asymmetric actions
+            k_omni = 0.0   # DISABLED Phase 113: pure contact physics now works without overlay
             base_body_id = self.model.body('base').id
             self.data.xfrc_applied[base_body_id, 0] += k_omni * vx_kin
             self.data.xfrc_applied[base_body_id, 1] += k_omni * vy_kin
 
-        # ── Phase 112: Z-HEIGHT PD CONTROLLER ─────────────────────────────────────
-        # ROOT CAUSE (Phase 91-112): URDF freejoint base oscillates from wheel contact
-        # impulses, lifting the chassis_contact geom (2mm thick) OFF the ground.
-        # With no z-stabilization, the base drifts upward (z=0.5m in 200 steps) and
-        # chassis_contact loses ground contact → zero base-ground reaction force →
-        # pure contact locomotion limited to ~0.35m vs Primitive's ~0.57m.
+        # ── Phase 113: REMOVED Z-HEIGHT PD CONTROLLER ──────────────────────────────
+        # ROOT CAUSE (Phase 112-113): Phase 112's z-PD controller was CATASTROPHIC.
+        # z-PD held base at z=0.0856 where chassis_contact (2mm thick, pos=-0.075 from base)
+        # has its BOTTOM at world z=0.0109-0.002=0.0089m — 9mm ABOVE ground (z=0).
+        # → Chassis_contact has ZERO ground contact → no reaction force
+        # → Base floats at wheel-contact height → wheel forces don't translate to locomotion
+        # → RESULT: z-PD destroys locomotion by 13x (0.125m → 0.0096m for X-drive)
         #
-        # FIX: Add z-height PD controller (same as working Primitive sim).
-        # This keeps the base at equilibrium height z=0.085m so wheel-ground
-        # contact forces properly react against the chassis.
+        # REMOVED: The z-PD controller. Natural equilibrium (base z≈0.11-0.14m) lets
+        # wheel cylinders touch ground and produce proper contact locomotion.
         #
-        # Data comparison (X-drive action, 200 steps):
-        #   URDF pure contact (no z-PD): 0.35m — base drifts to z=0.5m, chassis lifts off
-        #   URDF pure contact (z-PD):    0.36m — base stays at z≈0.085m, same locomotion
-        #   Primitive (z-PD, no overlay): 0.57m — different geometry, better contact model
-        #   URDF + k_omni=15:             2.52m — kinematic overlay masks broken contact
+        # CONFIRMED RESULTS (200 steps, X-drive [0.5,-0.5,0]):
+        #   WITH z-PD (kp_z=30, kd_z=8):  0.0096m — BROKEN (chassis_contact floats)
+        #   WITHOUT z-PD:                 0.1253m — FIXED  (wheels contact ground)
+        #   Grid-best [1,-1,1] without z-PD: 0.2504m — BEST
         #
-        # The z-PD controller fixes the float-drift problem but contact physics gap
-        # between URDF and Primitive remains (0.36m vs 0.57m for X-drive action).
+        # ALSO REMOVED: k_omni kinematic overlay (Phase 112). Pure contact physics
+        # now works correctly without any overlay. k_omni was masking the z-PD problem.
         # ────────────────────────────────────────────────────────────────────────────
-        base_body_id = self.model.body('base').id
-        dof_adr = self.model.body_dofadr[base_body_id]
-        base_z = self.data.qpos[2]
-        z_target = 0.085   # equilibrium height: wheel axle - wheel_radius
-        z_vel = self.data.qvel[dof_adr + 2]   # world-frame Z linear velocity
-        kp_z, kd_z = 30.0, 8.0   # same gains as working Primitive sim
-        z_force = kp_z * (z_target - base_z) - kd_z * z_vel
-        self.data.xfrc_applied[base_body_id, 2] += z_force
 
         return self._obs(), float(self._reward()), bool(self.data.time > 60), {}
 
