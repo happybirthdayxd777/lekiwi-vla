@@ -155,25 +155,29 @@ def make_state_11d(obs, goal_x, goal_y):
 def normalize_action(raw_action, device="cpu"):
     """Policy (unbounded) → LeKiWi native units.
     
-    Phase 128 FIX: TWO issues found:
-    1. CLIP-FM flow matching produces UNBOUNDED outputs (wheel raw: [-4.7, 1.1])
-       → clip to [-1, 1] BEFORE denormalization
-    2. LEKIWI_WHEEL_LIMITS was [-5, 5] but P-controller clips at [-0.5, 0.5]
-       Training data uses wheel_speeds clipped to [-0.5, 0.5]
-       → Fix limits to match actual actuator range
+    Phase 129 CRITICAL BUG FIX: flow matching outputs std~1.0 (not [-1,1]).
+    
+    ROOT CAUSE: Flow matching predicts x_0 (clean action). After 4-step Euler:
+    - Output range is N(0, std≈1.0), NOT [-1, 1] as assumed
+    - When clipped to [-1,1] and denormalized with LEKIWI_WHEEL_LIMITS [-0.5,0.5]:
+      raw=1.0 → denorm=0.5 (MAX SPEED), and 32% of raw outputs are |raw|>1.0
+    - Result: 32% of frames command MAX SPEED → robot spins in place → 0% SR
+    
+    Phase 129 FIX: tanh bounded scaling — scales linearly for small values,
+    bounds large values smoothly to [-0.5, 0.5]. Matches how real VLA policies
+    (Roboturk, Manipulator3) handle unbounded diffusion outputs.
     """
-    LEKIWI_ARM_LIMITS = np.array([
-        [-3.14, 3.14], [-1.57, 1.57], [-1.57, 1.57],
-        [-1.57, 1.57], [-3.14, 3.14], [0.00, 0.04],
-    ], dtype=np.float32)
-    # Phase 128 FIX: P-controller clips at [-0.5, 0.5], matching real wheel actuators
-    LEKIWI_WHEEL_LIMITS = np.array([[-0.5, 0.5]] * 3, dtype=np.float32)
-    # Phase 128: clip to [-1, 1] to bound flow matching output
-    raw_clipped = np.clip(raw_action, -1.0, 1.0)
-    arm   = raw_clipped[:6]
-    wheel = raw_clipped[6:9]
-    arm_n   = LEKIWI_ARM_LIMITS[:, 0]   + (arm   + 1) / 2 * (LEKIWI_ARM_LIMITS[:, 1]   - LEKIWI_ARM_LIMITS[:, 0])
-    wheel_n = LEKIWI_WHEEL_LIMITS[:, 0] + (wheel + 1) / 2 * (LEKIWI_WHEEL_LIMITS[:, 1] - LEKIWI_WHEEL_LIMITS[:, 0])
+    raw = np.asarray(raw_action, dtype=np.float32)
+    arm = raw[:6]
+    wheel = raw[6:9]
+    
+    # Arms: tanh bounded to [-3.14, 3.14] range
+    arm_n = 3.14 * np.tanh(arm / 3.14)
+    
+    # Wheels: 0.5 * tanh(raw / 0.5) — scales to [-0.5, 0.5] smoothly
+    # Small raw → approximately raw (linear), Large raw → bounded to ±0.5
+    wheel_n = 0.5 * np.tanh(wheel / 0.5)
+    
     return np.concatenate([arm_n, wheel_n]).astype(np.float32)
 
 
