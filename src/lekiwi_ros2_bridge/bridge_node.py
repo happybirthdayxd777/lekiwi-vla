@@ -259,9 +259,14 @@ class LeKiWiBridge(Node):
       /lekiwi/cmd_vel        — Twist (linear x/y, angular z)
     """
 
-    # MuJoCo ctrl index layout (from sim_lekiwi.py):
-    #   ctrl[0:6]  = arm joints   (j0..j5, range ±3.14)
-    #   ctrl[6:9]  = wheel joints (w1..w3, range ±5.0)
+    # MuJoCo action space (normalized):
+    #   action[0:6]  = arm joint torques   (normalized ±1.0 → ±3.14 Nm via *3.14)
+    #   action[6:9]  = wheel motor torques (normalized ±0.5 → ±5.0 Nm via *10.0)
+    #   → WHEEL_CTRL values are action-space [-0.5, 0.5], NOT raw ctrl
+    #   → sim_lekiwi_urdf._action_to_ctrl() amplifies by 10x (motor gear=10)
+    #   → MuJoCo motor gear=10 then amplifies again: final joint torque = action * 31.4 Nm
+    #   → e.g., action=0.5 → ctrl=5.0 → motor torque=50 Nm → joint torque=50 Nm
+    #   → e.g., action=0.1 → ctrl=1.0 → motor torque=10 Nm → joint torque=10 Nm
     ARM_CTRL_MIN  = -3.14
     ARM_CTRL_MAX  =  3.14
     # Phase 70/74: WHEEL_CTRL ±0.5 required for URDF sim stability (±5.0 causes NaN)

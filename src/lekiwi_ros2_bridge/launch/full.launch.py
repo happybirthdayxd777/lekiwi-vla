@@ -58,7 +58,7 @@ def generate_launch_description() -> LaunchDescription:
         description="Bridge loop rate (Hz)",
     )
     sim_type = DeclareLaunchArgument(
-        "sim_type", default_value="primitive",  # Phase 26: urdf contact physics broken, use primitive
+        "sim_type", default_value="urdf",  # Phase 125: URDF physics now works (k_omni=15, no z-PD, contact 0.25m→2.5m)
         description="urdf=STL mesh geometry (recommended), primitive=fast cylinders",
     )
     mode = DeclareLaunchArgument(
