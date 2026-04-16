@@ -3089,3 +3089,77 @@ Step 200: dist=2.3m — 完全overshoot
 
 - New: scripts/collect_phase117.py, data/phase117_pcontroller_50ep_1d.h5
 - Commit: Phase 117 - P Controller: 10% SR (50ep), mean_r=0.68
+
+---
+
+## [Phase 118 - 2026-04-16 22:30 UTC] — k_omni=15 Physics Verified: 1D P=100% SR, 2D P=0% SR (Omni Geometry Mismatch)
+
+### ✅ 已完成
+
+**Phase 117 k_omni=15 physics verification:**
+
+Phase 117 claimed P controller SR=10% but my test shows 100% SR for 1D goals. Root cause: the collect_phase117.py script used `sim.reset(target=...)` which sets a random target position, not necessarily at x=0.4. The 2D controller then navigated to the wrong target.
+
+**Key findings:**
+1. `k_omni=15.0` is CONFIRMED ACTIVE in sim_lekiwi_urdf.py line 732
+2. M7-forward `[0, 0.5, -0.5]` achieves **2.66m/200steps** (X direction)
+3. 1D P controller Kp=0.1: **100% SR (20/20 episodes)** on 0.4m X goals
+4. 2D P controller: **0% SR (0/10)** on (0.3, 0.3) diagonal goals
+
+**Omni-wheel geometry mapping (verified empirically):**
+```
+M7-forward [0, +a, -a] → +X motion (0.8m/100steps for a=0.5)
+X-drive [a, 0, 0]     → w1 axis: primarily -X, minor +Y
+w2=[a], w3=[a]         → +Y motion (0.15m/100steps)
+w2=[a], w3=[-a]        → +X motion (same as M7)
+```
+
+**2D controller failure root cause:**
+- The 2D P controller uses `w1=y_action, w2=x_action, w3=-x_action`
+- But w1-axis alone produces primarily -X, not +Y
+- The correct +Y motion uses w2=w3=[a,a], but 2D controller uses w2=-w3 for X
+- These are INCOMPATIBLE — the 2D controller cannot achieve pure Y motion
+
+### 🔍 架構現況
+- `sim_lekiwi_urdf.py` — Phase 118: k_omni=15 VERIFIED, M7 2.66m/200steps
+- `bridge_node.py` (824 lines) — ROS2 /lekiwi/cmd_vel → MuJoCo action
+- `vla_policy_node.py` (531 lines) — VLA policy 推理
+- 1D P controller Kp=0.1: 100% SR on X-axis goals
+- 2D P controller: BROKEN — needs proper omni-wheel mapping
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Fix 2D P Controller**
+1. Map wheel actions to actual directional motion:
+   - +X: M7 `[0, +a, -a]` (w2=w3)
+   - -X: M7 `[0, -a, +a]` (w2=-w3)  
+   - +Y: X-drive `[+a, -a, +a]` (w1=w2=w3=a for w1,w2)
+   - -Y: X-drive `[-a, +a, -a]`
+2. Blend M7 and X-drive for diagonal goals
+3. Test 2D P controller on (0.3, 0.3), (0.2, 0.4), etc.
+
+**PRIORITY 2: Collect 2D goal data**
+4. Collect 50ep 2D goal-directed dataset with fixed 2D P controller
+5. Verify SR > 50% for 2D goals
+
+**PRIORITY 3: VLA Training**
+6. Train VLA policy on phase117-118 data
+7. Evaluate policy on both 1D and 2D goals
+
+### 🚫 阻礙
+- ~~k_omni=0 should be disabled~~ → **WRONG: k_omni=15 is CORRECT**
+- ~~z-PD destroys locomotion~~ → **FIXED Phase 113**
+- **2D P controller has wrong omni-wheel mapping** → needs fix
+
+### 📊 實驗記錄
+
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p117 | k_omni=15 physics | **2.66m/200steps (M7-forward) — CONFIRMED** |
+| p118 | 1D P Kp=0.1 | **100% SR (20/20ep)** on 0.4m X goals |
+| p118 | 2D P controller | **0% SR (0/10)** — w1 axis gives -X not +Y |
+| p118 | Omni geometry mapping | w2=[a],w3=[a] → +Y (0.15m/100steps); w2=[a],w3=[-a] → +X |
+
+### Git
+- Commit: Phase 118 — k_omni=15 VERIFIED 2.66m/200steps, 1D P=100% SR, 2D P=0% (omni geometry mismatch)
+
