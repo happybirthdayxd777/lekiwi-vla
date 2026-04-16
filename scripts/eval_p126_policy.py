@@ -153,15 +153,26 @@ def make_state_11d(obs, goal_x, goal_y):
 
 
 def normalize_action(raw_action, device="cpu"):
-    """Policy (-1..1) → LeKiWi native units."""
+    """Policy (unbounded) → LeKiWi native units.
+    
+    Phase 128 FIX: TWO issues found:
+    1. CLIP-FM flow matching produces UNBOUNDED outputs (wheel raw: [-4.7, 1.1])
+       → clip to [-1, 1] BEFORE denormalization
+    2. LEKIWI_WHEEL_LIMITS was [-5, 5] but P-controller clips at [-0.5, 0.5]
+       Training data uses wheel_speeds clipped to [-0.5, 0.5]
+       → Fix limits to match actual actuator range
+    """
     LEKIWI_ARM_LIMITS = np.array([
         [-3.14, 3.14], [-1.57, 1.57], [-1.57, 1.57],
         [-1.57, 1.57], [-3.14, 3.14], [0.00, 0.04],
     ], dtype=np.float32)
-    LEKIWI_WHEEL_LIMITS = np.array([[-5.0, 5.0]] * 3, dtype=np.float32)
-    arm  = raw_action[:6]
-    wheel = raw_action[6:9]
-    arm_n = LEKIWI_ARM_LIMITS[:, 0] + (arm + 1) / 2 * (LEKIWI_ARM_LIMITS[:, 1] - LEKIWI_ARM_LIMITS[:, 0])
+    # Phase 128 FIX: P-controller clips at [-0.5, 0.5], matching real wheel actuators
+    LEKIWI_WHEEL_LIMITS = np.array([[-0.5, 0.5]] * 3, dtype=np.float32)
+    # Phase 128: clip to [-1, 1] to bound flow matching output
+    raw_clipped = np.clip(raw_action, -1.0, 1.0)
+    arm   = raw_clipped[:6]
+    wheel = raw_clipped[6:9]
+    arm_n   = LEKIWI_ARM_LIMITS[:, 0]   + (arm   + 1) / 2 * (LEKIWI_ARM_LIMITS[:, 1]   - LEKIWI_ARM_LIMITS[:, 0])
     wheel_n = LEKIWI_WHEEL_LIMITS[:, 0] + (wheel + 1) / 2 * (LEKIWI_WHEEL_LIMITS[:, 1] - LEKIWI_WHEEL_LIMITS[:, 0])
     return np.concatenate([arm_n, wheel_n]).astype(np.float32)
 
