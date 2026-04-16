@@ -2861,3 +2861,89 @@ model.geom_friction[chassis_contact_geom_id] = [0.5, 0.5]
 
 - Commit: Phase 101 — Phase 63 policy SR=0% root cause: chassis friction=0.001 prevents k_omni horizontal force from moving base
 
+
+## Phase 116 (2026-04-16 11:30 UTC) — ROOT CAUSE: k_omni Velocity Physics → Inherent Overshoot → Braking Required
+
+### Phase: Phase 116
+
+### 本次心跳完成事項
+
+**Phase 116: 根本原因確認 — k_omni 速度物理導致固有overshoot**
+
+**核心發現：k_omni 是速度型物理，機器人會穿過目標**
+
+k_omni=15 對 base 施加速度力，機器人無法在目標處停止：
+- dist=0.035m（step 64）→ 穿過到 dist=2.3m（step 200）
+- 原因：k_omni 產生恆定速度疊加，不是位置控制
+
+**BrakingController 測試：**
+- v1: 固定剎車次數 → 最佳 0.033m（50% SR）
+- v2: 距離觸發剎車 → 30% SR
+- 根本問題：k_omni 速度物理無法預測何時停止
+
+**Step-by-step 分析（goal=(0.3,0), M7=[0,1,-1]）：**
+```
+Step 64: base=(0.285, 0.035), dist=0.035m — 穿過目標
+Step 65: dist=0.033m — 最接近
+Step 66: dist=0.035m — 開始遠離
+Step 200: dist=2.3m — 完全overshoot
+```
+
+**現有 policies 評估（10 goals）：**
+- phase113_50ep (9D): SR=0% — 目標導向但無goal感知
+- goal_aware_50ep (11D): SR=0/10 — 震盪並朝錯誤方向
+- phase116_braking (3 epochs): SR=0/10 — 訓練不足（僅3 epochs）
+
+**阻礙確認：**
+1. k_omni=15 創建速度物理（慣性）→ 無法在目標處停止
+2. 剎車需要精確時序，但物理不確定性使預測不可能
+3. 現有數據收集：30 episodes, 72.8% positive rewards, 0 goal frames
+4. 3 epochs 訓練：loss=0.99 → 仍未收斂
+
+### 🔍 架構現況
+
+| Component | Status |
+|-----------|--------|
+| bridge_node.py | ✅ 1058 lines — ROS2 ↔ MuJoCo |
+| CameraAdapter | ✅ 20 Hz background thread |
+| ctf_integration.py | ✅ CTF 整合層 (797 lines) |
+| k_omni physics | ✅ k_omni=15 → 2.67m/200steps |
+| Phase 116 data | ✅ 30 episodes, 72.8% positive rewards |
+| BrakingController | ⚠️ 理論正確但實踐失效 |
+| VLA policy | ❌ SR=0% — k_omni 速度物理根本性障礙 |
+
+### 🧭 下一步（下次心跳）
+
+**長期方案：**
+1. 收集 100+ episodes 高質量數據（GoalAwareController + 剎車）
+2. 訓練 30+ epochs policy
+3. 預期 SR > 50%（policy 學習剎車時序）
+
+**或短期：**
+1. 降低 k_omni（10.0 → 5.0）減少速度
+2. 增加底盤摩擦提供額外阻尼
+3. 測試 k_omni=5 + 剎車 → SR 改善？
+
+### 🚫 阻礙
+
+- **k_omni 速度物理固有 overshoot** → 需要剎車行為
+- **剎車時序不精確** → 物理不確定性
+- **訓練數據不足** → 30 episodes, 3 epochs
+- **所有現有 policies SR=0%**
+
+### 📊 實驗記錄
+
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p115 | k_omni test | 2.67m/200steps — locomotion OK |
+| p116 | BrakingController v1 | 0.033m/50% SR — 需要固定剎車 |
+| p116 | BrakingController v2 | 30% SR — 失效 |
+| p116 | Phase116 data | 30ep, 72.8% positive, 0 goal frames |
+| p116 | Phase116 train 3ep | loss=0.99, SR=0/10 |
+| p116 | All policies eval | SR=0% — k_omni overshoot 根本性障礙 |
+
+### Git
+- New: `scripts/collect_braking_v1.py`, `scripts/collect_braking_v2.py`
+- New: `data/phase116_braking_30ep.h5`
+- Commit: Phase 116 — k_omni velocity physics causes overshoot; braking controller created; 30ep data collected; SR=0/10
+
