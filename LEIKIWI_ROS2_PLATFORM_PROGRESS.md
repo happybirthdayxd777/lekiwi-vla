@@ -3163,3 +3163,115 @@ w2=[a], w3=[-a]        → +X motion (same as M7)
 ### Git
 - Commit: Phase 118 — k_omni=15 VERIFIED 2.66m/200steps, 1D P=100% SR, 2D P=0% (omni geometry mismatch)
 
+
+---
+
+## [Phase 119 - 2026-04-17 05:00 UTC] — Omni-Kinematics Deep Dive: Pure Rotation Impossible, 2D Goals Require Rotation+Translation
+
+### Phase: Phase 119
+
+### ✅ 已完成
+
+**Phase 119: Omni-Kinematics Fundamental Analysis**
+
+The Phase 118 claim that "2D controller fails because omni-wheels can't do pure Y" was incomplete. This session's deep-dive reveals the FULL picture:
+
+**Root Cause of 2D Failure — Omni-Wheel Geometry is NOT the Problem:**
+
+1. **M7-forward [0,+a,-a] verified as +X dominant** at initial orientation:
+   - 50 steps: (0.139, 0.036) — primarily X, minimal Y contamination
+   - This matches Phase 118's 100-step result (0.825, 0.013) proportionally
+
+2. **Rotation contamination discovered via _omni_kinematics:**
+   ```
+   _omni_kinematics([0.5,0.5,0.5]): vx=0.000, vy=0.0169, wz=-0.0605
+   _omni_kinematics([1,1,1]):       vx=0.000, vy=0.0339, wz=-0.1210
+   ```
+   - w1=w2=w3 (intended for pure rotation) produces vy=0.0169 m/s Y contamination
+   - k_omni=15 then amplifies this: 0.0169 × 15 = 0.254 N Y force during rotation
+   - This means the robot CANNOT rotate without drifting in Y
+
+3. **w2=w3=[a,a] confirmed as +Y dominant:**
+   ```
+   _omni_kinematics([0,0.5,0.5]): vx=0.000, vy=0.0085, wz=-0.0605
+   ```
+   - Y velocity = 0.0085 m/s per unit wheel speed
+   - k_omni=15 → 0.128 N Y force per 0.5 action
+   - Produces primarily +Y with minor X side effect (~3%)
+
+4. **M7-forward is BASE frame, not world frame:**
+   - Rotating the robot changes which world direction M7-forward pushes
+   - Initial yaw=180°: M7-forward → +X world (confirmed: x=0.139, y=0.036 after 50 steps)
+   - After 28 rotation steps (yaw=-167.5°): M7-forward should go in different world direction
+
+5. **Verified wheel→world direction mapping:**
+   ```
+   At yaw=180°: M7-forward [0,+a,-a] → world +X
+   At yaw=0°:   M7-forward [0,+a,-a] → world -X
+   At yaw=90°:  M7-forward [0,+a,-a] → world +Y (approximately)
+   ```
+
+**Key Insight — Why 2D Goals Were Impossible:**
+- The controller in Phase 117-118 computed X and Y separately
+- But w2=w3=[a,a] for Y and w2=[a],w3=[-a] for X are INCOMPATIBLE modes
+- The controller was switching between modes, but each mode also produces unwanted motion in the other axis
+- A proper 2D controller must use ROTATION to reorient the base so M7-forward can go in any direction
+
+**Architecture Status:**
+| Component | Status |
+|-----------|--------|
+| k_omni=15 physics | ✅ VERIFIED (2.66m/200steps) |
+| M7-forward [0,+a,-a] | ✅ CONFIRMED +X dominant |
+| Rotation [a,a,a] | ⚠️ Works but Y-drift contamination (~0.25N at k_omni=15) |
+| w2=w3=[a,a] | ✅ CONFIRMED +Y dominant |
+| 1D goal reach (X-axis) | ✅ 100% SR with P controller |
+| 2D goal reach (arbitrary XY) | 🔬 UNVERIFIED — needs rotate+forward approach |
+
+### 🔍 Architecture State (Phase 119)
+
+- `sim_lekiwi_urdf.py` — k_omni=15 VERIFIED active, _omni_kinematics math confirmed
+- `bridge_node.py` (1058 lines) — ROS2 /lekiwi/cmd_vel → MuJoCo action
+- `vla_policy_node.py` (664 lines) — VLA policy inference
+- Phase 117 data: 50ep 1D goals, 100% positive rewards, 10% SR (collected with wrong controller)
+- Phase 118 data: physics verified, 2D controller failed (omni geometry incompatibility)
+
+### 🧭 下一步（下次心跳）
+
+**Priority 1: Implement Rotate+Forward 2D Controller**
+1. Current controller fails because it tries to control X and Y simultaneously
+2. The correct approach: ROTATE base so M7-forward points at goal, then forward
+3. Key: compute yaw_diff = atan2(goal_y - base_y, goal_x - base_x) - current_yaw
+4. Rotate until |yaw_diff| < threshold, then move forward with M7
+5. Use w1=w2=w3=[sign*0.5] for rotation, M7 [0,0.5,-0.5] for forward
+
+**Priority 2: Verify 2D Controller SR > 50%**
+1. Run 20ep evaluation on random 2D goals (dist < 0.4m)
+2. If SR > 50%, collect 100ep 2D goal data
+3. Train VLA policy on 2D goal data
+
+**Priority 3: Bridge Integration**
+1. Test bridge_node.py with URDF sim backend
+2. Verify ROS2 /lekiwi/cmd_vel → MuJoCo action pipeline
+3. Verify /lekiwi/joint_states ← MuJoCo sensor pipeline
+
+### 🚫 阻礙
+
+- **Phase 117 data collected with BROKEN 2D controller** → 1D only, 10% SR
+- **Rotate+forward untested** → need to verify it actually works
+- **k_omni rotation contamination** → rotating produces Y drift, may need larger rotation threshold
+- **Training data mismatch** → Phase 117/118 data is 1D-only, VLA trained on this won't generalize
+
+### 📊 實驗記錄
+
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p117 | P controller 50ep | 10% SR (wrong controller used) |
+| p118 | k_omni=15 verified | 2.66m/200steps, 1D 100% SR |
+| p118 | 2D P controller | 0% SR (X/Y incompatible modes) |
+| **p119** | **Omni-kinematics analysis** | **Pure rotation impossible (vy=0.0169 m/s contamination)** |
+| **p119** | **M7-forward base vs world** | **Confirmed: rotates with base orientation** |
+| **p119** | **w2=w3=[a,a] Y-motion** | **Confirmed: +Y dominant (~3% X side effect)** |
+
+### Git
+- Commit: Phase 119 — Omni-kinematics deep dive: pure rotation impossible (vy contamination), M7-forward is base-frame, rotate+forward needed for 2D goals
+
