@@ -49,7 +49,7 @@ import time
 # ── Simulation backend imports ─────────────────────────────────────────────────
 sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
 from sim_lekiwi import LeKiwiSim
-from sim_lekiwi_urdf import LeKiWiSimURDF
+from sim_lekiwi_urdf import LeKiWiSimURDF, twist_to_contact_wheel_speeds
 from security_monitor import SecurityMonitor
 from ctf_security_audit import CTFSecurityAuditor
 from policy_guardian import PolicyGuardian
@@ -233,23 +233,19 @@ def _translate_phase85_to_phase86(wheel_action: np.ndarray) -> np.ndarray:
 
 def twist_to_wheel_speeds(vx: float, vy: float, wz: float) -> np.ndarray:
     """
-    Convert robot-level Twist (vx, vy, wz) into 3 wheel angular velocities.
-    Mirrors the exact kinematics from lekiwi_modular/omni_controller.py.
-    Returns shape (3,).
+    Phase 123: Convert robot-level Twist (vx, vy, wz) into 3 wheel angular velocities
+    using the CONTACT-PHYSICS calibrated Jacobian.
 
-    Note: This is for cmd_vel → wheel velocities (direct kinematics).
-    For VLA policy actions, use _translate_phase85_to_phase86() instead.
+    ⚠️  DEPRECATED: This replaces the old kinematic model (which predicted wrong
+        wheel directions). Contact physics is PRIMARY locomotion (~2.5m/200steps).
+
+    Uses twist_to_contact_wheel_speeds() from sim_lekiwi_urdf which inverts the
+    calibrated contact Jacobian J_c.
+
+    For VLA policy actions, the wheel portion is passed directly (native units).
     """
-    wheel_speeds = np.zeros(3, dtype=np.float64)
-    for i in range(3):
-        wheel_vel = np.array([
-            vx - wz * WHEEL_POSITIONS[i, 1],
-            vy + wz * WHEEL_POSITIONS[i, 0],
-            0.0,
-        ])
-        angular_speed = np.dot(wheel_vel, _JOINT_AXES[i]) / WHEEL_RADIUS
-        wheel_speeds[i] = angular_speed
-    return wheel_speeds
+    # Use contact-physics Jacobian inversion (Phase 123)
+    return twist_to_contact_wheel_speeds(vx, vy, wz)
 
 
 class LeKiWiBridge(Node):

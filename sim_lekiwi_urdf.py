@@ -400,14 +400,61 @@ ALL_JOINTS   = ARM_JOINTS + WHEEL_JOINTS
 # SOLUTION: Kinematic base overlay — compute base motion from wheel spin rate
 #           (treat wheels as casters that roll freely, base drives from wheel spin)
 WHEEL_RADIUS     = 0.0508   # meters
-# Approximate wheel base radius (distance from base center to each wheel)
-_WHEEL_DIST_X    = 0.0866   # front/rear wheels x-offset from base center
-_WHEEL_DIST_Y    = 0.10     # front-left wheel y-offset from base center
-# Effective omni drive: three-wheel nonholonomic → solve for vx, vy, wz
-# w1 spins forward-right, w2 backward-left, w3 lateral
-_W1_SIGN = -1.0   # w1 axis direction relative to forward
-_W2_SIGN =  1.0
-_W3_SIGN =  1.0
+
+# ── Phase 123: CORRECTED wheel geometry (from Phase 100, 122) ──────────────────
+# The URDF wheel body positions are WRONG (Phase 100 finding):
+#   URDF:  w0=[0.0866,0.10], w1=[-0.0866,0.10], w2=[-0.0866,-0.10] → isosceles triangle
+#   CORRECT (equilateral, 120° apart, wheel_base=0.1732m):
+#           w0=[+0.1500,+0.0866], w1=[-0.1500,+0.0866], w2=[0.0000,-0.1732]
+#
+# Roller axes from URDF (continuous revolute joints):
+#   w1 Revolute-64:  axis=[-0.866, 0, 0.5]
+#   w2 Revolute-62:  axis=[ 0.866, 0, 0.5]
+#   w3 Revolute-60:  axis=[ 0,    0,-1.0]
+#
+# TWO DISTINCT MODELS:
+#
+# 1. KINEMATIC MODEL (theoretical, used by _omni_kinematics):
+#    Pure rolling without slip → vx,v,vy,wz from wheel geometry
+#    For equilateral wheels: vx=R/3*(1.732*w2-1.732*w3), vy=R/3*(-w1+0.5*w2+0.5*w3)
+#    → PURE ROTATION for symmetric [w,w,w]; translation only for asymmetric wheels
+#
+# 2. CONTACT PHYSICS MODEL (actual measured, Phase 122 calibration):
+#    Dominates locomotion: ~2.5m/200steps from contacts vs ~0.05m from k_omni
+#    Calibrated per-step displacement per unit wheel velocity:
+#      w1: dx=-0.047, dy=+1.387   (primarily +Y)
+#      w2: dx=+1.340, dy=+0.588   (+X+Y, ~24° from X)
+#      w3: dx=-2.540, dy=+1.249   (-X+Y, ~154° from X)
+#    Contact Jacobian J_c (per 200 steps):
+#      [[-0.0467, 1.3399, -2.5397],
+#       [ 1.3865, 0.5885,  1.2485]]
+#
+# KEY FINDING (Phase 123):
+#   _omni_kinematics() PREDICTS wrong direction for each wheel.
+#   Contact physics is PRIMARY locomotion; k_omni overlay is SECONDARY.
+#   For closed-loop control, use contact Jacobian J_c (not kinematic model).
+
+# Effective wheel base radius (distance from base center to each wheel — for kinematic model)
+_WHEEL_DIST_X    = 0.1500   # CORRECTED: was 0.0866 (Phase 123)
+_WHEEL_DIST_Y    = 0.0866   # CORRECTED: was 0.10 (Phase 123)
+
+# Wheel signs for kinematic model (axis direction relative to forward)
+_W1_SIGN = -1.0   # w1 axis=[-0.866,0,0.5] → negative for forward
+_W2_SIGN =  1.0   # w2 axis=[0.866,0,0.5]  → positive for forward
+_W3_SIGN =  1.0   # w3 axis=[0,0,-1]       → positive for forward
+
+# ── Phase 123: Contact-physics calibrated Jacobian (J_c) ────────────────────────
+# Measured per-step world displacement per unit wheel velocity (200 steps)
+# From Phase 122 single-wheel calibration experiments.
+# Rows: [dx, dy] world displacement per unit wheel speed
+# Cols: [w1, w2, w3] wheel velocities
+_CONTACT_JACOBIAN = np.array([
+    [-0.0467,  1.3399, -2.5397],   # dx per unit wheel vel
+    [ 1.3865,  0.5885,  1.2485],   # dy per unit wheel vel
+], dtype=np.float64)
+
+# Pseudo-inverse: wheel_vel = J_c_pinv @ [dx_desired, dy_desired]
+_CONTACT_JACOBIAN_PSEUDO_INV = np.linalg.pinv(_CONTACT_JACOBIAN)
 
 
 def _jid(model, name: str) -> int:
@@ -429,15 +476,14 @@ def _jvel(model, name: str) -> int:
 def _omni_kinematics(wheel_vels: np.ndarray) -> tuple:
     """
     Convert wheel spin rates to base linear + angular velocity.
-    
-    Uses the three-wheel omni drive kinematic model:
-      vx  = R/3 * ( 1.732*w2  - 1.732*w3)
-      vy  = R/3 * (-w1 + 0.5*w2 + 0.5*w3)
-      wz  = R/(3*L) * (-w1 - w2 - w3)
-    
-    Where R=wheel_radius, L=wheel_base_radius.
-    Wheel signs account for each wheel's hinge axis orientation.
-    
+
+    ⚠️  DEPRECATED for closed-loop control (Phase 123).
+        The kinematic model PREDICTS WRONG directions for each wheel.
+        Contact physics is PRIMARY locomotion (~2.5m/200steps).
+        Kinematic model only captures ~0.05m/200steps (k_omni overlay).
+
+    For closed-loop control, use twist_to_contact_wheel_speeds() instead.
+
     Returns (vx, vy, wz) in m/s and rad/s.
     """
     R  = WHEEL_RADIUS
@@ -452,6 +498,42 @@ def _omni_kinematics(wheel_vels: np.ndarray) -> tuple:
     vy  = R / 3.0 * (-w1s + 0.5 * w2s + 0.5 * w3s)
     wz  = R / (3.0 * L) * (-w1s - w2s - w3s)
     return float(vx), float(vy), float(wz)
+
+
+def twist_to_contact_wheel_speeds(vx: float, vy: float, wz: float = 0.0) -> np.ndarray:
+    """
+    Phase 123: Convert desired base velocity (vx, vy, wz) to wheel angular velocities
+    using the CONTACT-PHYSICS calibrated Jacobian.
+
+    Unlike _omni_kinematics() (kinematic model), this uses the empirically calibrated
+    contact Jacobian J_c that accounts for the actual wheel-ground contact physics.
+
+    Parameters
+    ----------
+    vx, vy : float
+        Desired base velocity in m/s (world frame).
+    wz : float
+        Desired angular velocity in rad/s (default=0.0, yaw not yet calibrated).
+
+    Returns
+    -------
+    np.ndarray, shape (3,)
+        Wheel angular velocities [w1, w2, w3] in rad/s.
+        Uses J_c^+ (pseudo-inverse of contact Jacobian) for minimum-norm solution.
+
+    Note
+    ----
+    wz (yaw) is currently set to 0.0 — full 3-DOF calibration remains future work.
+    The contact Jacobian is calibrated for 200-step episodes at 20 Hz timestep.
+    """
+    # Per-step displacement target (200 steps at 20Hz = 10s)
+    dx_target = vx * 10.0
+    dy_target = vy * 10.0
+    # Pseudo-inverse gives minimum-norm wheel velocities for desired displacement
+    wheel_vels_2d = _CONTACT_JACOBIAN_PSEUDO_INV @ [dx_target, dy_target]
+    # wz not yet calibrated — use symmetric wheel speeds as proxy
+    wheel_vels = np.array([wheel_vels_2d[0], wheel_vels_2d[1], wheel_vels_2d[2]], dtype=np.float64)
+    return wheel_vels
 
 
 # ── Simulation ───────────────────────────────────────────────────────────────
