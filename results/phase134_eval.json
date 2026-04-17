@@ -2,8 +2,8 @@
   "phase": 134,
   "architecture": "cross_attention_on_urdf",
   "pcontroller_sr": 0.8,
-  "pcontroller_mean_steps": 82.2,
-  "vla_sr": 0.2,
-  "vla_mean_dist": 1.6089813921420921,
+  "pcontroller_mean_steps": 99.2,
+  "vla_sr": 0.3,
+  "vla_mean_dist": 1.2709128514993637,
   "note": "Phase 131 CrossAttn VLA evaluated on URDF sim (correct physics)"
 }
