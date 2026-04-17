@@ -3658,3 +3658,76 @@ With k_omni=15: P-controller achieves 4/4 SR in 54-96 steps
 ### Git
 
 - Commit: Phase 130 — k_omni=15.0 sole locomotion; contact physics broken; P-controller 100% SR with k_omni, 0% without
+
+---
+
+## [Phase 134 - 2026-04-17 11:00 UTC] — CRITICAL: k_omni Contamination CONFIRMED; All Training Data INVALID
+
+### ✅ 已完成
+
+**ROOT CAUSE VERIFIED — k_omni overlay CONTAMINATES ALL previous training data:**
+
+Phase 133 claimed P-controller SR=65% (corrected from wrong code) vs CrossAttn=15%. But this evaluation was done WITH k_omni=15 physics active in sim_lekiwi_urdf.py. The P-controller was trained and evaluated on k_omni-contaminated physics — meaning ALL prior training data is fundamentally invalid.
+
+**Definitive Experiment Results:**
+
+| Configuration | X-drive Locomotion | P-controller SR (5ep) |
+|---|---|---|
+| k_omni=15 (current code) | 2.52m / 200steps | **100% (5/5)** |
+| k_omni=0 (pure contact) | 0.10m / 200steps | **0% (0/10)** |
+| **Ratio** | **25x** | **∞** |
+
+**Key findings:**
+1. k_omni=15.0 ACTIVE in sim_lekiwi_urdf.py (Phase 114 restored it — NOT disabled as Phase 113 claimed)
+2. Phase 113 progress file said "k_omni disabled" but code still has `k_omni=15.0` (line 814)
+3. Pure contact physics produces only 0.10m/200steps with X-drive — base barely moves
+4. With k_omni=15: 2.52m/200steps — 25x more locomotion
+5. P-controller with J_c+ IK achieves 100% SR (5/5) with k_omni, 0% (0/10) without
+6. All training data collected using k_omni=15 overlay → policy learns k_omni physics, NOT contact physics
+7. VLA policies (CrossAttn 15% SR, pooled 0% SR) are learning k_omni shortcut, not real locomotion
+
+**Phase 133 evaluation was evaluating contaminated policy against contaminated baseline** — both learned k_omni=15 behavior, making the comparison meaningless.
+
+### 🔍 架構現況
+- `sim_lekiwi_urdf.py` — k_omni=15.0 ACTIVE (not disabled as Phase 113 claimed)
+- Cross-Attention VLA (Phase 131): trained on k_omni=15 data → 15% SR (learns k_omni shortcut)
+- P-controller (J_c+ IK): works only because it uses k_omni physics → 100% SR with k_omni, 0% without
+- Bridge node: `src/lekiwi_ros2_bridge/bridge_node.py` (1059 lines, 3566 total in package)
+- All prior training datasets: collected with k_omni=15 overlay → INVALID for real-world deployment
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Disable k_omni and measure true locomotion ceiling**
+1. Set k_omni=0 in sim_lekiwi_urdf.py (truly disable it this time)
+2. Run systematic grid search over action space to find maximum pure-contact locomotion
+3. If pure contact produces <0.1m/200steps → contact physics fundamentally broken, needs repair
+
+**PRIORITY 2: Re-collect clean training data**
+4. Collect 10k+ frames with k_omni=0 physics (genuine contact locomotion)
+5. Verify training data quality: goals must be reachable within episode length
+
+**PRIORITY 3: Retrain VLA policies on clean data**
+6. Retrain Cross-Attention VLA with pure-contact data
+7. Re-evaluate: VLA should match or exceed P-controller baseline
+
+**PRIORITY 4: Fix simulation contact physics (if needed)**
+8. Investigate why pure contact produces only 0.10m — is it friction, geometry, or force magnitude?
+9. Options: increase wheel friction, adjust wheel-ground offset, add chassis contact, use different contact model
+
+### 🚫 阻礙
+- **ALL training data contaminated** → 10k+ frames collected with k_omni=15 overlay → INVALID
+- **Pure contact physics broken** → 0.10m/200steps, insufficient for meaningful training
+- **k_omni is NOT disabled** → Phase 113 claimed disabled but code still has k_omni=15.0
+- **Phase 133 comparison invalid** → P-ctrl 65% vs CrossAttn 15% both evaluated on k_omni physics
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p113 | Said "k_omni disabled" | WRONG — code still k_omni=15.0 |
+| p133 | Corrected P-controller code | found SR=65% vs CrossAttn=15% |
+| **p134** | **k_omni contamination verified** | **k_omni=15: 100% SR, k_omni=0: 0% SR; 25x loco difference** |
+| p134 | Pure contact locomotion | 0.10m/200steps (X-drive) — fundamentally insufficient |
+
+### Git
+- Commit: Phase 134 — k_omni contamination CONFIRMED; k_omni=15: 2.52m loco + 100% SR; k_omni=0: 0.10m loco + 0% SR; Phase 113 claim "k_omni disabled" was WRONG; all training data invalid; need clean contact-physics data + retrain
+
