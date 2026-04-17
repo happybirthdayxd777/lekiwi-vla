@@ -1,0 +1,11 @@
+{
+  "phase": 152,
+  "architecture": "goal_conditioned_vla_strengthened",
+  "pcontroller_sr": 0.3,
+  "pcontroller_mean_steps": 155.5,
+  "vla_sr": 0.2,
+  "vla_mean_dist": 2.200733225527955,
+  "vla_mean_steps": 170.4,
+  "n_episodes": 10,
+  "threshold": 0.15
+}
