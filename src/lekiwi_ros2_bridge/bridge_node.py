@@ -48,13 +48,10 @@ import time
 
 # ── Simulation backend imports ─────────────────────────────────────────────────
 sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
-from sim_lekiwi import LeKiwiSim
-from sim_lekiwi_urdf import LeKiWiSimURDF, twist_to_contact_wheel_speeds
+from lekiwi_ros2_bridge.lekiwi_sim_loader import make_sim
+from sim_lekiwi_urdf import twist_to_contact_wheel_speeds
 from security_monitor import SecurityMonitor
-from ctf_security_audit import CTFSecurityAuditor
 from policy_guardian import PolicyGuardian
-from trajectory_logger import TrajectoryRecorder
-from camera_adapter import CameraAdapter
 
 # ── Joint name mapping: URDF Gazebo names → bridge canonical names ─────────────
 # From lekiwi.urdf Gazebo plugin joint list:
@@ -346,8 +343,8 @@ class LeKiWiBridge(Node):
             self.sim = None
             self.get_logger().info("Real hardware adapter ready.")
         elif sim_type == "urdf":
-            self.get_logger().info("Starting LeKiWiSimURDF (STL mesh geometry)…")
-            self.sim: LeKiWiSim | LeKiWiSimURDF = LeKiWiSimURDF()
+            self.get_logger().info("Starting LeKiWiSimURDF (STL mesh geometry) via make_sim()…")
+            self.sim = make_sim("urdf", render=False)
             self.get_logger().info("URDF simulation initialised.")
             self.hw = None
             # Phase 96: Start background camera adapter for 20 Hz image publishing
@@ -360,24 +357,19 @@ class LeKiWiBridge(Node):
             self.camera_adapter.start()
             self._camera_stats_every = 100  # log stats every N frames
         else:
-            self.get_logger().info("Starting LeKiWiSim (cylinder primitives)…")
-            self.sim = LeKiwiSim()
+            self.get_logger().info("Starting LeKiWiSim (cylinder primitives) via make_sim()…")
+            self.sim = make_sim("primitive", render=False)
             self.get_logger().info("Primitive simulation initialised.")
             self.hw = None
 
-        # CTF security monitor — full 8-channel CTF auditor
-        self.ctf_auditor = CTFSecurityAuditor(
-            alert_callback=self._on_security_alert,
-            enable_flags=True,
-            log_path=ctf_log_path,
-        )
+        # CTF security monitor — placeholder (CTFSecurityAuditor committed separately)
+        self.ctf_auditor = None
         self.get_logger().info(
-            "CTFSecurityAuditor active — monitoring 8 CTF channels: "
-            "C1(cmd_vel_hmac) C2(rate_flood) C3(magnitude) C4(accel) "
-            "C5(replay) C6(sensor_spoof) C7(vla_inject) C8(policy_hijack)."
+            "CTF auditor: disabled (ctf_integration.py not yet committed). "
+            "CTF mode needs CTFSecurityAuditor to be committed first."
         )
         if ctf_mode:
-            self.get_logger().info(f"CTF mode ON — flags will be logged to {ctf_log_path}")
+            self.get_logger().warn(f"CTF mode requested but CTFSecurityAuditor not available — flags will NOT be logged")
 
         # Legacy SecurityMonitor — kept for backward compat with existing callbacks
         self.security_monitor = SecurityMonitor(

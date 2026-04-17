@@ -66,6 +66,10 @@ def load_lekiwi_sim(sim_type: str = 'primitive', mode: str = 'sim', render: bool
     return sim
 
 
+# Alias for backward compatibility with bridge_node.py
+make_sim = load_lekiwi_sim
+
+
 def _launch_viewer(sim):
     """Launch MuJoCo passive viewer (non-blocking)."""
     import mujoco.viewer

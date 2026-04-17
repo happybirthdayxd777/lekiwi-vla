@@ -20,7 +20,7 @@ if _LEKIWI_VLA not in sys.path:
     sys.path.insert(0, _LEKIWI_VLA)
 
 
-def load_lekiwi_sim(sim_type: str = 'urdf', mode: str = 'sim', render: bool = False):
+def load_lekiwi_sim(sim_type: str = 'primitive', mode: str = 'sim', render: bool = False):
     """
     Factory function returning the appropriate simulation / hardware backend.
 
@@ -59,6 +59,10 @@ def load_lekiwi_sim(sim_type: str = 'urdf', mode: str = 'sim', render: bool = Fa
     if render:
         _launch_viewer(sim)
     return sim
+
+
+# Alias for backward compatibility with bridge_node.py
+make_sim = load_lekiwi_sim
 
 
 def _launch_viewer(sim):
