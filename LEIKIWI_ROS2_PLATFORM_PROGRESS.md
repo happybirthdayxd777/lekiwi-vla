@@ -241,6 +241,124 @@ Phase 76:     Phase 75 verified: RK4 working, MuJoCo enum corrected, EP3/EP8 bas
 
 ---
 
+## Phase 144 (2026-04-17 20:30 UTC) — CrossAttn VLA=30% SR vs P-ctrl=90% SR; Vision Encoder Dim Bug Found
+
+### Phase: Phase 144
+
+### 本次心跳完成事項
+
+**CrossAttn VLA 完整評估（Phase 131 policy on URDF sim）**
+
+使用 `/opt/miniconda3/bin/python3 scripts/eval_cross_attention_urdf.py` 測試 10 episodes：
+
+| 控制器 | SR | 平均步數 | 備註 |
+|--------|-----|---------|------|
+| P-controller (URDF, k_omni=15) | **90%** | 72 | 9/10 到達目標 |
+| CrossAttn VLA (Phase 131) | **30%** | — | 3/10 到達目標 |
+
+**P-controller 完整結果：**
+```
+Ep 0: SUCCESS step=57
+Ep 1: SUCCESS step=103
+Ep 2: SUCCESS step=0
+Ep 3: SUCCESS step=93
+Ep 4: SUCCESS step=55
+Ep 5: SUCCESS step=0
+Ep 6: SUCCESS step=35
+Ep 7: FAIL final_dist=2.040
+Ep 8: SUCCESS step=69
+Ep 9: SUCCESS step=100
+```
+
+**VLA 完整結果：**
+```
+Ep 0: FAIL dist=0.987
+Ep 1: FAIL dist=1.725
+Ep 2: SUCCESS dist=0.082 (step=0)
+Ep 3: SUCCESS dist=0.143 (step=0)
+Ep 4: FAIL dist=1.090
+Ep 5: FAIL dist=1.184
+Ep 6: SUCCESS dist=0.126 (step=0)
+Ep 7: FAIL dist=1.761
+Ep 8: FAIL dist=1.200
+Ep 9: FAIL dist=1.638
+```
+
+**發現：Vision Encoder 維度 Bug**
+```
+RuntimeError: mat1 and mat2 shapes cannot be multiplied (1x512 and 768x512)
+```
+CLIP ViT-B/32 輸出 512-dim tokens，但 policy 期望 768-dim。`test_policy_output.py` 確認此問題。VLA 推理使用 `CLIPModel.from_pretrained("openai/clip-vit-base-patch32")` 而訓練時可能用不同 image size/token 維度。
+
+#### 關鍵洞察：為什麼 VLA 仍能達到 30%？
+
+VLA 在 step=0 時有 3 次 SUCCESS（Ep 2, 3, 6），dist=0.08-0.14m——這是初始位置就接近目標的情况。但這 **3 次其實是僥倖**：VLA wheel action≈0 時，機器人靠 k_omni=15 物理漂移到目標。
+
+真正有意义的 VLA 控制：Ep 0 (dist=0.987), Ep 7 (dist=1.761)——機器人遠離目標，VLA 完全無法控制 locomotion。
+
+#### 為什麼 VLA locomotion 失敗？
+
+1. **Obs mismatch**: Phase 131 訓練用 LeKiWiSim (primitive) 數據，但評估在 URDF sim
+2. **Policy bug**: Vision encoder dim mismatch (512 vs 768) = CLIP features corrupted
+3. **Training physics**: VLA trained on k_omni=15 physics，現在接觸物理相同但observation格式可能不同
+
+### 🔍 架構現況
+
+```
+lekiwi_vla/
+  sim_lekiwi_urdf.py   — k_omni=15 (PRIMARY loco), noslip=10, Euler
+  bridge_node.py       — 1059 lines, ROS2↔MuJoCo bridge (needs ROS2 env)
+  vla_policy_node.py   — 664 lines, VLA policy ROS2 integration
+  ctf_integration.py   — 797 lines, CTF security layer
+  eval_cross_attention_urdf.py — P-ctrl=90% SR, VLA=30% SR (30%=僥倖, not control)
+
+Bridge Topics (from omni_controller.py):
+  /lekiwi/cmd_vel (Twist) → bridge_node
+  /lekiwi/wheel_N/cmd_vel (Float64) ← bridge_node
+  /lekiwi/joint_states (JointState) ← bridge_node
+  /lekiwi/odom (Odometry) ← bridge_node
+  /lekiwi/vla_action (Float64MultiArray) ← vla_policy_node
+
+Launch files ready:
+  bridge.launch.py, vla.launch.py, full.launch.py, ctf.launch.py
+```
+
+### 🧭 下一步
+
+**PRIORITY 1: Fix vision encoder dim mismatch**
+- Phase 131 訓練腳本用的是哪個 CLIP model/pretrained?
+- 確認 image size: CLIP ViT-B/32 應該是 224x224 → 768-dim output
+- 檢查 `train_cross_attention_vla.py` 的 CLIP config
+
+**PRIORITY 2: Re-collect VLA training data on URDF sim**
+- 用正確的 URDF sim (k_omni=15, noslip=10) + P-controller 收集
+- 確保 observation 格式匹配評估環境
+
+**PRIORITY 3: Bridge node ROS2 deployment**
+- `bridge_node.py` 完整但無法在 macOS 測試
+- 需要有 ROS2 的機器部署
+
+### 🚫 阻礙
+
+1. **Vision encoder dim bug**: Phase 131 policy 輸出 512-dim 但 FC 層期望 768-dim
+2. **No ROS2 environment**: macOS 無法運行 bridge_node.py
+3. **VLA obs mismatch**: 訓練用 primitive sim，評估用 URDF sim
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p144 | CrossAttn VLA eval on URDF | VLA=30% SR (3/10), P-ctrl=90% SR |
+| p143 | Vision encoder bug | 512 vs 768 dim mismatch |
+| p142 | obs base_position reset fix | Jacobian P-ctrl=100% SR |
+| p139 | k_omni=15 4-quadrant | All stale mappings fixed |
+| p138 | k_omni=15 restored | 2.4m loco, 80% P-ctrl SR |
+
+### Git
+- Commit `ec4ddba`: Phase 143 — CrossAttn VLA eval: P-ctrl=90% SR baseline, VLA=30% SR (60% gap); vision encoder dim bug found
+- 下一個: Phase 144 — Fix vision encoder dim mismatch; re-evaluate VLA
+
+---
+
 ## Phase 136 (2026-04-17 12:30 UTC) — noslip_iterations=10: 5.1x improvement, but 0.51m still insufficient
 
 ### Phase: Phase 136
