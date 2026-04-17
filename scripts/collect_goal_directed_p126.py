@@ -67,62 +67,61 @@ class GridSearchController:
     - Wheel slip and stochastic effects
     - Model errors and uncertainties
     
+    Phase 131 FIX: Updated ALL M-prime distances for k_omni=0 (pure contact physics).
     Phase 36 FIX: Corrected quadrant→primitive mapping based on EMPIRICALLY MEASURED
     wheel→direction data from LeKiWiSimURDF. Previous mapping was WRONG:
-    
-    Empirical direction mapping (URDF sim, 200 steps, action scale [-1,+1]):
-      M0=[0,0,0]   → STOP
-      M1=[1,0,0]   → +Y  (0.177m)
-      M2=[0,1,0]   → -XY diagonal (0.724m, dx=-0.417, dy=-0.592)
-      M3=[0,0,1]   → -Y  (0.054m)
-      M4=[-1,0,0]  → -Y  (0.465m)
-      M5=[0,-1,0]  → +Y  (0.498m)
-      M6=[0,0,-1]  → +Y  (0.309m)
-      M7=[1,1,1]   → +X  (1.606m, dx=+1.439, dy=-0.713) ← PRIMARY +X primitive!
-      M8=[-1,-1,-1]→ +X  (0.159m) ← also +X (backward is SLOW in +X!)
-    
-    CRITICAL DISCOVERY: M7 and M8 BOTH move in +X direction!
-    - M7=[1,1,1] → +1.606m in +X (fast, saturated)
-    - M8=[-1,-1,-1] → +0.159m in +X (slow, not saturated)
-    This means the robot CANNOT move in -X direction with any primitive!
-    
-    Correct quadrant mapping (URDF sim):
-      Goal in +X +Y quadrant: M7 (all forward, +X dominant)
-      Goal in +X -Y quadrant: M7 or M3 or M1 (mixed +X/+Y)
-      Goal in -X +Y quadrant: M1 or M6 or M5 (pure +Y)
-      Goal in -X -Y quadrant: M2 or M3 (pure -Y/-XY)
+
+    Empirical direction mapping (URDF sim, 200 steps, action scale [-1,+1], k_omni=0):
+      M0=[0,0,0]   → STOP      (0.000m — correct)
+      M1=[1,0,0]   → +Y        (0.0003m — negligible)
+      M2=[0,1,0]   → +X        (0.015m — negligible)
+      M3=[0,0,1]   → +Y        (0.021m — negligible)
+      M4=[-1,0,0]  → ≈0        (0.002m — no movement)
+      M5=[0,-1,0]  → +X        (0.143m — moderate)
+      M6=[0,0,-1]  → +Y        (0.232m — BEST pure +Y)
+      M7=[1,1,1]   → +X        (0.107m — moderate +X)
+      M8=[-1,-1,-1]→ +X        (0.310m — BEST overall, FASTEST!)
+
+    CRITICAL Phase 131 REVERSAL: M8 > M7 in pure contact (0.310 > 0.107).
+    Under k_omni overlay M7 was faster (1.606 > 0.159), but pure contact inverts this.
+    Robot CANNOT move in -X direction with any primitive.
+
+    Quadrant mapping for pure contact physics (URDF sim, k_omni=0):
+      Goal in +X +Y quadrant: M8 (all reverse, +X dominant, 0.310m) or M5 (0.143m)
+      Goal in +X -Y quadrant: M8 or M5 (mixed +X/+Y via M5)
+      Goal in -X +Y quadrant: M6 (pure +Y, 0.232m) — only pure +Y option
+      Goal in -X -Y quadrant: No good option — robot mostly moves in +X
       No -X primitive exists — robot must navigate around obstacles
     """
-    
+
     # 9 motion primitives: (w1, w2, w3)
-    # Phase 36: Updated comments to reflect CORRECTED direction mapping
-    # Phase 35: Scale to [1,1,1] — URDF sim clips at ctrl=10 (action=1.0),
-    # giving ~1.6m/200steps at saturation.
+    # Phase 131: Updated ALL distances for k_omni=0 (pure contact).
+    # M8 is now the best primitive (0.310m), M6 is best for pure +Y (0.232m).
     PRIMITIVES = np.array([
         [0.0,  0.0,  0.0 ],  # M0: stop
-        [1.0,  0.0,  0.0 ],  # M1: w1 → +Y (0.177m/200steps)
-        [0.0,  1.0,  0.0 ],  # M2: w2 → -XY diagonal (0.724m, dx=-0.417, dy=-0.592)
-        [0.0,  0.0,  1.0 ],  # M3: w3 → -Y (0.054m)
-        [-1.0, 0.0,  0.0 ],  # M4: w1 rev → -Y (0.465m)
-        [0.0, -1.0,  0.0 ],  # M5: w2 rev → +Y (0.498m)
-        [0.0,  0.0, -1.0 ],  # M6: w3 rev → +Y (0.309m)
-        [1.0,  1.0,  1.0 ],  # M7: all forward → +X (1.606m/200steps) ← PRIMARY
-        [-1.0,-1.0, -1.0 ],  # M8: all backward → +X (0.159m/200steps) ← SLOW
+        [1.0,  0.0,  0.0 ],  # M1: w1 → +Y (0.0003m — negligible)
+        [0.0,  1.0,  0.0 ],  # M2: w2 → +X (0.015m — negligible)
+        [0.0,  0.0,  1.0 ],  # M3: w3 → +Y (0.021m — negligible)
+        [-1.0, 0.0,  0.0 ],  # M4: w1 rev → ≈0 (0.002m)
+        [0.0, -1.0,  0.0 ],  # M5: w2 rev → +X (0.143m)
+        [0.0,  0.0, -1.0 ],  # M6: w3 rev → +Y (0.232m) ← BEST pure +Y
+        [1.0,  1.0,  1.0 ],  # M7: all forward → +X (0.107m)
+        [-1.0,-1.0, -1.0 ],  # M8: all backward → +X (0.310m) ← BEST overall!
     ], dtype=np.float32)
     
     def __init__(self, steps_per_move=20, exploration_noise=0.05):
         self.steps_per_move = steps_per_move
         self.exploration_noise = exploration_noise
         self._step_count = 0
-        self._current_primitive = 0
-        self._best_primitive = 0
+        self._current_primitive = 8  # M8=[-1,-1,-1]: best primitive (0.310m/200steps)
+        self._best_primitive = 8
         self._pos_start = None
         self._best_dist = float('inf')
         
     def reset(self):
         self._step_count = 0
-        self._current_primitive = 0
-        self._best_primitive = 0
+        self._current_primitive = 8  # M8: best primitive for k_omni=0
+        self._best_primitive = 8
         self._pos_start = None
         self._best_dist = float('inf')
     
@@ -175,21 +174,24 @@ class GridSearchController:
                 #   -X +Y quadrant: M1 or M6 or M5 (pure +Y)
                 #   -X -Y quadrant: M2 or M3 (pure -Y/-XY diagonal)
                 #   -X goal with large |dx|: rotate to +Y first via M1, then approach
+                # Phase 131 UPDATED quadrant mapping for k_omni=0 (pure contact physics):
+                #   M8=[-1,-1,-1]=0.310m is best +X, M6=[0,0,-1]=0.232m is best +Y
+                #   M7=[1,1,1]=0.107m is moderate, M5=[0,-1,0]=0.143m is moderate +X
+                #   Robot moves ONLY in +X/+Y direction (no -X primitive!)
+                #   -X goals cannot be reached directly
                 if error[0] >= 0 and error[1] >= 0:
-                    # +X +Y: M7 gives +X and slight -Y (1.606m, -0.713m)
-                    self._current_primitive = 7  # all forward
+                    # +X +Y: M8 gives +X (0.310m), slight diagonal OK
+                    self._current_primitive = 8  # all reverse → +X
                 elif error[0] >= 0 and error[1] < 0:
-                    # +X -Y: M7's -Y component helps, or M3 (small -Y)
-                    # M7 gives 1.44m in +X and -0.71m in Y (net useful)
-                    self._current_primitive = 7  # all forward
+                    # +X -Y: M5 gives +X (0.143m) — use M8 with slight Y adjustment
+                    self._current_primitive = 8  # M8: all reverse → +X
                 elif error[0] < 0 and error[1] >= 0:
-                    # -X +Y: No -X primitive! Must approach from +Y
-                    # M1 gives pure +Y (0.177m/200steps), small but controllable
-                    # M6 and M5 also give +Y
-                    self._current_primitive = 1  # M1: w1 → +Y
+                    # -X +Y: M6 is best pure +Y (0.232m) — no -X option exists
+                    self._current_primitive = 6  # M6: w3 rev → +Y
                 else:  # error[0] < 0 and error[1] < 0
-                    # -X -Y: Approach via M2 (gives -Y and some -X via diagonal)
-                    self._current_primitive = 2  # M2: w2 → -XY diagonal
+                    # -X -Y: No good option — robot moves only in +X/+Y
+                    # Fall back to M6 (+Y) — robot will end up somewhere in +Y
+                    self._current_primitive = 6  # M6: best available for -X quadrant
                 
                 self._best_primitive = self._current_primitive
                 self._best_dist = dist
