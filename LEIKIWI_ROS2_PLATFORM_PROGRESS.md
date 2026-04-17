@@ -328,3 +328,102 @@ Phase 114:  k_omni=15 RESTORED (artificial locomotion fix)
 - Commit: Phase 136 — Add noslip_iterations=10, pure contact 0.51m (5.1x vs p134)
 - 下一個: Phase 137 — Restore friction=2.7 + test asymmetric wheel actions
 
+
+---
+
+## [Phase 137 - 2026-04-17 12:30 UTC] — Asymmetric Actions: [0.5,0,0] Best dx=+0.047m; Pure Contact 0.51m Consistent; Friction=2.7 No Improvement
+
+### ✅ 已完成
+
+**Priority 2 completed: Asymmetric wheel action search**
+
+Tested 10 asymmetric wheel action combinations with noslip_iterations=10, k_omni=0:
+
+| Action | dx (m) | dy (m) | dist (m) | Notes |
+|--------|--------|--------|----------|-------|
+| [0.5, 0.0, 0.0] | **+0.047** | +0.096 | 0.537 | **Best +X direction** |
+| [0.5, 0.0, 0.3] | +0.032 | +0.104 | 0.521 | |
+| [0.0, 0.0, 0.5] | +0.019 | -0.019 | 0.518 | |
+| [0.5, 0.3, 0.3] | +0.008 | +0.055 | 0.504 | |
+| [0.5, 0.3, 0.0] | +0.012 | +0.063 | 0.508 | |
+| [0.3, 0.3, 0.5] | +0.013 | +0.049 | 0.511 | |
+| [0.5, 0.5, 0.5] | -0.011 | +0.046 | 0.487 | M7-forward (symmetric) |
+| [0.3, 0.5, 0.3] | -0.025 | +0.011 | 0.475 | |
+| [0.3, 0.5, 0.0] | -0.029 | -0.041 | 0.469 | |
+| [0.0, 0.5, 0.0] | +0.002 | -0.190 | 0.467 | **Best -Y direction** |
+
+**Key findings:**
+1. **No single action achieves significant forward locomotion**: Best dx=+0.047m (tiny), vs Phase 134 claimed 0.25m
+2. **w1 only [0.5,0,0] gives best +X direction** but only 0.047m in 200 steps
+3. **w3 only [0,0,0.5] gives symmetric motion** (dx=+0.019, dy=-0.019)
+4. **All actions produce dist≈0.47-0.54m** (goal is at 0,0, robot starts at ~0.5m away)
+5. **SR=0% for all actions** — robot never reaches goal (< 0.2m)
+
+**Priority 1 also completed: friction=2.7 restoration test**
+
+Tested friction="1.5 0.15 0.01" → friction="2.7 0.27 0.02" (3 geoms) with noslip_iterations=10:
+
+| Friction | dist (m) | Notes |
+|----------|----------|-------|
+| 1.5 | 0.496 | Current |
+| 2.7 | 0.496 | **No improvement** |
+
+**Result: Increasing friction from 1.5 to 2.7 with noslip_iterations=10 produces ZERO improvement.**
+
+### 🔍 架構現況
+
+```
+sim_lekiwi_urdf.py:
+  - noslip_iterations=10 (Phase 136 added)
+  - friction="1.5 0.15 0.01" (3 geoms)
+  - k_omni=15.0 overlay ACTIVE (line 814)
+  - Contact locomotion: ~0.51m/200steps (best action)
+  - SR: 0% (pure contact, no controller)
+
+Key unresolved: Phase 134 claimed k_omni=15 → 2.52m + 100% SR
+                But Phase 136 measured k_omni=15 → -1.058m (negative = wrong direction)
+                This CONTRADICTION needs resolution
+```
+
+### 🧭 下一步（下次心跳）
+
+**CRITICAL: Resolve k_omni direction contradiction**
+- Phase 134: k_omni=15 → 2.52m + 100% SR (claimed)
+- Phase 136: k_omni=15 → -1.058m (negative distance!)
+- Need to test k_omni=15 properly with goal at (0,0), robot at ~(0.5,0)
+
+**PRIORITY 1: Fix P-controller evaluation**
+1. Robot starts at ~(0.5, 0, 0.08), goal at (0, 0, 0)
+2. Need to move in -X direction to reach goal
+3. k_omni overlay on vy_kin (lateral) doesn't help reach goal
+4. Test: does P-controller + k_omni actually reach goal?
+
+**PRIORITY 2: Proper data collection with fixed physics**
+1. noslip_iterations=10 confirmed working (5.1x improvement)
+2. friction=1.5 is sufficient with noslip=10
+3. Collect 10k frames with P-controller + k_omni overlay
+4. Train VLA policy on clean data
+
+**PRIORITY 3: VLA training pipeline**
+1. Train CrossAttn VLA on new data
+2. Evaluate: should achieve close to P-controller SR (~65%)
+
+### 🚫 阻礙
+
+1. **k_omni direction contradiction**: Phase 134 vs Phase 136 measurements disagree
+2. **Pure contact SR=0%**: No single action reaches goal from starting position
+3. **Need P-controller to properly evaluate**: robot needs closed-loop control to reach goal
+4. **ROS2 not available**: bridge_node.py untested on real system
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p137 | Asymmetric actions best | [0.5,0,0] → dx=+0.047m best forward |
+| p137 | friction=2.7 test | 0.496m = no improvement over 1.5 |
+| p136 | noslip_iterations=10 | 0.51m pure contact (5.1x vs p134) |
+| p134 | k_omni=15 claim | 2.52m + 100% SR (NEEDS VERIFICATION) |
+
+### Git
+- New: `test_asymmetric_actions.py`, `test_friction_noslip.py`
+- Commit: Phase 137 — Asymmetric actions: [0.5,0,0] best dx=+0.047m; friction=2.7 no improvement; k_omni direction contradiction noted
+
