@@ -1,0 +1,14 @@
+{
+  "phase": 153,
+  "policy": "phase150_train/checkpoint_epoch_30.pt",
+  "architecture": "CrossAttentionPolicy (Phase 131 style)",
+  "training_epochs": 30,
+  "pcontroller_sr": 1.0,
+  "pcontroller_mean_steps": 75,
+  "vla_sr": 0.15,
+  "vla_mean_dist": 1.356,
+  "vla_mean_steps": 200,
+  "n_episodes": 20,
+  "threshold": 0.15,
+  "note": "Extended training (30ep) vs Phase 131 (5ep): 15% vs 30% SR \u2014 longer training WORSE"
+}

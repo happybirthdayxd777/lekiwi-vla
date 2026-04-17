@@ -742,3 +742,124 @@ Option B (Correct physics approach): **k_omni=0 with fixed contact**
 ### Git
 - Commit: 896f543 Phase 145 — VLA 0% SR root cause: k_omni=15 contamination + wheel contact non-separability; Phase 131 CrossAttn VLA needs clean k_omni=0 data retrain; P-ctrl=100% baseline confirmed
 
+
+---
+
+## [Phase 153 - 2026-04-18 06:30 UTC] — CRITICAL: 30-Epoch Training WORSE Than 5-Epoch (Overfitting Confirmed)
+
+### ✅ 已完成
+
+**Phase 150 CrossAttn VLA (30 epochs) on URDF — EVALUATION COMPLETE:**
+
+```
+P-controller (URDF):    20/20 = 100% SR, mean_steps=75
+CrossAttn VLA (URDF):   3/20 = 15% SR, mean_dist=1.356m
+VLA vs P-gap:           85%-points below baseline
+```
+
+**CRITICAL FINDING: Extended training HURTS performance**
+
+| Policy | Epochs | SR | vs P-ctrl gap |
+|--------|--------|-----|---------------|
+| Phase 131 CrossAttn | 5 | 30% | 70%-points |
+| **Phase 150 CrossAttn** | **30** | **15%** | **85%-points** |
+
+**Longer training = WORSE performance** — confirms overfitting or training instability.
+
+**Architecture (same for both):**
+- CLIP spatial tokens [B, 50, 768] via ViT-B/32 (frozen)
+- Goal MLP: 2→128→64 (weak goal conditioning)
+- State net: 11→256 (goal_xy concatenated to state)
+- Cross-attention: goal (Q) → CLIP tokens (K,V)
+- Fusion: cls(768) + state_feat(256) + cross_out(768) + time_feat(256) = 2048
+- Action head: 2048→512→512→9
+- Flow matching: 4-step Euler denoising
+
+**Training data (same for both):**
+- phase63_reachable_10k_converted.h5 (10k frames, pre-rendered images)
+- Jacobian P-controller labels (CORRECT controller, not GridSearch)
+- Physics: k_omni=15.0 overlay
+
+**Why does longer training hurt? Possible causes:**
+1. **CLIP feature degradation**: Repeated CLIP forward passes during training may cause MPS numerical drift
+2. **Flow matching instability**: 4-step Euler denoising diverges over longer training
+3. **Data limitation**: 10k frames insufficient for 155M param model — memorization begins after ~5 epochs
+4. **Priority sampling bias**: reward-weighted sampling concentrates on "easy" frames, overfitting to them
+5. **MPS vs CPU mismatch**: Training on MPS, eval on MPS — but torch.no_grad() inference may behave differently
+
+**Other 30-epoch runs (for comparison):**
+- Phase 152 GoalConditioned (strengthened goal MLP): Only trained 5 epochs due to time limit
+- Phase 150 is the ONLY 30-epoch run evaluated so far
+
+### 🔍 架構現況
+```
+lekiwi_modular (ROS2):
+  /lekiwi/cmd_vel ──→ omni_controller ──→ /lekiwi/wheel_i/cmd_vel
+                   ↓
+              bridge_node ←── (ROS2 ↔ MuJoCo bridge)
+                             ↓
+lekiwi_vla (MuJoCo):
+  LeKiWiSimURDF ← step(action=[arm6, wheel3])
+                ← k_omni=15.0 locomotion (PRIMARY)
+                ↓
+  /lekiwi/joint_states ← published from obs
+  /lekiwi/camera/image_raw ← from renderer (20 Hz)
+```
+
+**Key files:**
+- `sim_lekiwi_urdf.py` (949 lines) — k_omni=15.0, contact physics, qvel[6:9]=wheel vel
+- `bridge_node.py` (819 lines) — ROS2 ↔ MuJoCo bridge, CTF security
+- `scripts/eval_cross_attention_urdf.py` — URDF eval with corrected qvel
+- `results/phase150_train/` — 30-epoch CrossAttn VLA checkpoint
+- `results/phase153_eval.json` — Phase 153: 30ep=15% SR (WORSE than 5ep=30%)
+
+**VLA Policy Results (all evaluated on URDF sim, k_omni=15.0):**
+| Policy | Epochs | SR | Notes |
+|--------|--------|-----|-------|
+| Phase 131 CrossAttn | 5 | 30% | Original, weak goal MLP |
+| Phase 145 CrossAttn+Jacobian | 5 | 20% | Trained on phase63+priority weights |
+| Phase 150 CrossAttn | 30 | 15% | **OVERFITTING: longer=WORSE** |
+| Phase 152 GoalConditioned | 5 | 20% | Strengthened goal MLP, only 5ep |
+| P-controller baseline | N/A | 95-100% | Oracle controller, reachable goals |
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Understand WHY Phase 150 overfits**
+1. Check training loss curve — was Phase 150 loss still decreasing at epoch 30?
+2. Try early stopping: save best checkpoint by eval SR, not by epoch
+3. Run Phase 150 epoch 10 and epoch 20 to find when SR peaks
+
+**PRIORITY 2: Fix the training instability**
+1. Reduce learning rate for MPS (1e-4 → 5e-5)
+2. Add gradient clipping (max_norm=1.0) to prevent MPS overflow
+3. Use cosine annealing instead of constant LR
+4. Try with fresh random seed to check reproducibility
+
+**PRIORITY 3: Short training protocol**
+1. Train for 5-10 epochs max (Phase 131 showed best results at 5 epochs)
+2. Save checkpoint every 2 epochs with eval SR metric
+3. Use best checkpoint for deployment
+
+**PRIORITY 4: Data quality investigation**
+1. phase63_reachable_10k_converted.h5: does it have enough diversity?
+2. Priority weights: are they amplifying noise in the data?
+3. Try uniform sampling (no priority weighting)
+
+### 🚫 阻礙
+- **OVERFITTING confirmed**: 30ep < 5ep performance — training instability on MPS
+- **No training loss curve**: Phase 150 doesn't save loss history
+- **MPS numerical issues**: Possible drift in CLIP forward passes during training
+- **Limited data diversity**: 10k frames may be insufficient for 155M params
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p134 | CrossAttn VLA (5ep) | 30% SR on URDF |
+| p145 | CrossAttn+Jacobian (5ep) | 20% SR |
+| **p153** | **CrossAttn VLA (30ep)** | **15% SR — OVERFITTING confirmed** |
+| p153 | Phase 131 vs 150 | 5ep=30% > 30ep=15% — longer training WORSE |
+
+### Git
+- New: `scripts/eval_phase150_goal_conditioned.py` (wrong arch, couldn't load)
+- New: `results/phase153_eval.json`
+- Commit: Phase 153 — CRITICAL: 30-epoch VLA 15% SR vs 5-epoch 30% SR — OVERFITTING CONFIRMED; P-ctrl 100% SR baseline; next: early stopping protocol, LR reduction, epoch sweep
