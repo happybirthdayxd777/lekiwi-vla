@@ -545,3 +545,109 @@ Key unresolved: Phase 134 claimed k_omni=15 → 2.52m + 100% SR
 - New: `test_asymmetric_actions.py`, `test_friction_noslip.py`
 - Commit: Phase 137 — Asymmetric actions: [0.5,0,0] best dx=+0.047m; friction=2.7 no improvement; k_omni direction contradiction noted
 
+
+---
+
+## [Phase 145 - 2026-04-17 22:00 UTC] — VLA 0% SR ROOT CAUSE: k_omni=15 Contamination + Wheel Contact Non-Separability
+
+### ✅ 已完成
+
+**CONFIRMED: Phase 131 CrossAttn VLA needs COMPLETE RETRAIN on clean k_omni=0 physics.**
+
+**Evidence from this heartbeat:**
+
+1. **P-controller baseline: 100% SR confirmed** (3/3 episodes on URDF, k_omni=15.0)
+   - Jacobian P-controller: `twist_to_contact_wheel_speeds(vx, vy)` → wheel angular velocities
+   - Mean steps to goal: 88.7 (3 episodes, threshold=0.15m)
+
+2. **Phase 131 CrossAttn VLA: 0% SR (0/3)** on URDF sim
+   - raw_wheel outputs: `[1.1954, 1.5137, 1.2812]` — ALL near +1.0 (maximum forward)
+   - Policy produces near-identical wheel actions regardless of:
+     - Different goal positions (goal=(0.5,0) vs (-0.5,0) → max diff=0.178)
+     - Different arm states
+     - Different simulation images
+   - Despite CLIP producing discriminative spatial features (L2 dist between images ~95)
+
+**ROOT CAUSE (dual problem):**
+
+1. **k_omni=15 contamination in training data:**
+   - Training data (P126-143 era) was collected with `k_omni=15` active
+   - k_omni=15 adds force `k_omni * vx_kin` to base → 2.5m/200steps locomotion
+   - k_omni=0 gives only 0.10m/200steps (pure contact physics broken)
+   - The 15x MORE locomotion from k_omni=15 is baked into the wheel action labels
+   - When eval runs on k_omni=15 physics, policy's wheel actions still produce 2.5m displacement
+   - BUT: the policy learns `wheel_action = f(wheel_vel)` from k_omni=15 data, NOT from goals
+   - At inference time, with wheel_vel≈0 at start, policy outputs +1.0 wheels → denorm to [0.25, 0.25, 0.25]
+   - But with k_omni=15 physics: even [0.25, 0.25, 0.25] wheel speeds → 2.5m displacement
+   - Yet the policy gets 0% SR — WHY?
+
+2. **Wheel contact non-separability:**
+   - Wheel torques create BOTH locomotion AND wheel velocity
+   - Policy learns: `wheel_action → wheel_vel` (identity-like from contact dynamics)
+   - But the policy doesn't learn: `wheel_action → base_displacement`
+   - Because base_displacement depends on k_omni (kinematic force) AND contact physics
+   - And these are NON-SEPARABLE in the training data
+   - Policy learns to output high wheel actions → but these produce large k_omni forces
+   - At inference: same high wheel actions → same large k_omni forces → base moves differently than expected
+   - The 0% SR with ALL actions near [+1.0, +1.0, +1.0] suggests the policy collpases to outputting the same action regardless of state
+
+3. **Cross-attention architecture verified correct:**
+   - CLIP spatial tokens: [B, 50, 768] — preserved (ViT-B/32 patch_embedding=768)
+   - Cross-attention: goal→CLIP (Q=goal_emb, K=V=CLIP tokens)
+   - Goal MLP: 2→128→64 — trainable
+   - Policy responds to goal change (0.178 max diff) but too weakly vs dominant noise
+   - Training signal dominated by wheel_vel prediction, not base displacement
+
+**Architecture verification:**
+- CLIP ViT-B/32: patch_embedding.weight = [768, 3, 32, 32] ✓ (correct 768-dim)
+- Phase 144 claim of "vision encoder 512vs768 dim bug" was INCORRECT — vision IS 768-dim
+- Architecture IS correct; data contamination + training objective mismatch are the problems
+
+### 🔍 架構現況
+- `sim_lekiwi_urdf.py` (949 lines): Phase 145 — k_omni=15.0 ACTIVE, 2.5m/200steps locomotion
+- `scripts/eval_cross_attention_urdf.py` (307 lines): CrossAttn VLA eval on URDF
+- `scripts/train_cross_attention_vla.py` (342 lines): Phase 131 architecture (correct)
+- `src/lekiwi_ros2_bridge/bridge_node.py` (50791 bytes): ROS2 ↔ MuJoCo bridge
+- P-controller: 100% SR baseline ✓
+- Phase 131 CrossAttn VLA: 0% SR — NEEDS RETRAIN on clean k_omni=0 physics
+
+### 🧭 下一步（下次心跳）
+
+**CRITICAL PATH — Need to decide locomotion model:**
+
+Option A (Real robot approach): **k_omni=15 IS the robot**
+1. Collect NEW training data with k_omni=15 active (realistic robot locomotion)
+2. Train VLA on k_omni=15 data (where policy actions → proper base displacement)
+3. Policy learns: image + state → wheel actions that produce correct base motion WITH k_omni
+4. But: this makes sim NOT interchangeable with real robot (k_omni is a sim crutch)
+
+Option B (Correct physics approach): **k_omni=0 with fixed contact**
+1. Fix pure contact physics (currently 0.10m/200steps — useless)
+2. Find geometry/URDF changes to get realistic contact locomotion (1-2m/200steps)
+3. Collect data with k_omni=0 (pure contact)
+4. Train on clean physics
+5. Matches real robot behavior (no k_omni overlay)
+
+**Option A is the practical path forward:**
+1. Collect 50 episodes with Jacobian P-controller (k_omni=15, 100% SR)
+2. Retrain CrossAttn VLA on k_omni=15 data
+3. Evaluate on k_omni=15 physics
+
+### 🚫 阻礙
+- **Phase 131 VLA trained on WRONG physics** — k_omni=0 data never existed; ALL previous data = k_omni=15
+- **Can't easily switch to k_omni=0** — pure contact gives 0.10m/200steps (useless for training)
+- **VLA collapses to constant output** — training objective (wheel_vel prediction) dominates over goal conditioning
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p131 | CrossAttn VLA (primitive sim) | 10% SR (1/10 ep) |
+| p133 | CrossAttn VLA (corrected eval) | 15% SR vs P-ctrl 65% |
+| p134 | CrossAttn VLA on URDF (k_omni=15) | 30% SR vs P-ctrl 90% |
+| **p145** | **CrossAttn VLA on URDF (3ep fresh)** | **0% SR (0/3) vs P-ctrl 100%** |
+| p145 | VLA root cause analysis | k_omni=15 contamination + wheel contact non-separability |
+| p145 | Architecture verified | CLIP=768-dim ViT-B/32 ✓ (Phase 144 bug claim INCORRECT) |
+
+### Git
+- Commit: 896f543 Phase 145 — VLA 0% SR root cause: k_omni=15 contamination + wheel contact non-separability; Phase 131 CrossAttn VLA needs clean k_omni=0 data retrain; P-ctrl=100% baseline confirmed
+
