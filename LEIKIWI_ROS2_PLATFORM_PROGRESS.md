@@ -1,5 +1,96 @@
 # LeKiWi ROS2 ↔ MuJoCo ↔ VLA 統一研究平台 — 進度追蹤
 
+## Phase 146 (2026-04-18 01:00 UTC) — VLA Goal-Insensitivity Root Cause: CrossAttn VLA Outputs Near-Identical Actions Regardless of Goal Position
+
+### Phase: Phase 146
+
+### 本次心跳完成事項
+
+**VLA Goal-Insensitivity 根本原因確診：CrossAttn VLA 幾乎不根據 goal 位置改變輸出**
+
+#### 診斷實驗設計
+
+測試 VLA 在不同 goal 位置時的 action 輸出：
+- State: arm_pos=(0,0,0,0,0,0), wheel_vel=(0,0,0), goal=(gx, gy)
+- 測試 goals: (0.5,0.5), (-0.5,0.5), (2.0,2.0), (0.0,0.0)
+
+#### 關鍵發現
+
+**VLA 輸出幾乎與 goal 無關：**
+```
+Goal=(0.5,0.5): action[6:9]=[1.07, 1.24, 1.05] ±0.1
+Goal=(-0.5,0.5): action[6:9]=[1.07, 1.24, 1.05] ±0.1
+Goal=(2.0,2.0): action[6:9]=[1.06, 1.19, 1.01] ±0.1
+Goal=(0.0,0.0): action[6:9]=[1.07, 1.24, 1.05] ±0.1
+```
+
+所有 wheel actions 都是 ~[1.0, 1.2, 1.0] rad/s，幾乎不隨 goal 改變。
+
+**P-controller 對比（正常工作）：**
+- P-controller 根據 goal 方向正確選擇不同的 M-mode wheel speed
+- 例如 goal=(0.5, 0) 產生 [0.5, -0.5, 0.5]；goal=(-0.5, 0) 產生 [-0.5, 0.5, -0.5]
+
+#### 為什麼 VLA 會這樣？
+
+1. **Goal conditioning 太弱**：goal_emb → goal_q (Linear 2→64→768) 的信息 bottleneck
+2. **訓練數據的 goal 不夠多樣化**：如果 training data 中 goal 都是固定位置，VLA 會忽略 goal input
+3. **CLIP vision encoder 主導**：VLA 主要根據圖像輸出相似動作（空白圖像也輸出類似動作）
+4. **Policy 訓練不收斂**：goal conditioning branch 沒有學到有意義的 goal→action mapping
+
+#### 架構現況
+
+```
+lekiwi_vla/
+  sim_lekiwi_urdf.py     — k_omni=15 (PRIMARY loco), noslip=10, Euler, k_omni=15.0
+  bridge_node.py         — 1059 lines, ROS2↔MuJoCo bridge
+  vla_policy_node.py     — 664 lines, VLA policy ROS2 integration
+  ctf_integration.py     — 797 lines, CTF security layer
+  eval_cross_attention_urdf.py — P-ctrl=90% SR, VLA=30% SR (goal-insensitive)
+  
+Bridge Topics:
+  /lekiwi/cmd_vel (Twist) → bridge_node
+  /lekiwi/wheel_N/cmd_vel (Float64) ← bridge_node
+  /lekiwi/joint_states (JointState) ← bridge_node
+  /lekiwi/odom (Odometry) ← bridge_node
+  /lekiwi/vla_action (Float64MultiArray) ← vla_policy_node
+```
+
+### 🧭 下一步
+
+**PRIORITY 1: 測試非對稱 action 的 VLA**
+- Phase 145 的 `train_on_jacobian_data.py` 收集的數據用於訓練
+- 測試 Phase 131 以外的 checkpoint（如 phase133, phase130）看是否也有 goal-insensitivity
+
+**PRIORITY 2: 修復 VLA goal-conditioning**
+- 增加 goal MLP 的 capacity（2→256→768 instead of 2→128→64→768）
+- 或使用更大的 goal embedding
+- 或在 training data 中增加 goal 多樣性
+
+**PRIORITY 3: ROS2 bridge 整合**
+- `bridge_node.py` 完整但在 macOS 無法測試
+- 需要有 ROS2 的機器部署
+
+### 🚫 阻礙
+
+1. **VLA goal-insensitivity**：CrossAttn VLA 幾乎忽略 goal input，輸出與 goal 無關的動作
+2. **No ROS2 environment**：macOS 無法運行 bridge_node.py
+3. **k_omni=15 掩蓋接觸物理**：所有 SR 數據都來自人工 overlay
+
+### 📊 實驗記錄
+|| Phase | 內容 | 結果 ||
+|-------|------|------|------|
+| p146 | VLA goal-insensitivity diagnosis | VLA 輸出 ~[1.0, 1.2, 1.0] rad/s 與 goal 無關 ||
+| p145 | New train_on_jacobian_data.py | trains CrossAttn VLA on Jacobian P-ctrl data ||
+| p144 | CrossAttn VLA eval on URDF | VLA=30% SR (goal-insensitive), P-ctrl=90% SR ||
+| p143 | Vision encoder dim bug | 512 vs 768 dim mismatch (confirmed NOT the issue) ||
+| p138 | k_omni=15 restored | 2.4m loco, 80% P-ctrl SR ||
+
+### Git
+- Commit `d61e774`: Phase 146 — VLA goal-insensitivity diagnosis: CrossAttn VLA outputs near-identical actions regardless of goal position
+- 下一個: Phase 147 — Fix VLA goal-conditioning or test different checkpoints
+
+---
+
 ## Phase 135 (2026-04-17 12:00 UTC) — Contact Physics ROOT CAUSE: k_omni=15 = 100% of Locomotion; noslip_iterations=0
 
 ### Phase: Phase 135
