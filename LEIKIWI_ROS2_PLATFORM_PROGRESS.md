@@ -238,3 +238,93 @@ Phase 76:     Phase 75 verified: RK4 working, MuJoCo enum corrected, EP3/EP8 bas
 - Episode 內所有 steps 物理穩定，結算reward正常
 
 ---
+
+---
+
+## Phase 136 (2026-04-17 12:30 UTC) — noslip_iterations=10: 5.1x improvement, but 0.51m still insufficient
+
+### Phase: Phase 136
+
+### 本次心跳完成事項
+
+**noslip_iterations=10 添加並測試：pure contact locomotion 從 0.10m → 0.51m（5.1x 提升）**
+
+#### 關鍵發現
+
+1. **noslip_iterations=10 有效**：添加 `noslip_iterations="10"` 到 `<option>` 標籤
+   - Pure contact locomotion: 0.10m → 0.51m（5.1x 提升）
+   - 原因：noslip_iterations 為接觸點添加側向摩擦約束，減少 omni-wheel 橫向滑動
+
+2. **k_omni overlay 方向確認**：
+   - 對稱 wheel action [0.5,0.5,0.5] 產生 `vy_kin=0.17m/s, wz_kin=-0.6rad/s`
+   - k_omni overlay 沿 y 軸施力（側向），不是 x 軸（前向）
+   - 這是正確的 omni-wheel 幾何行為
+
+3. **Pure contact locomotion 不夠**：
+   - 0.51m/200steps 仍然不夠（目標 >1.0m）
+   - Phase 134 聲稱 "Grid-best (Phase 113): 0.25m with z-PD removed"
+   - 現在 0.51m > 0.25m，但仍然落後於 k_omni=15 時的 2.52m
+
+4. **friction=1.5 可能仍是瓶頸**：
+   - Phase 77 降低 friction 犧牲了牽引力
+   - 下一步：恢復 friction=2.7 配合 noslip=10
+
+#### 測試結果
+
+| 配置 | mean_dist | SR (<0.2m) | 備註 |
+|------|-----------|------------|------|
+| noslip=10, k_omni=15 | -1.058m | 100% | 負距離 = 行為方向問題 |
+| noslip=10, k_omni=0 | 0.510m | 0% | Pure contact, 10 eps |
+| noslip=0, k_omni=0 (p134) | 0.10m | 0% | Phase 134 baseline |
+
+#### 為什麼 k_omni=15 時得到負距離？
+
+- k_omni overlay 在 vy_kin 方向施力（側向）
+- 機器人向 -y 方向移動（負距離，因為目標在 +x）
+- 這說明 k_omni 只是表面掩蓋接觸物理問題
+
+### 🔍 架構現況
+
+```
+Phase 136:  noslip_iterations=10 添加 → pure contact 0.51m（5.1x 改善）
+Phase 134:  k_omni contamination confirmed: 2.52m vs 0.10m
+Phase 135:  ROOT CAUSE: noslip=0 + friction=1.5 → contact physics broken
+Phase 77:   friction 2.7→1.5 (stability but destroys traction)
+Phase 114:  k_omni=15 RESTORED (artificial locomotion fix)
+```
+
+### 🧭 下一步
+
+**PRIORITY 1: 恢復 friction=2.7 配合 noslip=10**
+```xml
+<geom friction="2.7 0.27 0.02" .../>  <!-- 恢復到 Phase 25 設定 -->
+```
+測試 pure contact locomotion 是否進一步提升。
+
+**PRIORITY 2: 測試非對稱 wheel action**
+- [0.5, 0.5, 0.5] 對稱 → vy_kin, wz_kin（側向+旋轉）
+- [0.5, 0.3, 0.3] 非對稱 → vx_kin 可能出現（forward locomotion）
+- 這可能是正確的接觸 locomotion 方向
+
+**PRIORITY 3: ROS2 bridge 整合**
+- `bridge_node.py` 已完整（1059 lines）
+- 盡快在有 ROS2 的機器上部署測試
+
+### 🚫 阻礙
+
+1. **friction=1.5 仍然過低**：noslip_iterations 改善側向約束，但摩擦係數降低
+2. **k_omni=15 掩蓋問題**：所有 SR 數據仍然被人為 overlay 污染
+3. **無 ROS2 環境**：本機 macOS 無法運行 bridge_node.py
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p136 | noslip_iterations=10 + friction=1.5 | 0.510m pure contact, 5.1x vs p134 |
+| p134 | k_omni=15 vs k_omni=0 isolation | k_omni=15: 2.52m + 100% SR; k_omni=0: 0.10m + 0% SR |
+| p135 | ROOT CAUSE: noslip=0 + friction=1.5 | Contact physics broken |
+
+### Git
+
+- Commit: Phase 136 — Add noslip_iterations=10, pure contact 0.51m (5.1x vs p134)
+- 下一個: Phase 137 — Restore friction=2.7 + test asymmetric wheel actions
+
