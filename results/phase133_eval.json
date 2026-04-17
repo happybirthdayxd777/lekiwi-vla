@@ -1,0 +1,9 @@
+{
+  "phase": 133,
+  "architecture": "cross_attention_retry",
+  "correct_pcontroller_sr": 0.65,
+  "correct_pcontroller_mean_dist": 0.6842384148090778,
+  "cross_attn_vla_sr": 0.15,
+  "cross_attn_vla_mean_dist": 2.2648267832153532,
+  "note": "Phase 131 eval was BROKEN: P-controller used action[0,1] as wheel velocities instead of contact-Jacobian IK"
+}
