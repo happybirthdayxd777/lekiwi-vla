@@ -73,7 +73,7 @@ LEKIWI_URDF_XML = f"""<?xml version="1.0"?>
          200 iterations gives more robust contact resolution while remaining fast.
          Also added jacobian="dense" for faster dense linear solves vs sparse.
     -->
-    <option timestep="0.002" integrator="Euler" iterations="200" jacobian="dense">
+    <option timestep="0.002" integrator="Euler" iterations="200" jacobian="dense" noslip_iterations="10">
         <flag contact="enable" energy="disable"/>
     </option>
 
