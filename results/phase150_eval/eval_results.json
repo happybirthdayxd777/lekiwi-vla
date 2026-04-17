@@ -1,0 +1,11 @@
+{
+  "phase": 150,
+  "pcontroller_sr": 0.8,
+  "pcontroller_mean_steps": 102.2,
+  "vla_sr": 0.2,
+  "vla_mean_steps": 44.0,
+  "vla_mean_dist": 2.7689637624512558,
+  "n_episodes": 5,
+  "threshold": 0.15,
+  "policy": "results/phase145_jacobian_train/final_policy.pt"
+}
