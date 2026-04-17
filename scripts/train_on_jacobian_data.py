@@ -372,8 +372,9 @@ def evaluate(policy_path, n_episodes=10, threshold=0.15):
             img_t = torch.from_numpy(img_small.transpose(2, 0, 1)).unsqueeze(0).to(DEVICE)
             
             # State: arm6 + wheel_vel3 + goal2
+            # FIX (Phase 151): was using qvel[0:3] = BASE velocity, should be qvel[6:9] = wheel velocity
             arm_pos = sim.data.qpos[7:13]
-            wheel_vel = sim.data.qvel[0:3]
+            wheel_vel = sim.data.qvel[6:9]  # qvel[6:9] = w1, w2, w3 angular velocities
             state_11d = np.concatenate([arm_pos, wheel_vel, goal])
             state_t = torch.from_numpy(state_11d).float().unsqueeze(0).to(DEVICE)
             

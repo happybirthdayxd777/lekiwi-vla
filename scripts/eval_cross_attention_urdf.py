@@ -158,7 +158,9 @@ def evaluate_cross_attn_vla_on_urdf(policy, n_episodes=10, max_steps=200, thresh
             # Get state: arm_pos(6) + wheel_vel(3) + goal_xy(2) = 11D
             # Goals in training data are ABSOLUTE world positions
             arm_pos = sim.data.qpos[7:13]
-            wheel_vel = sim.data.qvel[0:3]
+            # FIX (Phase 151): qvel[0:3] = BASE velocity (free joint) — WRONG
+            # CORRECT: qvel[6:9] = wheel angular velocities (w1, w2, w3)
+            wheel_vel = sim.data.qvel[6:9]
             state_11d = np.concatenate([arm_pos, wheel_vel, goal])
             state_t = torch.from_numpy(state_11d).float().unsqueeze(0).to(DEVICE)
 
