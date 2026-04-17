@@ -1,0 +1,10 @@
+{
+  "phase": 145,
+  "architecture": "cross_attention_jacobian_data",
+  "pcontroller_sr": 0.8,
+  "pcontroller_mean_steps": 104.8,
+  "vla_sr": 0.1,
+  "vla_mean_dist": 3.0915719794352574,
+  "n_episodes": 10,
+  "threshold": 0.15
+}

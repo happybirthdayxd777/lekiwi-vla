@@ -1,28 +1,26 @@
 #!/usr/bin/env python3
 """
-Phase 145: Train Cross-Attention VLA on CLEAN Jacobian P-controller Data
-=========================================================================
-Previous VLAs failed because they were trained on GridSearch (0% SR) data
-or k_omni-contaminated data. This script trains on the CLEAN 100% SR
-Jacobian P-controller data from Phase 143.
+Phase 145/149: Train Cross-Attention VLA on Jacobian P-controller + Phase 63 data
+================================================================================
+Previous VLAs failed because trained on GridSearch (0% SR) data or
+k_omni-contaminated data. This version uses two data sources:
 
-Key fixes vs Phase 131:
-  1. Data: jacobian_pctrl_50ep_p143.h5 (100% SR baseline)
-     - 10k frames, 50 episodes
-     - Jacobian P-controller (correct IK, same as bridge_node.py)
-     - State: arm(6) + base_xy(2) = 8D
-     - Action: arm(6) + wheel(3) = 9D (FULL motor torques)
-  
-  2. sim_lekiwi_urdf.py backend (k_omni=15.0, correct physics)
-     - Contact locomotion works with k_omni overlay
-     - P-controller = 100% SR on this backend
-     - Matches training data physics
-  
-  3. Architecture: Cross-Attention VLA (same as Phase 131)
-     - CLIP spatial tokens [B, 50, 768]
-     - Goal cross-attention
-     - 11D state (8D + goal_xy(2) from stored goals)
-     - 4-step flow matching denoising
+  Primary training: phase63_reachable_10k_converted.h5
+    - 10k frames with PRE-RENDERED IMAGES (no sim rendering needed!)
+    - State: 9D (arm6 + wheel3), Actions: 9D
+    - Goals: 2D goal positions
+    - Images: [N, 3, 224, 224] uint8 (pre-rendered from simulation)
+    - Data quality: Jacobian P-controller physics (k_omni=15.0)
+
+  Priority sampling: jacobian_pctrl_50ep_p143.h5
+    - Used only for reward-weighted sampling (high-reward frames boosted)
+    - 10k frames, 50 episodes with explicit rewards
+
+Architecture: Cross-Attention VLA (same as Phase 131)
+  - CLIP spatial tokens [B, 50, 768]
+  - Goal cross-attention (goal MLP: 2 → 128 → 64)
+  - State: 11D (9D + goal_xy 2D)
+  - 4-step flow matching denoising
 
 Loss: Flow matching MSE on velocity prediction
 """
@@ -132,92 +130,56 @@ class CrossAttentionPolicy(nn.Module):
 
 # ─── Data Loading ──────────────────────────────────────────────────────────────
 
-def load_jacobian_data(h5_path, goal_default=(0.5, 0.0)):
-    """Load jacobian_pctrl_50ep_p143.h5 and prepare for training.
+def load_prerendered_data(h5_path="data/phase63_reachable_10k_converted.h5",
+                           jacobian_h5="data/jacobian_pctrl_50ep_p143.h5"):
+    """Load pre-rendered data for fast training.
     
-    State: arm(6) + base_xy(2) = 8D
-    Goals: stored separately in h5
+    Primary source: phase63_reachable_10k_converted.h5
+      - Images: [N, 224, 224, 3] uint8 (pre-rendered)
+      - States: [N, 9] (arm6 + wheel3)
+      - Actions: [N, 9] (arm6 + wheel3)
+      - Goals: [N, 2]
     
-    Returns: images (N,224,224,3), states (N,11), actions (N,9)
-    - states padded to 11D with goal_xy(2) from stored goal_positions
-    - images generated fresh from sim (not stored in h5)
+    Returns: images (N,3,224,224), states_11d (N,11), actions (N,9)
     """
-    from sim_lekiwi_urdf import LeKiWiSimURDF
-    
-    print(f"[DATA] Loading {h5_path}...")
+    print(f"[DATA] Loading pre-rendered data from {h5_path}...")
     f = h5py.File(h5_path, 'r')
-    actions = f['actions'][:]       # (10000, 9) — arm6 + wheel3
-    rewards = f['rewards'][:]        # (10000,)
-    goals = f['goal_positions'][:]   # (10000, 2)
-    episode_starts = f['episode_starts'][:]  # (51,)
+    actions = f['actions'][:].astype(np.float32)      # (10000, 9)
+    states_9d = f['states'][:].astype(np.float32)    # (10000, 9)
+    goals = f['goal_positions'][:].astype(np.float32) # (10000, 2)
+    images_raw = f['images'][:]                        # (10000, 224, 224, 3) uint8
     f.close()
     
-    print(f"  Actions: {actions.shape}, Rewards: mean={rewards.mean():.3f}")
-    print(f"  Goals: {goals.shape}, Episodes: {len(episode_starts)-1}")
+    # Load rewards for priority sampling
+    jac_f = h5py.File(jacobian_h5, 'r')
+    jac_rewards = jac_f['rewards'][:]
+    jac_f.close()
     
-    # For each episode, we need to render images
-    # We'll use a single sim and replay episodes to render
-    sim = LeKiWiSimURDF()
-    sim.reset()
-    base_body_id = sim.model.body('base').id
+    # Normalize images: uint8 [0,255] → float32 [0,1] CHW
+    images = images_raw.transpose(0, 3, 1, 2).astype(np.float32) / 255.0
     
-    images = []
-    states_11d = []
+    # Build 11D state: 9D (arm6 + wheel3) + 2D goal
+    states_11d = np.concatenate([states_9d, goals], axis=1)
     
-    n_frames = len(actions)
-    BATCH = 200  # Render in batches
+    # Priority sampling: upweight high-reward frames
+    # Normalize jac_rewards to [0, 1] and use as sampling weights
+    jac_min, jac_max = jac_rewards.min(), jac_rewards.max()
+    if jac_max > jac_min:
+        priorities = (jac_rewards - jac_min) / (jac_max - jac_min)
+    else:
+        priorities = np.ones_like(jac_rewards)
     
-    print("[DATA] Rendering images from simulation (this may take a while)...")
-    for batch_start in range(0, n_frames, BATCH):
-        batch_end = min(batch_start + BATCH, n_frames)
-        
-        # Reset sim
-        sim.reset()
-        
-        # Replay actions up to batch_start
-        for i in range(batch_start):
-            arm_action = actions[i, :6]
-            wheel_action = actions[i, 6:9]
-            action = np.concatenate([arm_action, wheel_action])
-            sim.step(action)
-        
-        # Now render for frames [batch_start, batch_end)
-        for i in range(batch_start, batch_end):
-            # Get current state
-            arm_pos = sim.data.qpos[7:13]  # arm joint positions
-            base_xy = sim.data.xpos[base_body_id, :2]
-            goal_xy = goals[i]
-            
-            # 11D state: arm6 + wheel_vel3 + goal_xy2
-            # But actions are motor torques, not wheel velocities
-            # For training: use arm_pos(6) + goal_xy(2) as state
-            # wheel velocity: approximate from action
-            wheel_vel_approx = actions[max(i-1,0), 6:9]  # prev wheel action as vel approximation
-            state_11d = np.concatenate([arm_pos, wheel_vel_approx, goal_xy]).astype(np.float32)
-            
-            # Render
-            img = sim.render()
-            from PIL import Image
-            img_pil = Image.fromarray(img)
-            img_small = np.array(img_pil.resize((224, 224)), dtype=np.float32) / 255.0
-            
-            images.append(img_small.transpose(2, 0, 1))  # CHW
-            states_11d.append(state_11d)
-            
-            # Step with this frame's action
-            arm_action = actions[i, :6]
-            wheel_action = actions[i, 6:9]
-            action = np.concatenate([arm_action, wheel_action])
-            sim.step(action)
-        
-        if (batch_start // BATCH) % 10 == 0:
-            print(f"  Rendered {batch_end}/{n_frames} frames...")
+    print(f"  Actions: {actions.shape}, range=[{actions.min():.3f}, {actions.max():.3f}]")
+    print(f"  States: {states_11d.shape}, range=[{states_11d.min():.3f}, {states_11d.max():.3f}]")
+    print(f"  Images: {images.shape}, range=[{images.min():.3f}, {images.max():.3f}]")
+    print(f"  Goals: {goals.shape}, range=[{goals.min():.3f}, {goals.max():.3f}]")
+    print(f"  Priority weights: mean={priorities.mean():.3f}, max={priorities.max():.3f}")
     
-    images = np.array(images, dtype=np.float32)
-    states_11d = np.array(states_11d, dtype=np.float32)
-    
-    print(f"[DATA] Done: images={images.shape}, states={states_11d.shape}")
-    return images, states_11d, actions
+    return images, states_11d, actions, priorities
+
+
+# Keep old function name as alias for backwards compat
+load_jacobian_data = load_prerendered_data
 
 
 # ─── Normalize Action ──────────────────────────────────────────────────────────
@@ -232,32 +194,37 @@ def normalize_action(raw_action):
 # ─── Training ─────────────────────────────────────────────────────────────────
 
 def train(args):
-    from sim_lekiwi_urdf import LeKiWiSimURDF
-    
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Load data
-    images, states_11d, actions = load_jacobian_data(args.data)
+    # Load pre-rendered data (images loaded from disk, no sim rendering needed!)
+    images, states_11d, actions, priorities = load_prerendered_data(
+        h5_path="data/phase63_reachable_10k_converted.h5",
+        jacobian_h5="data/jacobian_pctrl_50ep_p143.h5"
+    )
     
     # Policy
     policy = CrossAttentionPolicy(state_dim=11, goal_dim=2, action_dim=9, device=DEVICE)
     optimizer = torch.optim.AdamW(policy.parameters(), lr=args.lr, weight_decay=0.01)
     
     n_samples = len(images)
+    # Priority-weighted sampling indices
+    priorities = np.array(priorities, dtype=np.float32)
+    priorities /= priorities.sum()
     indices = np.arange(n_samples)
     
     losses = []
-    print(f"\n[TRAIN] Starting {args.epochs} epochs on {n_samples} frames...")
+    print(f"\n[TRAIN] Starting {args.epochs} epochs on {n_samples} frames (priority-weighted sampling)...")
     start_time = time.time()
     
     for epoch in range(args.epochs):
-        np.random.shuffle(indices)
+        # Priority-weighted shuffle
+        batch_indices = np.random.choice(indices, size=n_samples, replace=True, p=priorities)
         epoch_loss = 0.0
         n_batches = 0
         
         for i in range(0, n_samples, args.batch):
-            batch_idx = indices[i:i+args.batch]
+            batch_idx = batch_indices[i:i+args.batch]
             
             # Sample timestep t ~ Uniform[0,1]
             t = np.random.uniform(0, 1, size=len(batch_idx)).astype(np.float32)
@@ -318,7 +285,7 @@ def train(args):
     plt.plot(losses)
     plt.xlabel("Epoch")
     plt.ylabel("MSE Loss")
-    plt.title("Phase 145: Cross-Attention VLA on Jacobian P-ctrl Data")
+    plt.title("Phase 149: Cross-Attention VLA — pre-rendered data + priority sampling")
     plt.savefig(output_dir / "training_loss.png", dpi=100)
     plt.close()
     print(f"[TRAIN] Loss plot saved.")
