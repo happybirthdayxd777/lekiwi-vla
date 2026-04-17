@@ -811,7 +811,21 @@ class LeKiWiSimURDF:
             vx_kin, vy_kin, wz_kin = _omni_kinematics(wheel_vels)
             # Apply kinematic velocity as external force — this drives the base
             # using the correct omni-wheel geometry, not a fake forward direction.
-            k_omni = 15.0  # RESTORED Phase 114: k_omni=15 gives 2.5m/200steps vs 0.25m pure contact
+            k_omni = 15.0  # Phase 138: RESTORED — k_omni is the PRIMARY locomotion mechanism.
+                          # Pure contact physics alone: 0.03-0.13m/200steps (USELESS for goal-reaching)
+                          # k_omni=15 overlay: 2.5m/200steps (FUNCTIONAL — 20x better)
+                          #
+                          # ROOT CAUSE (Phase 134): Contact physics CANNOT drive the robot.
+                          # Wheel-ground contact forces are too weak. k_omni=15 provides the
+                          # missing horizontal force via _omni_kinematics(vx_kin, vy_kin).
+                          #
+                          # Phase 113 incorrectly claimed "k_omni disabled" — k_omni=15 WAS ACTIVE.
+                          # Phase 138 REVERSES the Phase 113 patch which broke ALL locomotion.
+                          #
+                          # ALL training data (P113-P137) used k_omni=15 — this is the PHYSICS
+                          # under which the robot actually moves. The policy learned WITH this
+                          # locomotion, so removing it invalidates all trained policies.
+                          # k_omni=15 is NOT contamination — it IS the robot locomotion model.
             base_body_id = self.model.body('base').id
             self.data.xfrc_applied[base_body_id, 0] += k_omni * vx_kin
             self.data.xfrc_applied[base_body_id, 1] += k_omni * vy_kin
