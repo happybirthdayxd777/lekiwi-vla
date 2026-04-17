@@ -48,8 +48,7 @@ import time
 
 # ── Simulation backend imports ─────────────────────────────────────────────────
 sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
-from sim_lekiwi import LeKiwiSim
-from sim_lekiwi_urdf import LeKiWiSimURDF
+from lekiwi_sim_loader import make_sim, LeKiWiSimWrapper, LeKiWiSimDirect
 from security_monitor import SecurityMonitor
 from policy_guardian import PolicyGuardian
 from trajectory_logger import TrajectoryRecorder
@@ -198,15 +197,11 @@ class LeKiWiBridge(Node):
                 self.hw.connect()
             self.sim = None
             self.get_logger().info("Real hardware adapter ready.")
-        elif sim_type == "urdf":
-            self.get_logger().info("Starting LeKiWiSimURDF (STL mesh geometry)…")
-            self.sim: LeKiWiSim | LeKiWiSimURDF = LeKiWiSimURDF()
-            self.get_logger().info("URDF simulation initialised.")
-            self.hw = None
         else:
-            self.get_logger().info("Starting LeKiWiSim (cylinder primitives)…")
-            self.sim = LeKiwiSim()
-            self.get_logger().info("Primitive simulation initialised.")
+            # use lekiwi_sim_loader factory: "primitive" or "urdf"
+            self.get_logger().info(f"Starting simulation (type={sim_type})…")
+            self.sim = make_sim(sim_type)
+            self.get_logger().info(f"{type(self.sim).__name__} initialised.")
             self.hw = None
 
         # CTF security monitor
@@ -595,7 +590,7 @@ class LeKiWiBridge(Node):
             return
 
         # ── Simulation mode: read from MuJoCo ───────────────────────────
-        obs = self.sim._obs()
+        obs = self.sim.get_state()
         dt = 0.05   # matches timer period
 
         # ── Odometry ─────────────────────────────────────────────────────────
