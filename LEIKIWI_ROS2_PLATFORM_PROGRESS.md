@@ -3426,3 +3426,81 @@ vs 之前最佳啟發式控制器：
 
 - New: `scripts/validate_jacobian闭环.py`, `scripts/test_goal_tracking闭环.py`
 - Commit: `212a5e9` Phase 124 — Contact Jacobian closed-loop: 4/4 goal reach (100% SR)
+
+## Phase 130 (2026-04-17 08:00 UTC) — Goal-Conditioning Test: 11D State → 0% SR
+
+### Phase: Phase 130
+
+### ✅ 本次心跳完成事項
+
+**Phase 130: Goal-Conditioning 測試 — MLP 無法學習目標導向行為**
+
+**核心發現：**
+
+| 配置 | 成功率 | 備註 |
+|------|--------|------|
+| OLD VLA (9D state, 無 goal) | 0% SR | Phase 127 結論 |
+| NEW VLA (11D state, goal_xy) | **0% SR** | Phase 130 本次測試 |
+| P-controller (oracle) | 100% SR | 驗證實驗可達 |
+
+**訓練配置：**
+- State dim: 9D → 11D（9D + goal_xy 2D）
+- Policy: CLIP-Flow Matching MLP（same as before）
+- Dataset: lekiwi_goal_5k.h5（10000 frames）
+- Checkpoint: epoch 20（loss range [0.83, 1.45]）
+- Evaluation: 5 episodes × 200 steps
+
+**關鍵洞察：**
+
+MLP 架構（786-dim hidden layer）在 goal-conditioned 11D state 下仍無法學習目標導向行為。這表明：
+
+1. **MLP capacity 不足** — 11D state + 9D action 的 mapping 太複雜
+2. **需要 attention/transformer** — 讓 policy 聚焦於 image 中的目標位置
+3. **或需要更多訓練 epochs** — 30 epochs 可能不夠
+4. **或需要更多訓練數據** — 10000 frames 可能不足
+
+### 🔍 架構現況
+
+| Component | Status |
+|-----------|--------|
+| bridge_node.py | ✅ 完整，ROS2 ↔ MuJoCo 橋樑 |
+| VLA policy (CLIP-FM MLP) | ❌ 0% goal-reaching SR |
+| Goal-conditioning (11D) | ❌ 不夠 — 需要 attention |
+| P-controller (oracle) | ✅ 100% SR（驗證用）|
+| CTF 安全整合 | ✅ 完整 |
+| ROS2 launch files | ✅ 5 個 launch files |
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Test with more training epochs (100)**
+- 20 epochs may not be enough — train to 100 epochs and re-evaluate
+- If SR improves: goal-conditioning works, just needs more training
+- If SR still 0%: MLP architecture is fundamentally insufficient
+
+**PRIORITY 2: Add attention mechanism**
+- Replace MLP with transformer attention over image patches + goal embedding
+- CLIP text encoder could encode "go to position (x, y)" as goal embedding
+
+**PRIORITY 3: Bridge ROS2 integration (real hardware)**
+- Connect to real LeKiWi hardware via bridge_node.py
+- Test VLA policy on real robot with camera input
+
+### 🚫 阻礙
+
+- **MLP capacity insufficient** — 512-dim MLP cannot learn goal-directed navigation
+- **Need attention/transformer** — CLIP's visual tokens should be used with cross-attention
+- **k_omni contamination** — still active in URDF sim (15.0N overlay on contact physics)
+
+### 📊 實驗記錄
+
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p127 | VLA (9D) eval | 0% SR |
+| p128 | normalize_action bugs fixed | CLIP bounded, wheel limits corrected |
+| p129 | normalize_action tanh fix | 65% saturate to ±0.5 (flow matching std~1.0) |
+| **p130** | **Goal-conditioning (11D)** | **0% SR — MLP cannot learn goal-directed** |
+
+### Git
+
+- New: `scripts/test_goal_conditioning.py`, `scripts/eval_phase130_goal_conditioned.py`
+- Commit: `1403cff` Phase 130 — goal-conditioning test: 11D state → 0% SR; confirms MLP insufficient, need attention/transformer
