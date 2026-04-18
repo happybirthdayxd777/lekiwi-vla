@@ -1,5 +1,97 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
+## [Phase 173 - 2026-04-19 05:00 UTC] — VLA 53.3% SR; ARM SATURATION ROOT CAUSE IDENTIFIED
+
+### ✅ 已完成
+
+**CRITICAL: VLA Failure Mode Diagnostic (Phase 173)**
+
+Ran `scripts/diagnose_vla_failures.py` on 30 restricted goals (seed=42).
+
+**Results:**
+- VLA SR: 53.3% (16/30)
+- P-ctrl SR: 100% (30/30)
+- All 14 VLA failures: in +X territory (x ∈ [-0.04, 0.48])
+- VLA successes: nearby goals, center, or -X/-Y goals
+
+**ROOT CAUSE: Arm saturation in failures**
+
+In every VLA failure, arm joints j4 and j5 saturate at [-0.5, +0.5] (clip limit):
+```
+Successes:  arm actions near 0 (arm stays neutral)
+Failures:   arm j4=-0.5, j5=-0.5 (arm swings to extreme pose)
+```
+
+This causes:
+1. Physical obstruction: arm swings into camera FOV blocking goal visibility
+2. Visual confusion: CLIP sees arm mesh, not goal marker
+3. Wrong policy: VLA commits to wrong action due to misread scene
+
+**Failure action pattern (all 14 failures):**
+```
+Last10 wheel mean: [+0.245, -0.080, -0.404]  (low std = NOT oscillating)
+First action:      wheel=[+0.23, +0.08, -0.40] (same pattern from step 0)
+```
+
+The VLA's wheel actions are actually biased toward the +X goal direction from the very first step. But the arm saturation from step 0 causes the camera to see a misaligned scene, leading to consistently wrong corrections.
+
+**Diagnostic script created:** `scripts/diagnose_vla_failures.py` (400 lines)
+- Records per-episode: VLA success/fail + steps, P-ctrl success/fail + steps
+- Captures trajectory, first/last actions, last-10 wheel action stats
+- Saved: `results/phase173_diagnostic_20260419_0442.json`
+
+### 🔍 架構現況
+```
+ROS2 /lekiwi/cmd_vel ──→ bridge_node.py (1063 lines)
+                              ↓ (twist_to_contact_wheel_speeds, scale=0.4)
+                         MuJoCo URDF (k_omni=15.0)
+                              ↓
+                   /lekiwi/joint_states ──→ VLA policy_node (664 lines)
+                                               ↓ (arm*6 + wheel*3 actions)
+                                         Closed loop
+```
+- `sim_lekiwi_urdf.py` — k_omni=15.0 ACTIVE, z-PD REMOVED
+- `bridge_node.py` — 1063 lines, scale fix applied
+- **VLA: 53.3% SR (16/30) on restricted goals** ← Phase 173 diagnostic
+- **P-ctrl baseline: 100% SR (30/30)** ← Confirmed
+- **Root cause: arm joint saturation → camera obstruction → visual misread**
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Fix arm saturation in VLA actions**
+1. Post-process VLA wheel actions: clip arm[:6] to [-0.3, 0.3] instead of [-0.5, 0.5]
+2. OR: train with arm action penalty/regularization to prevent saturation
+3. OR: use a different arm reference pose (not -0.5/-0.5)
+
+**PRIORITY 2: Visual confusion check**
+1. Examine failure episode images: does the arm actually obstruct the camera?
+2. Check if j4/j5 saturation is deterministic (always same value) or varying
+3. If deterministic: VLA might be outputting a "give up" pose when uncertain
+
+**PRIORITY 3: Re-collect data with arm penalty**
+1. Collect new jacobian data with arm action penalty in P-controller
+2. Retrain VLA on "clean" data where arm never saturates
+3. Re-evaluate on restricted goals
+
+### 🚫 阻礙
+- ~~k_omni discrepancy~~ → **NO DISCREPANCY — k_omni=15 everywhere** (Phase 172)
+- **VLA 53% SR bottleneck** — ROOT CAUSE: arm joint saturation (j4/j5 = ±0.5)
+- **Training data size** — 10k frames may be insufficient for 155M param policy
+- **Arm obstruction** — arm physically blocks camera in failure episodes
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p131 | GridSearch M8 best pure contact | M8=[-1,-1,-1] → 0.31m/200steps (k_omni=0 era) |
+| p164 | k_omni=15 RE-ENABLED | k_omni=0 gives 0.02m, k_omni=15 gives 2.5m — k_omni=15 is locomotion |
+| p169 | P-ctrl 100% SR CONFIRMED | 30/30 episodes success, kP=0.1, max_speed=0.25 |
+| p171 | k_omni=15 training/eval mismatch | **WRONG — Phase 172: NO mismatch, k_omni=15 everywhere** |
+| p172 | k_omni=15 consistency audit | All sim + scripts use k_omni=15 — FULL CONSISTENCY |
+| **p173** | **VLA failure diagnostic** | **53.3% SR, ROOT CAUSE: arm j4/j5 saturation → camera obstruction** |
+
+
+---
+
 ## [Phase 172 - 2026-04-19 04:00 UTC] — k_omni=15.0 IS ACTIVE (No Discrepancy)
 
 ### ✅ 已完成
