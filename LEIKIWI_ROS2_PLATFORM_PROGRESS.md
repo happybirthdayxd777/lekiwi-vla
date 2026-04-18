@@ -235,3 +235,83 @@ Phase 166's fix (CORRECT):
 ### Git
 - Commit: Phase 166 — Phase 165 max_speed fix WRONG (IK clips regardless); REAL fix: kP=0.1 + no IK clipping → 30-45% SR
 - Modified: scripts/eval_matched_goals.py, LEIKIWI_ROS2_PLATFORM_PROGRESS.md
+
+---
+
+## [Phase 167 - 2026-04-18 23:30 UTC] — VLA 10% vs P-ctrl 40% Root Cause: Stale Training Data + kP Mismatch
+
+### ✅ 已完成
+
+**Diagnosis: VLA underperforms P-ctrl due to training/eval mismatch**
+
+Matched eval on seed=42 (20 restricted goals):
+- VLA SR: **10%** (1/10 in paired eval, 10/100 overall)
+- P-ctrl SR: **40%** (8/20, matched P-ctrl 4/10 in paired)
+- VLA wins: 0 per-goal comparisons; P-ctrl wins: 3
+
+**Root causes identified:**
+
+1. **Training data uses wrong P-controller (kP=1.5)**
+   - `scripts/collect_jacobian_pcontroller.py`: kP=1.5, max_speed=0.3, wheel_clip=0.5
+   - kP=1.5 causes IK saturation → wheel_speeds clipped to [-0.5, 0.5] → tiny actions
+   - Actions in training data are WRONG DIRECTIONS due to saturation
+
+2. **Eval uses correct P-controller (kP=0.1)**
+   - `scripts/eval_matched_goals.py` Phase 166: kP=0.1, max_speed=0.25, NO wheel clip
+   - kP=0.1 prevents saturation → proportional actions → 40% SR
+
+3. **Training data IK mismatch**
+   - Training: J_c calibrated with k_omni=15 (Phase 163-164 era)
+   - Eval: J_c same formula but kP=0.1
+   - Actions learned from kP=1.5 are systematically wrong
+
+4. **bridge_node.py scale=0.4 already correct**
+   - Phase 164: `vx * 200 * 0.002 = vx * 0.4` converts m/s → m/200steps
+   - This is correct and matches what eval uses
+
+**Key architecture observation:**
+```
+Bridge (Phase 164): kP=0.1, scale=0.4, no wheel clip → correct
+Eval (Phase 166):  kP=0.1, no wheel clip → 40% SR
+Training (Phase 142): kP=1.5, wheel_clip=0.5 → WRONG actions → VLA learns garbage
+```
+
+### 🔍 架構現況
+- `bridge_node.py`: 1063 lines — scale=0.4, kP=0.1, warmup step — correct
+- `eval_matched_goals.py`: Phase 166 — kP=0.1, max_speed=0.25, no wheel clip — correct
+- `collect_jacobian_pcontroller.py`: Phase 142 — kP=1.5, wheel_clip=0.5 — WRONG, needs fix
+- VLA trained on: `jacobian_pctrl_50ep_p143.h5` (641KB — only 50 episodes with wrong controller)
+- Best training data: `leikiwi_goal_p140_50ep_k15.h5` (1.5GB — k_omni=15, GridSearch era)
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Fix training data collection script**
+1. Update `scripts/collect_jacobian_pcontroller.py` to kP=0.1, max_speed=0.25, NO wheel clip
+2. Match the Phase 166 eval P-controller exactly so training=eval
+3. Collect new training data: 50 episodes with correct P-controller
+
+**PRIORITY 2: Retrain VLA on corrected data**
+1. Train new policy on 50+ episodes of kP=0.1 data
+2. Expect: VLA SR should approach P-ctrl SR (within 10-20pp gap)
+
+**PRIORITY 3: Verify bridge_node.py matches eval**
+1. Compare bridge P-controller params with eval P-controller params
+2. Ensure scale=0.4 is used in both _on_cmd_vel and _on_cmd_vel_hmac paths
+
+### 🚫 阻礙
+- **Training uses kP=1.5, eval uses kP=0.1** → systematic mismatch → VLA learns wrong actions
+- **Training data is stale** — jacobian_pctrl_50ep only has 50 episodes (641KB vs 1.5GB goal data)
+- **Need 50+ episodes with correct P-controller** for meaningful VLA training
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p166 | P-ctrl kP=0.1 | 45% SR (9/20) restricted, 30% SR (9/30) unrestricted |
+| p167 | Matched eval seed=42 | VLA 10% SR, P-ctrl 40% SR, VLA wins=0, P-ctrl wins=3 |
+| p167 | Root cause | Train: kP=1.5 + wheel_clip (saturation); Eval: kP=0.1 + no clip |
+| p167 | bridge scale | 0.4 already correct (m/s → m/200steps) |
+| p167 | VLA 10% SR | Trained on kP=1.5 wrong-actions data |
+
+### Git
+- Commit: Phase 167 — VLA 10% vs P-ctrl 40% root cause: training uses kP=1.5 (saturation), eval uses kP=0.1; bridge scale=0.4 is correct; next: fix collect script to kP=0.1 and recollect data
+

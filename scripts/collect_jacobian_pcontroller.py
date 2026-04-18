@@ -41,7 +41,7 @@ class JacobianPController:
     to convert world-frame velocity to wheel angular velocities.
     """
     
-    def __init__(self, kP=1.5, max_speed=0.3, wheel_clip=0.5):
+    def __init__(self, kP=0.1, max_speed=0.25, wheel_clip=None):
         self.kP = kP
         self.max_speed = max_speed
         self.wheel_clip = wheel_clip
@@ -68,11 +68,13 @@ class JacobianPController:
         wheel_speeds = twist_to_contact_wheel_speeds(vx, vy)
         
         # Clip to URDF stable range
-        return np.clip(wheel_speeds, -self.wheel_clip, self.wheel_clip).astype(np.float32)
+        if self.wheel_clip is not None:
+            wheel_speeds = np.clip(wheel_speeds, -self.wheel_clip, self.wheel_clip)
+        return wheel_speeds.astype(np.float32)
 
 
 def collect_episode(sim, controller, goal_pos, max_steps=200,
-                    exploration_noise=0.05, arm_action_scale=0.1,
+                    exploration_noise=0.0, arm_action_scale=0.1,
                     base_body_id=None):
     """
     Collect one goal-directed episode.
@@ -105,14 +107,15 @@ def collect_episode(sim, controller, goal_pos, max_steps=200,
         wheel_vels = controller.compute_wheel_velocities(base_xy, goal_pos)
         
         # Add exploration noise
-        wheel_vels = np.clip(wheel_vels + np.random.normal(0, exploration_noise, 3), -0.5, 0.5)
+        # Phase 167: No noise in collect (matches eval conditions)
         
         # Arm random walk
         arm_delta = np.random.normal(0, arm_action_scale, size=6).astype(np.float32)
         arm_pos = np.clip(arm_pos + arm_delta, -1.0, 1.0)
         
-        # Full action: [arm(6), wheel(3)]
-        action = np.concatenate([arm_pos, wheel_vels]).astype(np.float32)
+        # Convert wheel_speeds (rad/s) to wheel_action (servo units) like eval
+        wheel_action = wheel_vels / 12.0  # matches eval_matched_goals.py
+        action = np.concatenate([arm_pos, wheel_action]).astype(np.float32)
         
         # Step simulation
         obs, reward, done, info = sim.step(action)
@@ -150,7 +153,7 @@ def main():
     
     os.makedirs(os.path.dirname(args.output) or '.', exist_ok=True)
     
-    controller = JacobianPController(kP=1.5, max_speed=0.3, wheel_clip=0.5)
+    controller = JacobianPController(kP=0.1, max_speed=0.25, wheel_clip=None)
     
     all_states, all_actions, all_rewards, all_goals = [], [], [], []
     episode_starts = [0]
@@ -159,7 +162,7 @@ def main():
     successes = 0
     
     print(f"Collecting {args.episodes} episodes with Jacobian P-controller (100% SR method)...")
-    print(f"  kP=1.5, max_speed=0.3, exploration={args.exploration}")
+    print(f"  kP=0.1, max_speed=0.25, exploration={args.exploration}")
     print(f"  goal range: [{args.goal_min}, {args.goal_max}]m")
     print()
     
@@ -222,8 +225,8 @@ def main():
         f.create_dataset('goal_positions', data=all_goals, compression='gzip')
         f.create_dataset('episode_starts', data=episode_starts)
         f.attrs['controller'] = 'JacobianPController (twist_to_contact_wheel_speeds)'
-        f.attrs['kP'] = 1.5
-        f.attrs['max_speed'] = 0.3
+        f.attrs['kP'] = 0.1
+        f.attrs['max_speed'] = 0.25
         f.attrs['k_omni'] = 15.0
         f.attrs['noslip_iterations'] = 10
         f.attrs['success_rate'] = successes / args.episodes
