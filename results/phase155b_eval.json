@@ -1,0 +1,52 @@
+{
+  "checkpoint": "/Users/i_am_ai/hermes_research/lekiwi_vla/results/phase154_sweep_lr2e-05_ep3_20260418_0754/best_policy.pt",
+  "vla": {
+    "success_rate": 0.1,
+    "ci_95_low": 0.01787574951572113,
+    "ci_95_high": 0.4041563854975721,
+    "n_episodes": 10,
+    "successes": 1,
+    "mean_steps": 191.1,
+    "std_steps": 26.7,
+    "mean_final_dist": 1.7050734874413407,
+    "steps_list": [
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      111,
+      200,
+      200
+    ],
+    "distances": [
+      1.2556336645891741,
+      1.9812601254028481,
+      1.764033340311434,
+      2.4667159601636484,
+      1.9936003040984835,
+      1.727434582151246,
+      2.1772294724599046,
+      0.146599006087321,
+      1.7140948797822428,
+      1.8241335393671043
+    ]
+  },
+  "pctrl": {
+    "success_rate": 0.3,
+    "n_episodes": 10,
+    "successes": 3,
+    "mean_steps": 155.0,
+    "std_steps": 72.21634164093332,
+    "mean_final_dist": 0.5342474923864466
+  },
+  "gap_pp": 20.0,
+  "config": {
+    "n_episodes": 10,
+    "threshold": 0.15,
+    "max_steps": 200,
+    "eval_time": "20260418_0947"
+  }
+}
