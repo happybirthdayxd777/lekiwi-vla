@@ -91,3 +91,9 @@ docker-compose.override.yml
 .DS_Store
 Thumbs.db
 data/*.h5
+
+# Phase 154 sweep results (too large for git)
+results/phase154_sweep_lr*/
+
+# Phase 150 train (too large for git)
+results/phase150_train/
