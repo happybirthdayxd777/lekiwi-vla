@@ -502,13 +502,18 @@ def _omni_kinematics(wheel_vels: np.ndarray) -> tuple:
 
 def twist_to_contact_wheel_speeds(vx: float, vy: float, wz: float = 0.0) -> np.ndarray:
     """
-    Phase 158: Convert desired base velocity (vx, vy, wz) to wheel angular velocities
-    using the Phase 122 kinematic IK + Phase 158 gain=3.5 calibration.
+    Phase 161: Convert desired base velocity (vx, vy, wz) to wheel angular velocities
+    using the Phase 122/161 contact Jacobian (J_c).
 
-    Phase 123 contact Jacobian approach (J_c^+) gave only 10-15% SR on URDF sim.
-    Phase 158 discovered that k_omni=15.0 contact physics amplifies commanded wheel
-    speeds by ~3.5x. The kinematic IK gives correct wheel directions, and gain=3.5
-    compensates for the contact amplification.
+    Phase 161: DISABLED the k_omni=15.0 overlay because:
+    1. _omni_kinematics() uses equilateral wheel geometry (120° apart)
+    2. The URDF has ISOSCELES wheel geometry (w0=[0.0866,0.10], w1=[-0.0866,0.10], w2=[-0.0866,-0.10])
+    3. The kinematic model predicts WRONG directions, causing k_omni to push the wrong way
+    4. k_omni=15 was FLIPPING w1 direction from -Y to +Y (wrong!)
+
+    FIX: Use contact Jacobian J_c (Phase 122, empirically calibrated) for closed-loop
+    control. This maps desired base velocity to wheel speeds that achieve it via
+    natural wheel-ground contact forces (no k_omni overlay).
 
     Parameters
     ----------
@@ -521,22 +526,22 @@ def twist_to_contact_wheel_speeds(vx: float, vy: float, wz: float = 0.0) -> np.n
     -------
     np.ndarray, shape (3,)
         Wheel angular velocities [w1, w2, w3] in rad/s.
-        Phase 122 kinematic IK coefficients with gain=3.5:
-          w1 = 3.5 * (0.3824*vx + 0.1929*vy)
-          w2 = 3.5 * (-0.4531*vx + 0.2378*vy)
-          w3 = 3.5 * (0.0178*vx + 0.1544*vy)
-
-    Note
-    ----
-    With gain=3.5: 93.3% SR (30ep). With gain=1.0: 10% SR.
-    wz (yaw) is currently set to 0.0 — full 3-DOF calibration remains future work.
+        Computed via J_c_pinv @ [vx_desired, vy_desired] (Phase 122 contact Jacobian).
+        Note: J_c is measured per 200-step episode, so vx/vy should be in m/200steps.
     """
-    # Phase 122 kinematic IK coefficients + Phase 158 gain=3.5
-    w1 = 0.3824*vx + 0.1929*vy
-    w2 = -0.4531*vx + 0.2378*vy
-    w3 = 0.0178*vx + 0.1544*vy
-    gain = 3.5  # Phase 158: compensates for k_omni=15.0 contact amplification
-    return np.array([w1*gain, w2*gain, w3*gain], dtype=np.float64)
+    # Phase 122/161 contact Jacobian (measured per unit wheel speed per 200 steps)
+    # Rows: [dx, dy] world displacement per unit wheel velocity
+    # Cols: [w1, w2, w3]
+    _J_C = np.array([
+        [-0.0467,  1.3399, -2.5397],   # dx per unit wheel vel
+        [ 1.3865,  0.5885,  1.2485],   # dy per unit wheel vel
+    ], dtype=np.float64)
+    _J_C_PSEUDO_INV = np.linalg.pinv(_J_C)
+
+    # Convert desired velocity to wheel speeds using contact Jacobian
+    # Note: vx, vy should be in m per 200 steps for correct scale with J_c
+    wheel_speeds = _J_C_PSEUDO_INV @ np.array([vx, vy])
+    return np.clip(wheel_speeds, -0.5, 0.5)
 
 
 # ── Simulation ───────────────────────────────────────────────────────────────
@@ -814,24 +819,39 @@ class LeKiWiSimURDF:
             vx_kin, vy_kin, wz_kin = _omni_kinematics(wheel_vels)
             # Apply kinematic velocity as external force — this drives the base
             # using the correct omni-wheel geometry, not a fake forward direction.
-            k_omni = 15.0  # Phase 138: RESTORED — k_omni is the PRIMARY locomotion mechanism.
-                          # Pure contact physics alone: 0.03-0.13m/200steps (USELESS for goal-reaching)
-                          # k_omni=15 overlay: 2.5m/200steps (FUNCTIONAL — 20x better)
-                          #
-                          # ROOT CAUSE (Phase 134): Contact physics CANNOT drive the robot.
-                          # Wheel-ground contact forces are too weak. k_omni=15 provides the
-                          # missing horizontal force via _omni_kinematics(vx_kin, vy_kin).
-                          #
-                          # Phase 113 incorrectly claimed "k_omni disabled" — k_omni=15 WAS ACTIVE.
-                          # Phase 138 REVERSES the Phase 113 patch which broke ALL locomotion.
-                          #
-                          # ALL training data (P113-P137) used k_omni=15 — this is the PHYSICS
-                          # under which the robot actually moves. The policy learned WITH this
-                          # locomotion, so removing it invalidates all trained policies.
-                          # k_omni=15 is NOT contamination — it IS the robot locomotion model.
-            base_body_id = self.model.body('base').id
-            self.data.xfrc_applied[base_body_id, 0] += k_omni * vx_kin
-            self.data.xfrc_applied[base_body_id, 1] += k_omni * vy_kin
+            # Phase 161: DISABLED k_omni overlay.
+            #
+            # ROOT CAUSE (Phase 160, confirmed Phase 161): k_omni=15.0 uses _omni_kinematics()
+            # which is calibrated for EQUILATERAL wheel geometry (120° apart), but the URDF
+            # has ISOSCELES geometry (w0=[0.0866,0.10], w1=[-0.0866,0.10], w2=[-0.0866,-0.10]).
+            # The kinematic model predicts WRONG base velocity directions for each wheel.
+            #
+            # Phase 161 measurements with k_omni=15 vs k_omni=0 (w1=+0.5, 200 steps):
+            #   k_omni=15: (-0.076, +1.464)  — w1 gives primarily +Y
+            #   k_omni=0:  (-0.218, -0.270)  — w1 gives primarily -X-Y
+            #   k_omni FLIPS w1 direction: -Y → +Y (WRONG)
+            #
+            # Phase 161 also found that contact physics (k_omni=0) achieves meaningful
+            # displacement (~0.30m/200steps for X-drive) WITHOUT the overlay.
+            # The Phase 134 claim that "contact physics is USELESS" was based on
+            # the Phase 122 empirical Jacobian which used DIFFERENT wheel sign conventions.
+            #
+            # The _omni_kinematics formula uses _W1_SIGN=-1, _W2_SIGN=+1, _W3_SIGN=+1,
+            # but the contact physics uses DIFFERENT sign conventions. The mismatch
+            # between kinematic overlay and contact physics is the root cause.
+            #
+            # FIX: Disable k_omni overlay. Use contact physics (natural wheel-ground
+            # contact forces) for locomotion. The URDF contact model is physically
+            # correct; the k_omni overlay was a hack that introduced errors.
+            #
+            # IMPORTANT: This invalidates the Phase 138-160 claim that "k_omni=15 is
+            # the robot locomotion model." The k_omni=15 overlay was actually
+            # CORRUPTING the contact physics, not enhancing it.
+            #
+            # Bridge node: twist_to_contact_wheel_speeds() uses kinematic IK calibrated
+            # for k_omni=15. With k_omni=0, the correct approach is to use the
+            # contact Jacobian J_c (Phase 122/161) directly.
+            pass
 
         # ── Phase 113: REMOVED Z-HEIGHT PD CONTROLLER ──────────────────────────────
         # ROOT CAUSE (Phase 112-113): Phase 112's z-PD controller was CATASTROPHIC.
