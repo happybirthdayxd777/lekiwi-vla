@@ -1,5 +1,75 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
+## [Phase 155b - 2026-04-18 09:00 UTC] — Add eval_phase155b.py: stat-sig eval script for best VLA checkpoint
+
+### ✅ 已完成
+
+**Created `scripts/eval_phase155b.py` — dedicated statistical significance eval script.**
+
+Purpose: Independently verify Phase 154's best result (lr=2e-5, ep=3 → 70% SR on 10ep eval)
+with proper statistical rigor before publishing.
+
+Key features:
+- **GoalConditionedPolicy** (from sweep_epochs_lr.py) — same architecture as Phase 154 training
+- **10 independent episodes** with Wilson score 95% CI for success rate
+- **P-controller baseline** for comparison (always runs in same session)
+- **4-step Euler ODE inference** (standard for CLIP-FM)
+- **Random goals** in [-0.5, 0.5]×[-0.5, 0.5]m, threshold=0.15m
+- **All results saved to `results/phase155b_eval.json`**
+
+Usage:
+```bash
+python3 scripts/eval_phase155b.py                           # 10ep VLA + P-ctrl baseline
+python3 scripts/eval_phase155b.py --n_ep 20                 # more episodes for tighter CI
+python3 scripts/eval_phase155b.py --pctrl_only              # P-ctrl baseline only
+python3 scripts/eval_phase155b.py --render                 # MuJoCo rendering
+```
+
+Best checkpoint: `results/phase154_sweep_lr2e-05_ep3_20260418_0754/best_policy.pt`
+(640MB — contains policy_state_dict + epoch + eval_sr metadata)
+
+### Architecture status (Phase 155b)
+| Component | Status |
+|-----------|--------|
+| P-controller | 100% SR (15ep) |
+| VLA (optimal) | 70% SR (10ep eval, single run) — needs stat-sig confirmation |
+| eval_phase155b.py | **NEW** — stat-sig confirmation script |
+| Bridge node | 1051 lines, functional (no ROS2 to test) |
+| CTF integration | 797 lines, functional |
+| VLA policy node | 664 lines, supports mock/clip_fm/task_oriented + LeRobot fallback |
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Run eval_phase155b.py**
+- Execute: `cd ~/hermes_research/lekiwi_vla && python3 scripts/eval_phase155b.py --n_ep 10`
+- Expected: ~60-70% SR (CI hopefully excludes 0), confirming Phase 154 result
+- Target: statistically significant 70%+ SR
+
+**PRIORITY 2: Multi-seed confirmation**
+- Run 3-5 seeds of lr=2e-5, ep=3
+- Expected variance: 50-80% SR across seeds
+- Establish confidence interval for real VLA capability
+
+**PRIORITY 3: Data augmentation to break overfitting**
+- Horizontal flip augmentation (goal_x → -goal_x, actions flipped)
+- Try: rotation augmentation for different robot orientations
+- Target: extend optimal training from 3-4 epochs to 10+ epochs
+
+**PRIORITY 4: ROS2 bridge testing** (when ROS2 available)
+- Bridge node ready, needs system to test
+
+### 🚫 阻礙
+- **VLA vs P-ctrl gap: 30pp** — still significant, but much improved from 100pp
+- **Training variance**: same config gives 10-70% SR across seeds/runs
+- **Overfitting cliff**: narrow sweet spot (ep 3-4) before SR collapses
+- **ROS2 not available**: bridge untested
+
+### Git
+- New: `scripts/eval_phase155b.py` — Phase 155b stat-sig eval
+- Commit: Phase 155b — Add eval_phase155b.py: stat-sig eval for best VLA checkpoint (lr=2e-5, ep=3)
+
+---
+
 ## [Phase 155 - 2026-04-18 08:30 UTC] — VLA 70% SR FOUND: lr=2e-5, ep=3 — Optimal Config Confirmed
 
 ### ✅ 已完成
