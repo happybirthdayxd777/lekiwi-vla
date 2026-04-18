@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
-Phase 158: Train on MERGED Data — phase63 images + jacobian actions
-====================================================================
-KEY INSIGHT from Phase 157 analysis:
+Phase 170: Train on MERGED Data — phase63 images + CORRECTED jacobian kP=0.1 actions
+===================================================================================
 
-- sweep_epochs_lr.py (Phase 154) trained on phase63 actions ONLY
-- jacobian_pctrl_50ep_p143.h5 has CORRECTER Jacobian P-controller actions
-  (79.8% reward vs phase63's 41.7%)
-- BUT jacobian has NO images — only phase63 has images
-- SOLUTION: merge by aligning episodes and using phase63 images + jacobian actions
+KEY INSIGHT from Phase 167/169:
+- Previous jacobian_pctrl_50ep_p143.h5 used kP=1.5 (WRONG - causes IK saturation)
+- jacobian_pctrl_50ep_kP01.h5 uses CORRECT kP=0.1 (matches eval P-controller)
+- jacobian_kP01 collected with: kP=0.1, max_speed=0.25, no wheel clip
+- Result: 30% SR (URDF physics limit), but CORRECT action directions
+
+Previous Phase 158 used kP=1.5 data → VLA 10-30% SR (learned wrong actions)
+This Phase 170 uses kP=0.1 data → VLA should approach P-ctrl baseline (40% SR)
 
 Data alignment strategy:
-- Both datasets: 10k frames, ~50 episodes each
-- Align by finding matching goal positions across datasets
-- For unmatched: use phase63 original actions (GridSearch controller)
-- Result: images from phase63 + better actions from jacobian
+- phase63: has images [N=10000, 224×224×3]
+- jacobian_kP01: has CORRECT actions [N=10000, 9]
+- Align by finding matching goal positions
+- Result: phase63 images + jacobian_kP01 actions (CORRECT directions)
 
 Architecture: GoalConditionedPolicy (same as Phase 154)
 Loss: Flow matching MSE
@@ -53,7 +55,7 @@ def load_merged_data():
         match_mask: [N] bool — True where jacobian action was used
     """
     f63 = h5py.File(ROOT / "data/phase63_reachable_10k_converted.h5", "r")
-    fj  = h5py.File(ROOT / "data/jacobian_pctrl_50ep_p143.h5", "r")
+    fj  = h5py.File(ROOT / "data/jacobian_pctrl_50ep_kP01.h5", "r")
     
     # Load phase63
     images_raw = f63["images"][:]          # [N, 224, 224, 3] uint8
