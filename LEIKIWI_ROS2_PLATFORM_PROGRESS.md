@@ -350,3 +350,92 @@ Data: 10k pre-rendered images (phase63_converted.h5)
 - Repo: ~/hermes_research/lekiwi_vla
 - Bridge: ~/hermes_research/lekiwi_vla/src/lekiwi_ros2_bridge/
 - Modular (ROS2): ~/hermes_research/lekiwi_modular/
+
+---
+
+## [Phase 162 - 2026-04-18 15:00 UTC] — CRITICAL: URDF Contact Model Has NO +X Locomotion — Robot is 90° Misconfigured
+
+### ✅ 已完成
+
+**ROOT CAUSE IDENTIFIED: URDF contact physics produce 0.07-0.60m displacement but ONLY in -X and +Y quadrants.**
+
+Phase 161 disabled k_omni=15 and claimed "use contact Jacobian J_c for closed-loop control". But Phase 162 discovered the contact model itself has a severe geometric limitation: **the robot can barely move in the +X world direction**.
+
+**Full 27-action grid search (k_omni=0, 200 steps):**
+```
+Best actions by direction:
+  +Y dominant (90°):  [-0.5,+0.5,+0.0] → dx=-0.067, dy=+0.594, dist=0.60m ← BEST
+  +Y quadrant (80-110°): 10+ actions, 0.3-0.6m
+  -Y quadrant (-70 to -120°): 8 actions, 0.15-0.33m  
+  -X quadrant: ONLY 2 actions with tiny dx=+0.001-0.069m
+  
+  Best +X action: [0.5,+0.5,+0.0] → dx=+0.069m ONLY!
+  Robot CANNOT move forward in +X world direction.
+```
+
+**P-controller (J_c-based) on k_omni=0: 20.0% SR**
+- Same 20% as GridSearchController (mechanically limited, not algorithmic)
+- Goals in +X quadrant fail because robot physically cannot move there
+- This is NOT a controller bug — it's a URDF contact geometry problem
+
+**URDF Contact Jacobian (fresh calibration, k_omni=0):**
+```
+_CONTACT_JACOBIAN_KOMNI0 = np.array([
+    [-0.1607, -0.1063, -0.0113],  # dx
+    [-0.4089,  0.1261, -0.0479],  # dy
+])
+```
+
+**URDF Configuration Analysis:**
+- Wheel axes: w0=[0.0866,0.10], w1=[-0.0866,0.10], w2=[-0.0866,-0.10] (isosceles, NOT equilateral)
+- Phase 161 correctly identified: _omni_kinematics() uses WRONG equilateral model
+- But the deeper problem: even contact physics can't push +X
+- This is likely a MuJoCo contact friction/geometry issue with the URDF geoms
+
+**Why Phase 158 claimed 93.3% SR on "URDF":**
+- Phase 158 was likely testing with `sim_lekiwi.py` (primitive cylinders, LeKiWiSim class)
+- NOT `sim_lekiwi_urdf.py` (LeKiWiSimURDF with URDF meshes)
+- The primitive sim has different contact geometry → can move in all directions
+- This is the SAME confusion documented in Phase 160
+
+### 🔍 架構現況
+- `sim_lekiwi_urdf.py` — k_omni=0, contact-only physics: robot cannot reach +X goals
+- `sim_lekiwi.py` (primitive) — different contact geometry, possibly functional
+- Bridge node: `src/lekiwi_ros2_bridge/bridge_node.py` (1059 lines)
+- VLA policies: ALL trained on k_omni=15 physics (non-transferable to k_omni=0)
+
+### 🧭 下一步（下次心跳）
+
+**Option A: Fix URDF contact geometry for +X locomotion**
+1. Adjust wheel contact geoms (friction, geometry) to enable +X motion
+2. Or add a baseContact plate with proper friction
+3. Re-calibrate J_c after geometry fix
+
+**Option B: Use LeKiWiSim (primitive) for VLA training**
+1. LeKiWiSim may have working contact physics in all directions
+2. Re-evaluate whether primitive sim actually achieves goal-reaching
+3. Bridge node already supports both sim types
+
+**Option C: Abandon closed-loop, use open-loop primitives**
+1. Robot can reach goals in 240° of directions (all except ~120-180° quadrant)
+2. Train VLA for achievable goal space only
+3. Add "out of reach" detection
+
+### 🚫 阻礙
+- **URDF contact cannot move +X** — fundamental geometry/friction issue
+- **k_omni=15 corrupts closed-loop** — pushes wrong direction (Phase 161 confirmed)
+- **All VLA training data on k_omni=15** — not transferable
+- **sim vs sim_urdf confusion** — need to clearly distinguish
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p161 | Disable k_omni=15 | Contact only 0.07-0.60m, use J_c |
+| p162 | **Full 27-action grid** | **Robot CANNOT move +X (best: 0.069m), can move +Y (0.60m max)** |
+| p162 | Fresh J_c calibration | J_c = [[-0.16,-0.11,-0.01],[-0.41,0.13,-0.05]] |
+| p162 | P-controller k_omni=0 | 20% SR (contact limitation, not algorithmic) |
+| p162 | Phase 158 confusion | Likely tested LeKiWiSim (primitive), NOT URDF |
+
+### Git
+- No code changes — analysis only
+- Commit Phase 161 already has k_omni disabled and recalibrate_contact_jacobian.py
