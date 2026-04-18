@@ -134,7 +134,7 @@ class GoalConditionedPolicy(nn.Module):
         action = torch.randn(image.shape[0], 9, device=self.device)
         dt = 1.0 / num_steps
         for i in range(num_steps):
-            t = torch.full([image.shape[0], 1.0 - i * dt], device=self.device)
+            t = torch.full([image.shape[0], 1], 1.0 - i * dt, device=self.device)
             vision_tokens = self.clip_encoder(image)
             cls_token = vision_tokens[:, 0, :]
             state_feat = self.state_net(state)
