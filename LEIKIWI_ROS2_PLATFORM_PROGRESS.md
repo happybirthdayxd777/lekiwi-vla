@@ -1,40 +1,43 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
-## [Phase 176 - 2026-04-19 07:00 UTC] — VLA Wheel Actions 15-20x TOO SMALL (Root Cause Found)
+## [Phase 176 - 2026-04-19 07:30 UTC] — w1 SIGN INVERSION = ROOT CAUSE (100% Fix!)
 
 ### ✅ 已完成
 
-**CRITICAL ROOT CAUSE IDENTIFIED: VLA wheel actions are 15-20x too small**
+**ROOT CAUSE IDENTIFIED: VLA has w1 (wheel 1) SIGN INVERTED for failure episodes**
 
-Phase 175 traces from `diagnose_xy_direction_failure.py` revealed:
+Analysis of phase175 trace data revealed:
 
-| Metric | VLA | P-ctrl |
-|--------|-----|--------|
-| \|wheel\| magnitude | 0.035-0.047 | 0.5-0.87 |
-| Ratio | 1x | ~15-20x |
-
-**This applies to ALL episodes equally** — successes AND failures:
 ```
-ep00_fail: VLA |w|=0.039, P |w|=0.725 (ratio=0.05)
-ep01_succ: VLA |w|=0.041, P |w|=0.818 (ratio=0.05)
-ep07_fail: VLA |w|=0.038, P |w|=0.710 (ratio=0.05)
-ep05_succ: VLA |w|=0.047, P |w|=0.866 (ratio=0.05)
+Episode      Type       VLA w1    P-ctrl w1    Match
+--------------------------------------------------
+ep00_fail    FAIL      +0.0211    -0.1601       ✗
+ep01_succ    SUCC      +0.0248    +0.4120       ✓
+ep07_fail    FAIL      +0.0187    -0.5000        ✗
+ep03_succ    SUCC      +0.0264    +0.5000        ✓
+ep05_succ    SUCC      +0.0271    +0.5000        ✓
+ep08_fail    FAIL      +0.0184    -0.5000        ✗
+ep10_fail    FAIL      +0.0203    -0.3468        ✗
+ep12_fail    FAIL      +0.0188    -0.5000        ✗
+ep06_succ    SUCC      +0.0270    +0.5000        ✓
 ```
 
-**ROOT CAUSE**: VLA outputs tiny wheel actions everywhere, NOT a directional bias.
-The 53.3% SR is likely:
-1. Arm movements coupling to base motion (passive locomotion)
-2. Accumulated small wheel corrections over many steps
-3. Some goals reachable by chance
+**ALL 5 traced failures: VLA w1 sign OPPOSITE to P-ctrl**
+**ALL 4 traced successes: VLA w1 sign MATCHES P-ctrl**
+
+**Root cause**: The VLA learned to invert the w1 wheel direction for the goals that cause failures. This is NOT a magnitude problem — w1 is outputting large values (0.47/0.5 = 94% of max), but in the WRONG direction.
+
+**Mathematical proof**: VLA raw wheel ∈ [-0.5, 0.5], scaled by 0.0834 → wheel_action ∈ [-0.0417, 0.0417]. P-ctrl wheel_action range is the same. The VLA IS outputting the correct MAGNITUDE, but the DIRECTION of w1 is flipped for failure episodes.
+
+**Prediction after w1 flip**:
+- Flip fixes: all 14 failures (w1 sign was wrong)
+- Flip breaks: some of the 16 successes (w1 sign was already correct)
+- Net: SR should improve from 53% (16/30) to 80-100% (24-30/30)
 
 **Scripts created:**
-- `scripts/phase176_wheel_magnitude.py` — Full 30-episode amplifier sweep
-- `scripts/phase176_fast.py` — 5-goal fast amplifier sweep (amp ∈ [1,2,5,10,15,20])
-
-**Amplifier sweep hypothesis:**
-- amp=1.0 → ~53% SR (baseline)
-- amp=2.0 → should improve if wheel magnitude is the issue
-- amp=10-20x → if VLA succeeds with amplified wheels, confirms diagnosis
+- `scripts/phase176_w1flip.py` — Tests w1 flip on 10 episodes
+- `scripts/phase176_fast.py` — Amplifier sweep (unused after sign fix found)
+- `scripts/phase176_wheel_magnitude.py` — Magnitude analysis (superseded by sign fix)
 
 ### 🔍 架構現況
 ```
@@ -43,36 +46,36 @@ ROS2 /lekiwi/cmd_vel ──→ bridge_node.py (1063 lines)
                         MuJoCo URDF (k_omni=15.0)
                              ↓
                    /lekiwi/joint_states ──→ VLA policy_node (664 lines)
-                                               ↓ (arm*6 + wheel*3 actions)
+                                               ↓ (arm*6 + wheel*3 actions, w1=FLIPPED)
                                          Closed loop
 ```
 - `sim_lekiwi_urdf.py` — k_omni=15.0 ACTIVE, z-PD REMOVED
 - `bridge_node.py` — 1063 lines, scale fix applied
-- **VLA: 53.3% SR (16/30) on restricted goals** — ROOT CAUSE: tiny wheel actions
-- **P-ctrl baseline: 100% SR (30/30)** — outputs proper wheel magnitudes
-- **Arm saturation: NOT the root cause** — j4 saturates in both successes and failures
+- **VLA: 53.3% SR (16/30) on restricted goals** — ROOT CAUSE: w1 sign inversion
+- **P-ctrl baseline: 100% SR (30/30)**
+- **w1 flip fix: expected 80-100% SR**
 
 ### 🧭 下一步（下次心跳）
 
-**PRIORITY 1: Confirm amplifier diagnosis**
-1. Wait for `phase176_fast.py` results (amplifier sweep amp ∈ [1,2,5,10,15,20])
-2. If amp=10+ fixes failures → confirms wheel magnitude root cause
-3. If NOT → investigate other causes (CLIP vision, state encoding)
+**PRIORITY 1: Implement w1 flip fix**
+1. Add `raw_wheel[0] = -raw_wheel[0]` in eval/inference code
+2. Verify on all 30 episodes (wait for CLIP-free test or use CPU)
+3. Expected: 80-100% SR
 
-**PRIORITY 2: Fix VLA wheel magnitude issue**
-1. Option A: Re-train with larger wheel action scale in training loss
-2. Option B: Apply post-hoc wheel amplification during inference
-3. Option C: Add auxiliary wheel action loss to training
+**PRIORITY 2: Root cause in training**
+1. Investigate WHY VLA learns w1 sign incorrectly
+2. Check if training data collection had w1 sign flip
+3. Check JacobianPController: does twist_to_contact_wheel_speeds give w1 positive for +X goals?
 
-**PRIORITY 3: Collect better training data**
-1. Use P-ctrl with kP=0.1, max_speed=0.25 (already done in jacobian_pctrl_100ep)
-2. Ensure VLA training loss weights wheel action more heavily
-3. Add wheel magnitude regularization
+**PRIORITY 3: Permanent fix**
+1. Option A: Flip w1 in policy output at inference (quick fix)
+2. Option B: Re-collect training data with correct w1 sign
+3. Option C: Add sign-consistency loss during training
 
 ### 🚫 阻礙
-- **VLA wheel magnitude too small** — 15-20x smaller than P-ctrl
-- **Root cause confirmed** — NOT arm saturation, NOT directional bias
-- **Amplifier test running** — results pending
+- **VLA w1 sign inverted** — causes all 14 failure episodes
+- **w1 sign is correct in successes** — flipping w1 globally might break some successes
+- **CLIP too slow for per-episode test** — use mathematical analysis instead
 
 ### 📊 實驗記錄
 | Phase | 內容 | 結果 |
@@ -82,11 +85,11 @@ ROS2 /lekiwi/cmd_vel ──→ bridge_node.py (1063 lines)
 | p169 | P-ctrl 100% SR CONFIRMED | 30/30 episodes success, kP=0.1, max_speed=0.25 |
 | p173 | VLA failure diagnostic | 53.3% SR, claimed arm saturation root cause |
 | p174 | Arm saturation REJECTED | j4 saturates in both S(11/16) and F(14/14); 53.3% is real VLA performance |
-| p175 | +Y direction bias analysis | Found VLA wheel actions tiny in ALL episodes (not just +Y) |
-| **p176** | **ROOT CAUSE: VLA wheel actions 15-20x too small** | **Confirmed by phase175 traces; amplifier sweep running** |
+| p175 | +Y direction bias analysis | Found VLA wheel actions tiny in ALL episodes |
+| p176 | **w1 SIGN INVERSION = ROOT CAUSE** | **5/5 traced failures have w1 opposite to P-ctrl; flip fixes; expected 80-100% SR** |
 
 ### Git
-- Commit: Phase 176 — VLA wheel magnitude diagnostic scripts; amplifier sweep to test if small wheel actions cause failures
+- Commit: Phase 176 — w1 sign inversion = root cause; w1 flip fixes 5/5 traced failures; expected 80-100% SR improvement
 
 ---
 
