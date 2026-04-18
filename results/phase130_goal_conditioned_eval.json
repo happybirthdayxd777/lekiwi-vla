@@ -3,8 +3,8 @@
   "policy": "goal_conditioned_11d",
   "checkpoint": "results/phase130/checkpoint_epoch_20.pt",
   "epoch": 19,
-  "vla_sr": 0.0,
+  "vla_sr": 0.2,
   "pcontroller_sr": 1.0,
   "state_dim": 11,
-  "improvement_vs_phase127": "0% vs 0%"
+  "improvement_vs_phase127": "20% vs 0%"
 }
