@@ -1,0 +1,431 @@
+{
+  "summary": {
+    "vla_sr": 53.333333333333336,
+    "pctrl_sr": 100.0,
+    "n_episodes": 30,
+    "seed": 42,
+    "wheel_scale": 0.0834
+  },
+  "results": [
+    {
+      "episode": 0,
+      "goal": [
+        0.3643736243247986,
+        -0.036672934889793396
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.25290336788147877,
+      "pctrl_success": true,
+      "pctrl_steps": 64,
+      "pctrl_final_dist": 0.142040806419661,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 1,
+      "goal": [
+        0.415158748626709,
+        0.11842081695795059
+      ],
+      "vla_success": true,
+      "vla_steps": 194,
+      "vla_final_dist": 0.14809449801147853,
+      "pctrl_success": true,
+      "pctrl_steps": 73,
+      "pctrl_final_dist": 0.14545753614734303,
+      "status": "TIE"
+    },
+    {
+      "episode": 2,
+      "goal": [
+        -0.043493591248989105,
+        0.28537341952323914
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.44465566459036315,
+      "pctrl_success": true,
+      "pctrl_steps": 64,
+      "pctrl_final_dist": 0.14641108283946835,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 3,
+      "goal": [
+        0.3566838204860687,
+        0.1716385781764984
+      ],
+      "vla_success": true,
+      "vla_steps": 178,
+      "vla_final_dist": 0.1478894651072,
+      "pctrl_success": true,
+      "pctrl_steps": 69,
+      "pctrl_final_dist": 0.14753668523774852,
+      "status": "TIE"
+    },
+    {
+      "episode": 4,
+      "goal": [
+        -0.023131821304559708,
+        -0.029768437147140503
+      ],
+      "vla_success": true,
+      "vla_steps": 1,
+      "vla_final_dist": 0.03769935022051888,
+      "pctrl_success": true,
+      "pctrl_steps": 1,
+      "pctrl_final_dist": 0.03769935022051888,
+      "status": "TIE"
+    },
+    {
+      "episode": 5,
+      "goal": [
+        0.12247881293296814,
+        0.2560589909553528
+      ],
+      "vla_success": true,
+      "vla_steps": 151,
+      "vla_final_dist": 0.14837116861003444,
+      "pctrl_success": true,
+      "pctrl_steps": 76,
+      "pctrl_final_dist": 0.1477932761426855,
+      "status": "TIE"
+    },
+    {
+      "episode": 6,
+      "goal": [
+        0.2863190770149231,
+        0.19365696609020233
+      ],
+      "vla_success": true,
+      "vla_steps": 169,
+      "vla_final_dist": 0.14954784121470746,
+      "pctrl_success": true,
+      "pctrl_steps": 63,
+      "pctrl_final_dist": 0.14576990695927947,
+      "status": "TIE"
+    },
+    {
+      "episode": 7,
+      "goal": [
+        0.16604851186275482,
+        -0.16365677118301392
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.3869317721568645,
+      "pctrl_success": true,
+      "pctrl_steps": 64,
+      "pctrl_final_dist": 0.14818476493900318,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 8,
+      "goal": [
+        0.23275087773799896,
+        -0.26170966029167175
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.4495397122900276,
+      "pctrl_success": true,
+      "pctrl_steps": 95,
+      "pctrl_final_dist": 0.1467862579652927,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 9,
+      "goal": [
+        0.39657869935035706,
+        0.0789986401796341
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.1527534252687978,
+      "pctrl_success": true,
+      "pctrl_steps": 68,
+      "pctrl_final_dist": 0.1446186640271019,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 10,
+      "goal": [
+        0.3548526465892792,
+        -0.08728441596031189
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.29780479172253754,
+      "pctrl_success": true,
+      "pctrl_steps": 68,
+      "pctrl_final_dist": 0.14579157102783408,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 11,
+      "goal": [
+        0.48241880536079407,
+        0.23587267100811005
+      ],
+      "vla_success": true,
+      "vla_steps": 194,
+      "vla_final_dist": 0.14928921229456857,
+      "pctrl_success": true,
+      "pctrl_steps": 80,
+      "pctrl_final_dist": 0.1467608005826606,
+      "status": "TIE"
+    },
+    {
+      "episode": 12,
+      "goal": [
+        0.3670300841331482,
+        -0.18321678042411804
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.38837209761670793,
+      "pctrl_success": true,
+      "pctrl_steps": 83,
+      "pctrl_final_dist": 0.14858560389920572,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 13,
+      "goal": [
+        0.18003259599208832,
+        -0.2737177312374115
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.4642218465715225,
+      "pctrl_success": true,
+      "pctrl_steps": 100,
+      "pctrl_final_dist": 0.1485907668299845,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 14,
+      "goal": [
+        -0.007426304742693901,
+        0.1098293736577034
+      ],
+      "vla_success": true,
+      "vla_steps": 1,
+      "vla_final_dist": 0.11008015861259826,
+      "pctrl_success": true,
+      "pctrl_steps": 1,
+      "pctrl_final_dist": 0.11008015861259826,
+      "status": "TIE"
+    },
+    {
+      "episode": 15,
+      "goal": [
+        0.3468572795391083,
+        0.28050583600997925
+      ],
+      "vla_success": true,
+      "vla_steps": 185,
+      "vla_final_dist": 0.1457473039330985,
+      "pctrl_success": true,
+      "pctrl_steps": 76,
+      "pctrl_final_dist": 0.1489396851408551,
+      "status": "TIE"
+    },
+    {
+      "episode": 16,
+      "goal": [
+        0.09549521654844284,
+        -0.07772417366504669
+      ],
+      "vla_success": true,
+      "vla_steps": 1,
+      "vla_final_dist": 0.12312750933706215,
+      "pctrl_success": true,
+      "pctrl_steps": 1,
+      "pctrl_final_dist": 0.12312750933706215,
+      "status": "TIE"
+    },
+    {
+      "episode": 17,
+      "goal": [
+        0.18173348903656006,
+        -0.18631719052791595
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.3982430651214855,
+      "pctrl_success": true,
+      "pctrl_steps": 71,
+      "pctrl_final_dist": 0.1488674186419285,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 18,
+      "goal": [
+        -0.022047096863389015,
+        -0.014577044174075127
+      ],
+      "vla_success": true,
+      "vla_steps": 1,
+      "vla_final_dist": 0.02643037451411908,
+      "pctrl_success": true,
+      "pctrl_steps": 1,
+      "pctrl_final_dist": 0.02643037451411908,
+      "status": "TIE"
+    },
+    {
+      "episode": 19,
+      "goal": [
+        0.03614560887217522,
+        0.10188839584589005
+      ],
+      "vla_success": true,
+      "vla_steps": 1,
+      "vla_final_dist": 0.1081098989398707,
+      "pctrl_success": true,
+      "pctrl_steps": 1,
+      "pctrl_final_dist": 0.1081098989398707,
+      "status": "TIE"
+    },
+    {
+      "episode": 20,
+      "goal": [
+        0.16229115426540375,
+        0.19960691034793854
+      ],
+      "vla_success": true,
+      "vla_steps": 137,
+      "vla_final_dist": 0.14895302127713791,
+      "pctrl_success": true,
+      "pctrl_steps": 61,
+      "pctrl_final_dist": 0.14722464315332592,
+      "status": "TIE"
+    },
+    {
+      "episode": 21,
+      "goal": [
+        0.32015904784202576,
+        -0.11258001625537872
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.31465522600391,
+      "pctrl_success": true,
+      "pctrl_steps": 69,
+      "pctrl_final_dist": 0.14761617099771504,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 22,
+      "goal": [
+        0.3993558883666992,
+        0.18285861611366272
+      ],
+      "vla_success": true,
+      "vla_steps": 187,
+      "vla_final_dist": 0.14419501195669399,
+      "pctrl_success": true,
+      "pctrl_steps": 73,
+      "pctrl_final_dist": 0.1426267392816031,
+      "status": "TIE"
+    },
+    {
+      "episode": 23,
+      "goal": [
+        0.13248702883720398,
+        -0.12700313329696655
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.37828480165617645,
+      "pctrl_success": true,
+      "pctrl_steps": 56,
+      "pctrl_final_dist": 0.14911057078503956,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 24,
+      "goal": [
+        0.30949729681015015,
+        -0.2161485105752945
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.41103759085475916,
+      "pctrl_success": true,
+      "pctrl_steps": 95,
+      "pctrl_final_dist": 0.1486965984244797,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 25,
+      "goal": [
+        0.019944921135902405,
+        -0.29558265209198
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.5252987343632836,
+      "pctrl_success": true,
+      "pctrl_steps": 76,
+      "pctrl_final_dist": 0.14909970952767093,
+      "status": "PCTRL_WIN"
+    },
+    {
+      "episode": 26,
+      "goal": [
+        0.3721546232700348,
+        0.09891051054000854
+      ],
+      "vla_success": true,
+      "vla_steps": 191,
+      "vla_final_dist": 0.14673497295288024,
+      "pctrl_success": true,
+      "pctrl_steps": 66,
+      "pctrl_final_dist": 0.1477794867798406,
+      "status": "TIE"
+    },
+    {
+      "episode": 27,
+      "goal": [
+        0.3230992257595062,
+        0.1684374213218689
+      ],
+      "vla_success": true,
+      "vla_steps": 173,
+      "vla_final_dist": 0.14971555111348148,
+      "pctrl_success": true,
+      "pctrl_steps": 66,
+      "pctrl_final_dist": 0.14894635572350395,
+      "status": "TIE"
+    },
+    {
+      "episode": 28,
+      "goal": [
+        0.17534945905208588,
+        0.04124471917748451
+      ],
+      "vla_success": true,
+      "vla_steps": 119,
+      "vla_final_dist": 0.14932497977068526,
+      "pctrl_success": true,
+      "pctrl_steps": 36,
+      "pctrl_final_dist": 0.14880054375543314,
+      "status": "TIE"
+    },
+    {
+      "episode": 29,
+      "goal": [
+        -0.016121800988912582,
+        -0.23128195106983185
+      ],
+      "vla_success": false,
+      "vla_steps": 200,
+      "vla_final_dist": 0.4982666723239953,
+      "pctrl_success": true,
+      "pctrl_steps": 58,
+      "pctrl_final_dist": 0.14695028117544026,
+      "status": "PCTRL_WIN"
+    }
+  ]
+}
