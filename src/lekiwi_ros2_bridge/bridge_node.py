@@ -347,6 +347,10 @@ class LeKiWiBridge(Node):
             self.get_logger().info("Starting LeKiWiSimURDF (STL mesh geometry) via make_sim()…")
             self.sim = make_sim("urdf", render=False)
             self.get_logger().info("URDF simulation initialised.")
+            # Phase 164 FIX: Warmup step — base_position is zero before first step
+            # After one step, base settles to correct z=0.075 with proper quaternion
+            self.sim.step(np.zeros(9))
+            self.get_logger().info("URDF warmup: 1 step to stabilise base position.")
             self.hw = None
             # Phase 96: Start background camera adapter for 20 Hz image publishing
             self.camera_adapter = CameraAdapter(
@@ -562,7 +566,9 @@ class LeKiWiBridge(Node):
 
         # HMAC verified — reset watchdog and apply command
         self._last_cmd_vel_time = self.get_clock().now()
-        wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
+        # Phase 164 FIX: Apply same scale factor as _on_cmd_vel
+        SCALE = 200 * 0.002  # = 0.4
+        wheel_speeds = twist_to_wheel_speeds(vx * SCALE, vy * SCALE, wz)
         if self._recorder is not None:
             self._recorder.record_cmd_vel(vx, vy, wz)
         arm_action = self._last_action[0:6]
@@ -625,7 +631,12 @@ class LeKiWiBridge(Node):
                 f"CTF [{ctf_alert.challenge_id}] on raw cmd_vel — hmac_verified=False (allowed by policy)")
 
         # Compute wheel angular velocities from kinematics
-        wheel_speeds = twist_to_wheel_speeds(vx, vy, wz)
+        # Phase 164 FIX: Scale factor for Jacobian IK units
+        # twist_to_contact_wheel_speeds() uses J_c calibrated for m/200steps
+        # ROS2 Twist provides vx,vy in m/s → MuJoCo timestep=0.002s
+        # Scale: vx_m_per_200steps = vx_m_per_s * (200 * 0.002) = vx * 0.4
+        SCALE = 200 * 0.002  # = 0.4
+        wheel_speeds = twist_to_wheel_speeds(vx * SCALE, vy * SCALE, wz)
 
         # ── Trajectory recording: log cmd_vel ───────────────────────────────────
         if self._recorder is not None:
