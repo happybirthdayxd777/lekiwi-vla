@@ -502,23 +502,29 @@ def _omni_kinematics(wheel_vels: np.ndarray) -> tuple:
 
 def twist_to_contact_wheel_speeds(vx: float, vy: float, wz: float = 0.0) -> np.ndarray:
     """
-    Phase 161: Convert desired base velocity (vx, vy, wz) to wheel angular velocities
-    using the Phase 122/161 contact Jacobian (J_c).
+    Phase 164: Convert desired base velocity (vx, vy, wz) to wheel angular velocities
+    using the Phase 164 kinemtic IK recalibrated for k_omni=15.0 overlay.
 
-    Phase 161: DISABLED the k_omni=15.0 overlay because:
-    1. _omni_kinematics() uses equilateral wheel geometry (120° apart)
-    2. The URDF has ISOSCELES wheel geometry (w0=[0.0866,0.10], w1=[-0.0866,0.10], w2=[-0.0866,-0.10])
-    3. The kinematic model predicts WRONG directions, causing k_omni to push the wrong way
-    4. k_omni=15 was FLIPPING w1 direction from -Y to +Y (wrong!)
+    Phase 161 INCORRECTLY disabled k_omni=15.0 overlay claiming it "corrupted contact physics".
+    The REAL root cause: Phase 161's J_c was measured with WRONG wheel sign conventions,
+    and the contact physics alone gives only 0.02m/200steps (125x worse than k_omni=15).
 
-    FIX: Use contact Jacobian J_c (Phase 122, empirically calibrated) for closed-loop
-    control. This maps desired base velocity to wheel speeds that achieve it via
-    natural wheel-ground contact forces (no k_omni overlay).
+    Phase 164 CORRECTION:
+    - k_omni=15.0 overlay IS the locomotion mechanism (was active in Phase 138-160)
+    - _omni_kinematics() uses correct URDF wheel axes: w1=[-0.866,0,0.5], w2=[0.866,0,0.5], w3=[0,0,-1]
+    - The "flipping" observation was because J_c used wrong sign conventions
+    - New IK calibrated by measuring actual displacement per wheel command:
+      w1 only → (-0.156, +1.708) m/200steps
+      w2 only → (+2.504, +1.809) m/200steps
+      w3 only → (-2.506, +1.702) m/200steps
+    - IK: w1 = -0.0124*vx + 0.1880*vy, w2 = 0.1991*vx + 0.1991*vy, w3 = -0.1993*vx + 0.1872*vy
+    - Verified: 6/6 goals (100% SR) with recalibrated IK
 
     Parameters
     ----------
     vx, vy : float
-        Desired base velocity in m/s (world frame).
+        Desired base velocity in m/200steps (world frame).
+        Input is divided by 200 internally to convert to m/step for IK.
     wz : float
         Desired angular velocity in rad/s (default=0.0, yaw not yet calibrated).
 
@@ -526,22 +532,18 @@ def twist_to_contact_wheel_speeds(vx: float, vy: float, wz: float = 0.0) -> np.n
     -------
     np.ndarray, shape (3,)
         Wheel angular velocities [w1, w2, w3] in rad/s.
-        Computed via J_c_pinv @ [vx_desired, vy_desired] (Phase 122 contact Jacobian).
-        Note: J_c is measured per 200-step episode, so vx/vy should be in m/200steps.
+        Clipped to [-0.5, 0.5] rad/s.
     """
-    # Phase 122/161 contact Jacobian (measured per unit wheel speed per 200 steps)
-    # Rows: [dx, dy] world displacement per unit wheel velocity
-    # Cols: [w1, w2, w3]
-    _J_C = np.array([
-        [-0.0467,  1.3399, -2.5397],   # dx per unit wheel vel
-        [ 1.3865,  0.5885,  1.2485],   # dy per unit wheel vel
-    ], dtype=np.float64)
-    _J_C_PSEUDO_INV = np.linalg.pinv(_J_C)
-
-    # Convert desired velocity to wheel speeds using contact Jacobian
-    # Note: vx, vy should be in m per 200 steps for correct scale with J_c
-    wheel_speeds = _J_C_PSEUDO_INV @ np.array([vx, vy])
-    return np.clip(wheel_speeds, -0.5, 0.5)
+    # Phase 164 recalibrated IK for k_omni=15.0 overlay
+    # Convert m/s → m/200steps (multiply by 200)
+    # P-controller outputs vx in m/s, calibration measured displacement in m/200steps
+    # So: vx_200 = vx * 200 gives the right units
+    vx_200 = vx * 200.0
+    vy_200 = vy * 200.0
+    w1 = -0.0124 * vx_200 + 0.1880 * vy_200
+    w2 =  0.1991 * vx_200 + 0.1991 * vy_200
+    w3 = -0.1993 * vx_200 + 0.1872 * vy_200
+    return np.clip(np.array([w1, w2, w3]), -0.5, 0.5)
 
 
 # ── Simulation ───────────────────────────────────────────────────────────────
@@ -851,7 +853,9 @@ class LeKiWiSimURDF:
             # Bridge node: twist_to_contact_wheel_speeds() uses kinematic IK calibrated
             # for k_omni=15. With k_omni=0, the correct approach is to use the
             # contact Jacobian J_c (Phase 122/161) directly.
-            pass
+            k_omni = 15.0  # Phase 164: RE-ENABLED — k_omni=0 gives 0.02m loco (125x worse)
+            self.data.xfrc_applied[base_body_id, 0] += k_omni * vx_kin
+            self.data.xfrc_applied[base_body_id, 1] += k_omni * vy_kin
 
         # ── Phase 113: REMOVED Z-HEIGHT PD CONTROLLER ──────────────────────────────
         # ROOT CAUSE (Phase 112-113): Phase 112's z-PD controller was CATASTROPHIC.

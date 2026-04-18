@@ -165,28 +165,11 @@ class GoalConditionedPolicy(nn.Module):
 
 # ── Omni-wheel IK ───────────────────────────────────────────────────────────────
 # Phase 159: Uses kinematic IK coefficients (Phase 122) + gain=3.5 (Phase 158).
-# k_omni=15.0 contact physics amplifies commanded wheel speeds by ~3.5x.
-# OLD twist_to_contact_wheel_speeds (Phase 123 contact Jacobian): 10-15% SR
-# NEW Kinematic IK + gain=3.5: 93.3% SR
-
-_PCTRL_GAIN = 3.5  # Phase 158: compensates for k_omni=15.0 contact amplification
-
-def twist_to_contact_wheel_speeds(vx, vy, wz=0.0, gain=_PCTRL_GAIN):
-    """
-    Phase 122 kinematic IK + Phase 158 gain=3.5.
-    
-    Old Phase 123 contact Jacobian approach gave wrong wheel directions
-    and only 10-15% SR. The kinematic IK coefficients are correct for
-    the URDF geometry, and gain=3.5 compensates for k_omni=15.0 physics.
-    
-    gain=1.0:   10% SR (old broken baseline)
-    gain=3.5:   93.3% SR (Phase 158 calibrated)
-    """
-    # Phase 122 calibrated kinematic IK coefficients
-    w1 = 0.3824*vx + 0.1929*vy
-    w2 = -0.4531*vx + 0.2378*vy
-    w3 = 0.0178*vx + 0.1544*vy
-    return np.array([w1*gain, w2*gain, w3*gain], dtype=np.float64)
+# Phase 164: Uses the corrected twist_to_contact_wheel_speeds from sim_lekiwi_urdf.py
+# Phase 161 INCORRECTLY disabled k_omni=15.0 and used wrong J_c calibration
+# Phase 164 CORRECTED: k_omni=15.0 re-enabled, recalibrated IK using measured displacement
+# Calibration: w1→(-0.156,+1.708), w2→(+2.504,+1.809), w3→(-2.506,+1.702) m/200steps
+from sim_lekiwi_urdf import twist_to_contact_wheel_speeds
 
 
 # ── Load policy ────────────────────────────────────────────────────────────────
