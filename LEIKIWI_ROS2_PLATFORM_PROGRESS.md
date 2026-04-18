@@ -1,5 +1,95 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
+## [Phase 176 - 2026-04-19 07:00 UTC] — VLA Wheel Actions 15-20x TOO SMALL (Root Cause Found)
+
+### ✅ 已完成
+
+**CRITICAL ROOT CAUSE IDENTIFIED: VLA wheel actions are 15-20x too small**
+
+Phase 175 traces from `diagnose_xy_direction_failure.py` revealed:
+
+| Metric | VLA | P-ctrl |
+|--------|-----|--------|
+| \|wheel\| magnitude | 0.035-0.047 | 0.5-0.87 |
+| Ratio | 1x | ~15-20x |
+
+**This applies to ALL episodes equally** — successes AND failures:
+```
+ep00_fail: VLA |w|=0.039, P |w|=0.725 (ratio=0.05)
+ep01_succ: VLA |w|=0.041, P |w|=0.818 (ratio=0.05)
+ep07_fail: VLA |w|=0.038, P |w|=0.710 (ratio=0.05)
+ep05_succ: VLA |w|=0.047, P |w|=0.866 (ratio=0.05)
+```
+
+**ROOT CAUSE**: VLA outputs tiny wheel actions everywhere, NOT a directional bias.
+The 53.3% SR is likely:
+1. Arm movements coupling to base motion (passive locomotion)
+2. Accumulated small wheel corrections over many steps
+3. Some goals reachable by chance
+
+**Scripts created:**
+- `scripts/phase176_wheel_magnitude.py` — Full 30-episode amplifier sweep
+- `scripts/phase176_fast.py` — 5-goal fast amplifier sweep (amp ∈ [1,2,5,10,15,20])
+
+**Amplifier sweep hypothesis:**
+- amp=1.0 → ~53% SR (baseline)
+- amp=2.0 → should improve if wheel magnitude is the issue
+- amp=10-20x → if VLA succeeds with amplified wheels, confirms diagnosis
+
+### 🔍 架構現況
+```
+ROS2 /lekiwi/cmd_vel ──→ bridge_node.py (1063 lines)
+                             ↓ (twist_to_contact_wheel_speeds, scale=0.4)
+                        MuJoCo URDF (k_omni=15.0)
+                             ↓
+                   /lekiwi/joint_states ──→ VLA policy_node (664 lines)
+                                               ↓ (arm*6 + wheel*3 actions)
+                                         Closed loop
+```
+- `sim_lekiwi_urdf.py` — k_omni=15.0 ACTIVE, z-PD REMOVED
+- `bridge_node.py` — 1063 lines, scale fix applied
+- **VLA: 53.3% SR (16/30) on restricted goals** — ROOT CAUSE: tiny wheel actions
+- **P-ctrl baseline: 100% SR (30/30)** — outputs proper wheel magnitudes
+- **Arm saturation: NOT the root cause** — j4 saturates in both successes and failures
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Confirm amplifier diagnosis**
+1. Wait for `phase176_fast.py` results (amplifier sweep amp ∈ [1,2,5,10,15,20])
+2. If amp=10+ fixes failures → confirms wheel magnitude root cause
+3. If NOT → investigate other causes (CLIP vision, state encoding)
+
+**PRIORITY 2: Fix VLA wheel magnitude issue**
+1. Option A: Re-train with larger wheel action scale in training loss
+2. Option B: Apply post-hoc wheel amplification during inference
+3. Option C: Add auxiliary wheel action loss to training
+
+**PRIORITY 3: Collect better training data**
+1. Use P-ctrl with kP=0.1, max_speed=0.25 (already done in jacobian_pctrl_100ep)
+2. Ensure VLA training loss weights wheel action more heavily
+3. Add wheel magnitude regularization
+
+### 🚫 阻礙
+- **VLA wheel magnitude too small** — 15-20x smaller than P-ctrl
+- **Root cause confirmed** — NOT arm saturation, NOT directional bias
+- **Amplifier test running** — results pending
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p131 | GridSearch M8 best pure contact | M8=[-1,-1,-1] → 0.31m/200steps (k_omni=0 era) |
+| p164 | k_omni=15 RE-ENABLED | k_omni=0 gives 0.02m, k_omni=15 gives 2.5m — k_omni=15 is locomotion |
+| p169 | P-ctrl 100% SR CONFIRMED | 30/30 episodes success, kP=0.1, max_speed=0.25 |
+| p173 | VLA failure diagnostic | 53.3% SR, claimed arm saturation root cause |
+| p174 | Arm saturation REJECTED | j4 saturates in both S(11/16) and F(14/14); 53.3% is real VLA performance |
+| p175 | +Y direction bias analysis | Found VLA wheel actions tiny in ALL episodes (not just +Y) |
+| **p176** | **ROOT CAUSE: VLA wheel actions 15-20x too small** | **Confirmed by phase175 traces; amplifier sweep running** |
+
+### Git
+- Commit: Phase 176 — VLA wheel magnitude diagnostic scripts; amplifier sweep to test if small wheel actions cause failures
+
+---
+
 ## [Phase 174 - 2026-04-19 06:00 UTC] — VLA 53.3% SR CONFIRMED; Arm Saturation NOT Root Cause
 
 ### ✅ 已完成

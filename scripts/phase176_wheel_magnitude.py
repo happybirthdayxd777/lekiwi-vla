@@ -125,8 +125,8 @@ def load_policy(ckpt_path, device=DEVICE):
 def resize_for_clip(img):
     pil = Image.fromarray(img)
     pil_resized = pil.resize((224, 224), Image.BILINEAR)
-    img_np = np.array(pil_resized).astype(np.float32) / 255.0
-    return img_np.transpose(2, 0, 1)
+    img_np = (np.array(pil_resized).astype(np.float32) / 255.0).transpose(2, 0, 1)
+    return img_np
 
 
 def generate_restricted_goals(n_episodes, seed=42):

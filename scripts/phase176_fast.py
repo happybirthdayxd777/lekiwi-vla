@@ -97,7 +97,7 @@ def load_policy(path, device=DEVICE):
 
 def resize_for_clip(img):
     pil = Image.fromarray(img).resize((224, 224), Image.BILINEAR)
-    return np.array(pil).astype(np.float32) / 255.0.transpose(2, 0, 1)
+    return (np.array(pil).astype(np.float32) / 255.0).transpose(2, 0, 1)
 
 
 def make_state(sim, goal_norm):
