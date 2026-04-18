@@ -46,16 +46,20 @@ os.chdir(ROOT)
 
 def load_merged_data():
     """Load phase63 images + jacobian actions (aligned by episode).
-    
+
     Returns:
         images:    [N, 3, 224, 224] float32 — from phase63
         states_11d: [N, 11] float32 — arm6 + wheel3 + goal2
         actions:  [N, 9] float32 — BEST actions (jacobian where matched)
         priorities: [N] float32 — reward-based sampling weights
         match_mask: [N] bool — True where jacobian action was used
+
+    Phase 171: Uses jacobian_pctrl_100ep_kP01.h5 (100 episodes, v1+v2 combined).
+    This gives 2x more correct kP=0.1 P-controller actions for alignment.
     """
+    # Phase 171: Use combined 100-episode dataset (v1+v2) for 2x more correct kP=0.1 data
     f63 = h5py.File(ROOT / "data/phase63_reachable_10k_converted.h5", "r")
-    fj  = h5py.File(ROOT / "data/jacobian_pctrl_50ep_kP01.h5", "r")
+    fj  = h5py.File(ROOT / "data/jacobian_pctrl_100ep_kP01.h5", "r")
     
     # Load phase63
     images_raw = f63["images"][:]          # [N, 224, 224, 3] uint8
@@ -66,14 +70,15 @@ def load_merged_data():
     f63.close()
     
     # Load jacobian
-    actions_j  = fj["actions"][:]          # [N, 9] — Jacobian P-ctrl actions (BETTER)
-    rewards_j  = fj["rewards"][:]           # [N]
-    goals_j    = fj["goal_positions"][:]   # [N, 2]
-    ep_starts_j_raw = list(fj["episode_starts"][:])  # [51] — last element = N (end marker)
+    actions_j  = fj["actions"][:]          # [N_jac, 9] — Jacobian P-ctrl actions (BETTER)
+    rewards_j  = fj["rewards"][:]           # [N_jac]
+    goals_j    = fj["goal_positions"][:]   # [N_jac, 2]
+    ep_starts_j_raw = list(fj["episode_starts"][:])  # last element may be end marker
+    N_jac = len(actions_j)
     fj.close()
     
-    # Remove trailing end-marker from jacobian episode starts
-    if ep_starts_j_raw[-1] == len(actions_j):
+    # Remove trailing end-marker from jacobian episode starts (if last == N_jac)
+    if ep_starts_j_raw[-1] == N_jac:
         ep_starts_j = ep_starts_j_raw[:-1]
     else:
         ep_starts_j = ep_starts_j_raw
@@ -98,9 +103,11 @@ def load_merged_data():
     
     # Match episodes by goal position
     n_matched = 0
+    # rewards_j_aligned: rewards aligned to phase63 index space (for priority merge)
+    rewards_j_aligned = rewards_63.copy()  # default to phase63 rewards
     
     for ji, j_start in enumerate(ep_starts_j):
-        j_end = ep_starts_j[ji+1] if ji+1 < len(ep_starts_j) else N
+        j_end = ep_starts_j[ji+1] if ji+1 < len(ep_starts_j) else N_jac
         j_goal = goals_j[j_start]  # goal for this episode
         
         # Find phase63 episode with same goal
@@ -124,8 +131,11 @@ def load_merged_data():
             
             if n_frames > 50:  # only merge substantial episodes
                 # Use jacobian actions for this episode
-                merged_actions[j_start:j_start+n_frames] = actions_j[j_start:j_start+n_frames]
-                match_mask[j_start:j_start+n_frames] = True
+                # Index by p_start (phase63 index) since merged_actions is 10000-sized (phase63)
+                merged_actions[p_start:p_start+n_frames] = actions_j[j_start:j_start+n_frames]
+                match_mask[p_start:p_start+n_frames] = True
+                # Align jacobian rewards to phase63 index space
+                rewards_j_aligned[p_start:p_start+n_frames] = rewards_j[j_start:j_start+n_frames]
                 n_matched += 1
     
     print(f"[DATA] Matched {n_matched} episodes ({match_mask.sum()} frames)")
@@ -142,8 +152,8 @@ def load_merged_data():
     states_11d[:, 9:11] = goals_63            # goal xy
     
     # ── Priority: reward-weighted sampling (prefer high-reward frames) ────────
-    # Use jacobian rewards where available, else phase63 rewards
-    rewards_for_priority = np.where(match_mask, rewards_j, rewards_63)
+    # Use jacobian rewards where available (aligned to phase63 index space)
+    rewards_for_priority = rewards_j_aligned  # already aligned to phase63 index space
     priorities = np.maximum(rewards_for_priority, 0.0).astype(np.float32)
     priorities += 1e-6
     priorities /= priorities.sum()
