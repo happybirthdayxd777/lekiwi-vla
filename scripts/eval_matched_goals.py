@@ -237,17 +237,24 @@ def run_episode(sim, goal, goal_norm, policy, max_steps=200, use_pctrl=False):
             return True, step + 1, dist
 
         if use_pctrl:
-            # P-controller — Phase 158 calibrated: kP=1.5, max_speed=0.05
-            # twist_to_contact_wheel_speeds applies gain=3.5 internally (Phase 158)
-            # OLD: kP=2.0, max_speed=0.3 → wheel_speeds saturate at ±6 → WRONG
+            # Phase 166 FIX: Phase 165's max_speed=0.2-0.3 fix was WRONG.
+            # ROOT CAUSE: IK (w2=0.1991*vx_200) clips to [-0.5, 0.5] rad/s.
+            # Saturation threshold: |vx| < 0.0125 m/s.
+            # With kP=1.5, ALL goals > 8.4mm saturate → identical action → 0% SR.
+            # Phase 165 proposed increasing max_speed to 0.2-0.3 — DOES NOT HELP
+            # because IK already clips regardless of max_speed.
+            #
+            # REAL FIX: kP=0.1 (prevents saturation), max_speed=0.25 (allows fast goals),
+            # NO wheel_speeds clipping (let servo=6 handle naturally).
+            # This gives proper proportional action:
+            #   dist=0.05m → action=0.017, dist=0.30m → action=0.100, dist=1.0m → action=0.332
             dx, dy = goal[0] - base_pos[0], goal[1] - base_pos[1]
-            kP = 1.5; max_speed = 0.05
+            kP = 0.1; max_speed = 0.25
             v_desired = np.array([dx, dy]) * kP
             vx, vy = np.clip(v_desired, -max_speed, max_speed)
-            wheel_speeds = twist_to_contact_wheel_speeds(vx, vy)  # gain=3.5 applied inside
-            wheel_speeds = np.clip(wheel_speeds, -0.5, 0.5)
+            wheel_speeds = twist_to_contact_wheel_speeds(vx, vy)  # Phase 164 IK for k_omni=15.0, NO clipping
             arm_action = np.zeros(6)
-            wheel_action = wheel_speeds / 12.0
+            wheel_action = wheel_speeds / 12.0  # convert rad/s → servo action
             full_action = np.concatenate([arm_action, wheel_action])
         else:
             # VLA policy
