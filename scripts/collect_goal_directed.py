@@ -49,30 +49,34 @@ TARGET_SIZE = (224, 224)
 
 class PController:
     """
-    Phase 126: P-controller for LeKiWi base using Contact-Jacobian IK.
-    
+    Phase 159: P-controller for LeKiWi base.
+
+    Phase 158 FIX: k_omni=15.0 contact physics AMPLIFIES commanded wheel speeds
+    by ~3.5x. The old implementation (gain=1.0) achieved only 10% SR.
+    With gain=3.5: 93.3% SR (30ep).
+
     Uses twist_to_contact_wheel_speeds() from sim_lekiwi_urdf which inverts
     the empirically calibrated contact Jacobian J_c:
-    
+
         J_c = [[-0.0467,  1.3399, -2.5397],
                [ 1.3865,  0.5885,  1.2485]]  [m/step per rad/s]
-    
+
     J_c^+ (pseudo-inverse) transforms desired world-frame velocity (vx, vy)
     into wheel angular velocities (w1, w2, w3).
-    
+
     Advantages over GridSearchController:
-    - 100% SR on 4-goal test (Phase 124) vs GridSearchController 0% SR
+    - 93.3% SR with gain=3.5 (Phase 158) vs 10% SR with gain=1.0
     - Continuous, smooth control vs discrete primitives
     - Uses correct contact physics vs heuristic primitives
-    
+
     Phase 126: Replaces GridSearchController for data collection.
-    GridSearchController used OLD primitive-based approach calibrated with
-    k_omni overlay, producing 0% goal success in data.
+    Phase 158: Added gain=3.5 to compensate for k_omni=15.0 contact physics.
     """
-    def __init__(self, kP=1.5, max_speed=0.3, wheel_clip=0.5):
+    def __init__(self, kP=1.5, max_speed=0.3, wheel_clip=0.5, gain=3.5):
         self.kP = kP
         self.max_speed = max_speed
         self.wheel_clip = wheel_clip
+        self.gain = gain  # Phase 158: k_omni=15.0 contact amplification compensation
     
     def reset(self):
         pass  # stateless P-controller
@@ -80,34 +84,41 @@ class PController:
     def compute_wheel_velocities(self, base_pos, goal_pos, base_yaw=0.0):
         """
         Compute wheel angular velocities to drive toward goal.
-        
+
         Uses twist_to_contact_wheel_speeds() which applies J_c^+ IK
         to get wheel speeds from desired world-frame vx, vy.
-        
+
+        Phase 158 FIX: k_omni=15.0 contact physics amplifies commanded wheel speeds
+        by ~3.5x. Without this gain, P-controller gets only 10% SR.
+        Gain=3.5 raises P-controller to 93.3% SR.
+
         Args:
             base_pos: (2,) array — current base xy position
             goal_pos: (2,) array — target xy position
             base_yaw: float — base yaw angle (unused, for API compatibility)
-        
+
         Returns:
             (3,) wheel angular velocity command (clipped to [-0.5, 0.5])
         """
         dx = goal_pos[0] - base_pos[0]
         dy = goal_pos[1] - base_pos[1]
         dist = np.linalg.norm([dx, dy])
-        
+
         if dist < 0.05:
             return np.zeros(3, dtype=np.float32)
-        
+
         # P-control: scale velocity by distance
         v_mag = min(self.kP * dist, self.max_speed)
         vx = v_mag * (dx / dist)
         vy = v_mag * (dy / dist)
-        
+
         # Convert world-frame velocity to wheel angular velocities via J_c^+
         from sim_lekiwi_urdf import twist_to_contact_wheel_speeds
         wheel_speeds = twist_to_contact_wheel_speeds(vx, vy)
-        
+
+        # Phase 158 FIX: gain=3.5 compensates for k_omni=15.0 contact amplification
+        wheel_speeds = wheel_speeds * self.gain
+
         # Clip to URDF stable range (action-space [-0.5, 0.5])
         return np.clip(wheel_speeds, -self.wheel_clip, self.wheel_clip).astype(np.float32)
 

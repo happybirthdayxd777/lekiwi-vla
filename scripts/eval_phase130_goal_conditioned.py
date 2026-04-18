@@ -92,9 +92,14 @@ class GoalConditionedPolicy(nn.Module):
 # ─── P-Controller (oracle baseline) ─────────────────────────────────────────
 
 class PController:
-    def __init__(self, kP=1.5, max_speed=0.05):
+    """
+    Phase 159: k_omni=15.0 contact physics AMPLIFIES kinematic IK by ~3.5x.
+    Gain=3.5 was empirically calibrated (Phase 158): 93.3% SR (30ep) vs old 10% SR.
+    """
+    def __init__(self, kP=1.5, max_speed=0.05, gain=3.5):
         self.kP = kP
         self.max_speed = max_speed
+        self.gain = gain
     
     def act(self, base_xy, goal):
         err = goal - base_xy
@@ -104,7 +109,8 @@ class PController:
         w1 = 0.3824*vx + 0.1929*vy
         w2 = -0.4531*vx + 0.2378*vy
         w3 = 0.0178*vx + 0.1544*vy
-        wheel = np.clip([w1, w2, w3], -0.5, 0.5)
+        # Phase 158 FIX: gain=3.5 compensates for k_omni=15.0 contact amplification
+        wheel = np.clip([w1*self.gain, w2*self.gain, w3*self.gain], -0.5, 0.5)
         return np.concatenate([np.zeros(6), wheel])
 
 

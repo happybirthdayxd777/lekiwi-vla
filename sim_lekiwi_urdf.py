@@ -502,11 +502,13 @@ def _omni_kinematics(wheel_vels: np.ndarray) -> tuple:
 
 def twist_to_contact_wheel_speeds(vx: float, vy: float, wz: float = 0.0) -> np.ndarray:
     """
-    Phase 123: Convert desired base velocity (vx, vy, wz) to wheel angular velocities
-    using the CONTACT-PHYSICS calibrated Jacobian.
+    Phase 158: Convert desired base velocity (vx, vy, wz) to wheel angular velocities
+    using the Phase 122 kinematic IK + Phase 158 gain=3.5 calibration.
 
-    Unlike _omni_kinematics() (kinematic model), this uses the empirically calibrated
-    contact Jacobian J_c that accounts for the actual wheel-ground contact physics.
+    Phase 123 contact Jacobian approach (J_c^+) gave only 10-15% SR on URDF sim.
+    Phase 158 discovered that k_omni=15.0 contact physics amplifies commanded wheel
+    speeds by ~3.5x. The kinematic IK gives correct wheel directions, and gain=3.5
+    compensates for the contact amplification.
 
     Parameters
     ----------
@@ -519,21 +521,22 @@ def twist_to_contact_wheel_speeds(vx: float, vy: float, wz: float = 0.0) -> np.n
     -------
     np.ndarray, shape (3,)
         Wheel angular velocities [w1, w2, w3] in rad/s.
-        Uses J_c^+ (pseudo-inverse of contact Jacobian) for minimum-norm solution.
+        Phase 122 kinematic IK coefficients with gain=3.5:
+          w1 = 3.5 * (0.3824*vx + 0.1929*vy)
+          w2 = 3.5 * (-0.4531*vx + 0.2378*vy)
+          w3 = 3.5 * (0.0178*vx + 0.1544*vy)
 
     Note
     ----
+    With gain=3.5: 93.3% SR (30ep). With gain=1.0: 10% SR.
     wz (yaw) is currently set to 0.0 — full 3-DOF calibration remains future work.
-    The contact Jacobian is calibrated for 200-step episodes at 20 Hz timestep.
     """
-    # Per-step displacement target (200 steps at 20Hz = 10s)
-    dx_target = vx * 10.0
-    dy_target = vy * 10.0
-    # Pseudo-inverse gives minimum-norm wheel velocities for desired displacement
-    wheel_vels_2d = _CONTACT_JACOBIAN_PSEUDO_INV @ [dx_target, dy_target]
-    # wz not yet calibrated — use symmetric wheel speeds as proxy
-    wheel_vels = np.array([wheel_vels_2d[0], wheel_vels_2d[1], wheel_vels_2d[2]], dtype=np.float64)
-    return wheel_vels
+    # Phase 122 kinematic IK coefficients + Phase 158 gain=3.5
+    w1 = 0.3824*vx + 0.1929*vy
+    w2 = -0.4531*vx + 0.2378*vy
+    w3 = 0.0178*vx + 0.1544*vy
+    gain = 3.5  # Phase 158: compensates for k_omni=15.0 contact amplification
+    return np.array([w1*gain, w2*gain, w3*gain], dtype=np.float64)
 
 
 # ── Simulation ───────────────────────────────────────────────────────────────

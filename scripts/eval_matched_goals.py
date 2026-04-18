@@ -163,26 +163,30 @@ class GoalConditionedPolicy(nn.Module):
         return action
 
 
-# ── Omni-wheel IK (from eval_phase155b.py) ─────────────────────────────────────
-def twist_to_contact_wheel_speeds(vx, vy, wz=0.0):
-    R = 0.05
-    WHEEL_POSITIONS = np.array([
-        [ 0.1732,  0.0],
-        [-0.0866,  0.15],
-        [-0.0866, -0.15],
-    ], dtype=np.float64)
-    _JOINT_AXES = np.array([
-        [-0.866025,  0.0,  0.5],
-        [ 0.866025,  0.0,  0.5],
-        [ 0.0,       0.0, -1.0],
-    ], dtype=np.float64)
-    wheel_speeds = np.zeros(3, dtype=np.float64)
-    for i in range(3):
-        wheel_vel = np.array([vx - wz * WHEEL_POSITIONS[i, 1],
-                              vy + wz * WHEEL_POSITIONS[i, 0], 0.0])
-        angular_speed = np.dot(wheel_vel, _JOINT_AXES[i]) / R
-        wheel_speeds[i] = angular_speed
-    return wheel_speeds
+# ── Omni-wheel IK ───────────────────────────────────────────────────────────────
+# Phase 159: Uses kinematic IK coefficients (Phase 122) + gain=3.5 (Phase 158).
+# k_omni=15.0 contact physics amplifies commanded wheel speeds by ~3.5x.
+# OLD twist_to_contact_wheel_speeds (Phase 123 contact Jacobian): 10-15% SR
+# NEW Kinematic IK + gain=3.5: 93.3% SR
+
+_PCTRL_GAIN = 3.5  # Phase 158: compensates for k_omni=15.0 contact amplification
+
+def twist_to_contact_wheel_speeds(vx, vy, wz=0.0, gain=_PCTRL_GAIN):
+    """
+    Phase 122 kinematic IK + Phase 158 gain=3.5.
+    
+    Old Phase 123 contact Jacobian approach gave wrong wheel directions
+    and only 10-15% SR. The kinematic IK coefficients are correct for
+    the URDF geometry, and gain=3.5 compensates for k_omni=15.0 physics.
+    
+    gain=1.0:   10% SR (old broken baseline)
+    gain=3.5:   93.3% SR (Phase 158 calibrated)
+    """
+    # Phase 122 calibrated kinematic IK coefficients
+    w1 = 0.3824*vx + 0.1929*vy
+    w2 = -0.4531*vx + 0.2378*vy
+    w3 = 0.0178*vx + 0.1544*vy
+    return np.array([w1*gain, w2*gain, w3*gain], dtype=np.float64)
 
 
 # ── Load policy ────────────────────────────────────────────────────────────────
@@ -250,12 +254,15 @@ def run_episode(sim, goal, goal_norm, policy, max_steps=200, use_pctrl=False):
             return True, step + 1, dist
 
         if use_pctrl:
-            # P-controller
+            # P-controller — Phase 158 calibrated: kP=1.5, max_speed=0.05
+            # twist_to_contact_wheel_speeds applies gain=3.5 internally (Phase 158)
+            # OLD: kP=2.0, max_speed=0.3 → wheel_speeds saturate at ±6 → WRONG
             dx, dy = goal[0] - base_pos[0], goal[1] - base_pos[1]
-            v_desired = np.array([dx, dy]) * 2.0
-            vx, vy = np.clip(v_desired, -0.3, 0.3)
-            wheel_speeds = twist_to_contact_wheel_speeds(vx, vy)
-            wheel_speeds = np.clip(wheel_speeds, -6.0, 6.0)
+            kP = 1.5; max_speed = 0.05
+            v_desired = np.array([dx, dy]) * kP
+            vx, vy = np.clip(v_desired, -max_speed, max_speed)
+            wheel_speeds = twist_to_contact_wheel_speeds(vx, vy)  # gain=3.5 applied inside
+            wheel_speeds = np.clip(wheel_speeds, -0.5, 0.5)
             arm_action = np.zeros(6)
             wheel_action = wheel_speeds / 12.0
             full_action = np.concatenate([arm_action, wheel_action])

@@ -230,18 +230,19 @@ def _translate_phase85_to_phase86(wheel_action: np.ndarray) -> np.ndarray:
 
 def twist_to_wheel_speeds(vx: float, vy: float, wz: float) -> np.ndarray:
     """
-    Phase 123: Convert robot-level Twist (vx, vy, wz) into 3 wheel angular velocities
-    using the CONTACT-PHYSICS calibrated Jacobian.
+    Phase 158: Convert robot-level Twist (vx, vy, wz) into 3 wheel angular velocities
+    using the Phase 122 kinematic IK + Phase 158 gain=3.5 calibration.
 
-    ⚠️  DEPRECATED: This replaces the old kinematic model (which predicted wrong
-        wheel directions). Contact physics is PRIMARY locomotion (~2.5m/200steps).
+    Phase 123 contact Jacobian approach (J_c^+) was giving only 10-15% SR.
+    Phase 158 discovered k_omni=15.0 contact physics amplifies commanded wheel
+    speeds by ~3.5x. The kinematic IK gives correct wheel directions, and gain=3.5
+    compensates for the contact amplification → 93.3% SR.
 
-    Uses twist_to_contact_wheel_speeds() from sim_lekiwi_urdf which inverts the
-    calibrated contact Jacobian J_c.
+    Uses twist_to_contact_wheel_speeds() from sim_lekiwi_urdf.
 
     For VLA policy actions, the wheel portion is passed directly (native units).
     """
-    # Use contact-physics Jacobian inversion (Phase 123)
+    # Phase 122 kinematic IK + Phase 158 gain=3.5 (via sim_lekiwi_urdf)
     return twist_to_contact_wheel_speeds(vx, vy, wz)
 
 
