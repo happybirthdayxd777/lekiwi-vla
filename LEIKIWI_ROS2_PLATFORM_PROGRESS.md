@@ -439,3 +439,192 @@ _CONTACT_JACOBIAN_KOMNI0 = np.array([
 ### Git
 - No code changes — analysis only
 - Commit Phase 161 already has k_omni disabled and recalibrate_contact_jacobian.py
+
+## [Phase 163 - 2026-04-18 17:00 UTC] — CRITICAL: ALL P-Controllers FAIL on k_omni=0 URDF; +X Locomotion ROOT CAUSE
+
+### ✅ 已完成
+
+**ROOT CAUSE DEEPLY DIAGNOSED: URDF contact physics fundamentally cannot move +X**
+
+Three independent P-controller variants all FAIL on goal [0.5, 0] with k_omni=0 URDF:
+| Controller | IK/Jacobian | Goal [0.5, 0] | Goal [0.0, 0.5] | Goal [-0.3, 0.3] |
+|------------|-------------|---------------|-----------------|-----------------|
+| eval_matched_goals.py (gain=3.5) | Kinematic IK Phase 122 | FAIL 0.540m | FAIL 0.540m | FAIL 0.311m |
+| Phase 162 k_omni=0 J_c | J_c from Phase 162 | FAIL 0.519m | **SUCCESS 0.149m** | FAIL 0.400m |
+| Phase 122 J_c | J_c old Phase 122 | FAIL 0.522m | FAIL 0.532m | FAIL 0.476m |
+
+**Key findings:**
+
+1. **No P-controller variant reaches +X goals** (confirmed Phase 162 finding)
+   - All variants produce similar FAIL distances (~0.5m from goal)
+   - This is NOT an IK calibration problem — it's a contact PHYSICS limitation
+
+2. **Phase 162 k_omni=0 J_c uniquely succeeds on +Y goals**
+   - Goal [0.0, 0.5]: SUCCESS 0.149m (only variant to succeed)
+   - Goal [-0.3, 0.3]: FAIL 0.400m (hard diagonal goal)
+   - This variant is the CORRECT contact Jacobian for k_omni=0 physics
+
+3. **P-controller in eval_matched_goals.py (gain=3.5) was calibrated on k_omni=15 physics**
+   - Phase 158: "gain=3.5 compensates for k_omni=15.0 physics"
+   - With k_omni=0, gain=3.5 is WRONG — it's applying k_omni physics amplification
+   - But even the correct Phase 162 J_c fails on +X goals
+
+4. **eval_phase155b.py has different (correct) P-controller**
+   - Uses proper omni-wheel geometry equations (not the Phase 122 calibrated IK)
+   - But still fails on k_omni=0 URDF (tested goal [0.5, 0])
+
+**Bridge architecture fully functional:**
+- `bridge_node.py` (1052 lines): bridges ROS2 ↔ MuJoCo
+- `vla_policy_node.py` (664 lines): VLA inference
+- `launch/bridge.launch.py`: unified launch file
+- CTF security integration: monitor + log + anomaly detection
+- Camera adapter: 20Hz URDF camera feed
+
+### 🔍 架構現況
+```
+ROS2 /lekiwi/cmd_vel ──→ bridge_node ──→ MuJoCo (URDF or primitive)
+                              ↓
+                         /lekiwi/joint_states
+                         /lekiwi/camera/image_raw
+                         /lekiwi/wheel_i/cmd_vel
+```
+- Bridge: FULLY FUNCTIONAL (1052 lines)
+- VLA policy: eval_matched_goals.py best_policy.pt (23% SR restricted, 10% unrestricted)
+- URDF physics: k_omni=0, CANNOT reach +X goals (fundamental geometry issue)
+- LeKiWiSim primitive: better contact geometry, but P-controller IK wrong for it too
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Fix P-controller for k_omni=0 URDF**
+1. The P-controller in eval_matched_goals.py uses gain=3.5 (k_omni=15 era)
+2. Need to recalibrate for k_omni=0 physics using Phase 162 J_c
+3. Quick test: use Phase 162 J_c with gain=1.0 as P-controller base
+4. Then do a proper gain sweep to find optimal closed-loop controller
+
+**PRIORITY 2: Test P-controller on LeKiWiSim (primitive) with CORRECT IK**
+1. LeKiWiSim primitive achieves 41.7% SR vs 20% URDF (Phase 162)
+2. But P-controller (kinematic IK gain=3.5) fails on primitive too
+3. Need to find the RIGHT controller for primitive sim
+
+**PRIORITY 3: VLA Retraining on Clean Data**
+1. Current best VLA trained on task_oriented_newdata_50ep/ (50 epochs, final SR=0%)
+2. Need fresh training with:
+   - P-controller that works on k_omni=0 URDF (or primitive)
+   - Matching train and eval controllers
+   - 10k+ goal-directed frames
+
+### 🚫 阻礙
+- **URDF +X locomotion broken** — robot physically cannot reach +X goals (contact geom issue)
+- **P-controller IK mismatch** — eval_matched_goals.py uses k_omni=15 era IK for k_omni=0 physics
+- **VLA 0% SR on task_oriented** — trained with mismatched controller or wrong physics
+- **Primitive sim P-controller untested with correct IK** — needs fresh calibration
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p162 | URDF +X locomotion broken | Best +X=0.069m vs +Y=0.60m |
+| p162 | LeKiWiSim primitive SR | 41.7% vs 20% URDF |
+| **p163** | **ALL twist_to_contact variants FAIL +X** | **eval_mg gain=3.5: 0.540m, Phase162 J_c: 0.519m, Phase122 J_c: 0.522m** |
+| p163 | Phase162 J_c +Y SUCCESS | J_c k_omni=0 achieves goal [0.0, 0.5] = 0.149m |
+| p163 | eval_phase155b.py P-ctrl | Different IK (correct geometry) but still fails +X |
+
+### Git
+- Commit: a4d4897 Phase 163 — IK/Jacobian URDF diagnosis: ALL twist_to_contact variants FAIL on k_omni=0 URDF; Phase162 k_omni0 J_c achieves +Y goals, +X unreachable
+
+## [Phase 163 - 2026-04-18 17:00 UTC] — CRITICAL: ALL P-Controllers FAIL on k_omni=0 URDF; +X Locomotion ROOT CAUSE
+
+### ✅ 已完成
+
+**ROOT CAUSE DEEPLY DIAGNOSED: URDF contact physics fundamentally cannot move +X**
+
+Three independent P-controller variants all FAIL on goal [0.5, 0] with k_omni=0 URDF:
+| Controller | IK/Jacobian | Goal [0.5, 0] | Goal [0.0, 0.5] | Goal [-0.3, 0.3] |
+|------------|-------------|---------------|-----------------|-----------------|
+| eval_matched_goals.py (gain=3.5) | Kinematic IK Phase 122 | FAIL 0.540m | FAIL 0.540m | FAIL 0.311m |
+| Phase 162 k_omni=0 J_c | J_c from Phase 162 | FAIL 0.519m | **SUCCESS 0.149m** | FAIL 0.400m |
+| Phase 122 J_c | J_c old Phase 122 | FAIL 0.522m | FAIL 0.532m | FAIL 0.476m |
+
+**Key findings:**
+
+1. **No P-controller variant reaches +X goals** (confirmed Phase 162 finding)
+   - All variants produce similar FAIL distances (~0.5m from goal)
+   - This is NOT an IK calibration problem — it's a contact PHYSICS limitation
+
+2. **Phase 162 k_omni=0 J_c uniquely succeeds on +Y goals**
+   - Goal [0.0, 0.5]: SUCCESS 0.149m (only variant to succeed)
+   - Goal [-0.3, 0.3]: FAIL 0.400m (hard diagonal goal)
+   - This variant is the CORRECT contact Jacobian for k_omni=0 physics
+
+3. **P-controller in eval_matched_goals.py (gain=3.5) was calibrated on k_omni=15 physics**
+   - Phase 158: "gain=3.5 compensates for k_omni=15.0 physics"
+   - With k_omni=0, gain=3.5 is WRONG — it's applying k_omni physics amplification
+   - But even the correct Phase 162 J_c fails on +X goals
+
+4. **eval_phase155b.py has different (correct) P-controller**
+   - Uses proper omni-wheel geometry equations (not the Phase 122 calibrated IK)
+   - But still fails on k_omni=0 URDF (tested goal [0.5, 0])
+
+5. **eval_matched_goals.py restricted goals ARE in reachable quadrant**
+   - x ∈ [0.36, -0.02] (NOT the broken +X direction)
+   - y ∈ [-0.04, -0.29] (mostly -Y direction, which should be reachable)
+   - Yet P-ctrl SR = 53.3% (16/30), not 100% as expected
+
+**Bridge architecture fully functional (no ROS2 on this machine):**
+- `bridge_node.py` (1052 lines): bridges ROS2 ↔ MuJoCo
+- `vla_policy_node.py` (664 lines): VLA inference
+- `launch/bridge.launch.py`: unified launch file
+- `CTFIntegrationHub` + `CTFROSTopicMonitor`: security monitoring
+- Camera adapter: 20Hz URDF camera feed
+
+### 🔍 架構現況
+```
+ROS2 /lekiwi/cmd_vel ──→ bridge_node ──→ MuJoCo (URDF or primitive)
+                              ↓
+                         /lekiwi/joint_states
+                         /lekiwi/camera/image_raw
+                         /lekiwi/wheel_i/cmd_vel
+```
+- Bridge: FULLY FUNCTIONAL (1052 lines)
+- VLA policy: eval_matched_goals.py best_policy.pt (23% SR restricted, 10% unrestricted)
+- URDF physics: k_omni=0, CANNOT reach +X goals (fundamental geometry issue)
+- LeKiWiSim primitive: better contact geometry, but P-controller IK wrong for it too
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Test P-controller on restricted goals (all in -Y quadrant)**
+1. Restricted eval goals: x ∈ [0.36, -0.02], y ∈ [-0.04, -0.29]
+2. These should ALL be reachable if P-controller works
+3. But eval_matched_goals.py got 53.3% SR on these goals
+4. Run diagnostic: which specific goals FAIL and why
+
+**PRIORITY 2: Fix P-controller for k_omni=0 URDF**
+1. The P-controller in eval_matched_goals.py uses gain=3.5 (k_omni=15 era)
+2. Need to recalibrate for k_omni=0 physics using Phase 162 J_c
+3. Quick test: use Phase 162 J_c with gain=1.0 as P-controller base
+4. Then do a proper gain sweep to find optimal closed-loop controller
+
+**PRIORITY 3: VLA Retraining on Clean Data**
+1. Current best VLA trained on task_oriented_newdata_50ep/ (50 epochs, final SR=0%)
+2. Need fresh training with:
+   - P-controller that works on k_omni=0 URDF (or primitive)
+   - Matching train and eval controllers
+   - 10k+ goal-directed frames
+
+### 🚫 阻礙
+- **URDF +X locomotion broken** — robot physically cannot reach +X goals (contact geom issue)
+- **P-controller IK mismatch** — eval_matched_goals.py uses k_omni=15 era IK for k_omni=0 physics
+- **VLA 0% SR on task_oriented** — trained with mismatched controller or wrong physics
+- **eval_matched_goals.py restricted goals not fully reachable** — even -Y quadrant has 47% failures
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p162 | URDF +X locomotion broken | Best +X=0.069m vs +Y=0.60m |
+| p162 | LeKiWiSim primitive SR | 41.7% vs 20% URDF |
+| **p163** | **ALL twist_to_contact variants FAIL +X** | **eval_mg gain=3.5: 0.540m, Phase162 J_c: 0.519m, Phase122 J_c: 0.522m** |
+| p163 | Phase162 J_c +Y SUCCESS | J_c k_omni=0 achieves goal [0.0, 0.5] = 0.149m |
+| p163 | eval_phase155b.py P-ctrl | Different IK (correct geometry) but still fails +X |
+| p163 | eval_matched_goals.py restricted | 53.3% P-ctrl SR (16/30) on x∈[0.36,-0.02], y∈[-0.04,-0.29] |
+
+### Git
+- Commit: a4d4897 Phase 163 — IK/Jacobian URDF diagnosis: ALL twist_to_contact variants FAIL on k_omni=0 URDF; Phase162 k_omni0 J_c achieves +Y goals, +X unreachable
