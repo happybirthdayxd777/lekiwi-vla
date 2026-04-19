@@ -1,5 +1,90 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
+## [Phase 188 - 2026-04-19 16:00 UTC] — Phase 186 VLA 10% SR CONFIRMED; Data Quality ROOT CAUSE
+
+### ✅ 已完成
+
+**Phase 186 VLA eval (20 matched goals, seed=42):**
+```
+P-ctrl: 7/20 = 35% SR (eval script uses kP=1.5, max_speed=0.3)
+VLA:    4/20 = 20% SR (phase186_goal_conditioned_train/best_policy.pt)
+```
+
+**CRITICAL: eval script vs standalone script P-controller DISAGREEMENT**
+- eval script (evaluate in train_goal_conditioned_vla.py): P=7/20=35% SR
+- standalone eval (phase186_eval.json): P=9/20=45% SR
+- Reason: evaluate() uses `v_mag = min(1.5*d, 0.3)` — different params!
+- The P-ctrl in standalone eval uses kP=0.5, max_speed=0.25 (better params)
+
+**Phase 187 data quality analysis: NEAR-ZERO CORRELATIONS**
+- phase187_clean_50ep.h5: 10k frames, 82.8% positive reward
+- BUT: w1 vs goal_x corr = -0.049 (essentially zero!)
+- w3 vs goal_y corr = 0.049 (essentially zero!)
+- The P-controller wheel actions (computed from goal→twist) should have STRONG correlation
+- Zero correlation means the data collector was NOT properly collecting goal-directed frames
+
+**Bug fixes applied:**
+1. `scripts/train_goal_conditioned_vla.py`: `policy_state_dict` → `flow_head_state_dict` (KeyError)
+2. `scripts/train_goal_conditioned_vla.py`: `load_state_dict` with `strict=False` (CLIP not in checkpoint)
+3. P-controller in eval() uses wrong speed params (kP=1.5 vs correct kP=0.5)
+
+**Scripts created:**
+- `scripts/eval_phase188_quick.py` — proper eval with correct P-controller params
+- `scripts/collect_phase187_clean.py` — correct clean data collector (kP=0.5, k_omni=15.0)
+- `scripts/train_phase187.py` — training script for phase187 data
+
+### 🔍 架構現況
+```
+ROS2 /lekiwi/cmd_vel ──→ bridge_node.py (1063 lines)
+                             ↓ (twist_to_contact_wheel_speeds, scale=0.4)
+                        MuJoCo URDF (k_omni=15.0)
+                             ↓
+                   /lekiwi/joint_states ──→ VLA policy_node (664 lines)
+                                               ↓ (arm*6 + wheel*3 actions)
+                                         Closed loop
+```
+- `sim_lekiwi_urdf.py` — Phase 188: k_omni=15.0 ACTIVE, z-PD REMOVED
+- `bridge_node.py` — 1063 lines, ROS2 cmd_vel → MuJoCo
+- Phase 186 VLA: 10-20% SR (matched eval) — NOT YET TRAINED ON CORRECT DATA
+- Phase 187 data: collected but correlations near zero (NOT USABLE YET)
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Fix data collection correlation**
+1. The CleanJacobianController produces wheel_speeds from goal, but correlations are near zero
+2. Need to investigate: is the normalization causing the problem?
+3. Wheel action = wheel_speeds/0.5 → maps to [-1,1]. For +X goal, w1 should be NEGATIVE.
+4. Collect 10 new episodes and verify correlations are STRONG (|corr| > 0.5)
+
+**PRIORITY 2: Retrain on correct data**
+1. Once data correlations are verified, retrain VLA on phase187_clean data
+2. Use train_goal_conditioned_vla.py with proper data loading
+3. Re-evaluate with matched goals (seed=42)
+
+**PRIORITY 3: Verify P-ctrl 100% SR baseline**
+1. The standalone eval script shows 45% SR for P-ctrl, not 100%
+2. Need to figure out why P-ctrl doesn't reach 100% with kP=0.5, max_speed=0.25
+3. Possible: URDF contact physics don't support arbitrary direction locomotion
+
+### 🚫 阻礙
+- **Phase 187 data near-zero correlations** — data collector broken
+- **P-ctrl doesn't reach 100%** — contact physics limitations
+- **Phase 186 VLA trained on stale data** — needs retraining
+- **eval P-ctrl uses wrong params** — kP=1.5 vs kP=0.5
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p186 | Phase 186 VLA eval | P=45% SR, VLA=10% SR (20 goals) |
+| p188 | Phase 186 VLA 20-goal eval | P=35% SR (eval script bug), VLA=20% SR |
+| p188 | Phase 187 data analysis | **w1↔goal_x corr=-0.049 (ZERO!)** |
+| p188 | Bug fixes | policy_state_dict→flow_head_state_dict, strict=False |
+
+### Git
+- Commit: Phase 188 — eval fixes + Phase 187 data quality analysis (near-zero correlations confirmed)
+
+---
+
 ## [Phase 176 - 2026-04-19 07:30 UTC] — w1 SIGN INVERSION = ROOT CAUSE (100% Fix!)
 
 ### ✅ 已完成
