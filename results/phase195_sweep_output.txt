@@ -1,0 +1,147 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+======================================================================
+Phase 195: Multi-Epoch Sweep — Phase 190 VLA (FIXED base_xy)
+======================================================================
+Found checkpoints: ['epoch_4.pt', 'epoch_9.pt', 'epoch_14.pt', 'epoch_19.pt', 'epoch_24.pt', 'epoch_29.pt']
+Test goals: [(0.3, 0.3), (0.3, -0.3), (-0.3, 0.3), (-0.3, -0.3), (0.4, 0.1)]
+Max steps per episode: 100, Goal threshold: 0.1m
+
+[P-CTRL] Baseline evaluation (5 goals × 1 run)...
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  Goal 1 (0.3, 0.3): ✗ steps=100, dist=0.4045
+  Goal 2 (0.3, -0.3): ✗ steps=100, dist=0.4413
+  Goal 3 (-0.3, 0.3): ✗ steps=100, dist=0.3974
+  Goal 4 (-0.3, -0.3): ✗ steps=100, dist=0.3977
+  Goal 5 (0.4, 0.1): ✗ steps=100, dist=0.3446
+  P-ctrl SR: 0% (0/5)
+  P-ctrl time: 0.1s
+
+[epoch_4] Loading and evaluating...
+[CLIP] Loading ViT-B/32 (frozen)...
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 82845.31it/s]
+[transformers] [1mCLIPModel LOAD REPORT[0m from: openai/clip-vit-base-patch32
+Key                                  | Status     |  | 
+-------------------------------------+------------+--+-
+text_model.embeddings.position_ids   | UNEXPECTED |  | 
+vision_model.embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  Goal 1 (0.3, 0.3): ✗ steps=100, dist=0.6230
+  Goal 2 (0.3, -0.3): ✗ steps=100, dist=0.3877
+  Goal 3 (-0.3, 0.3): ✗ steps=100, dist=0.7601
+  Goal 4 (-0.3, -0.3): ✗ steps=100, dist=1.0391
+  Goal 5 (0.4, 0.1): ✗ steps=100, dist=0.5571
+  => VLA SR=0% (0/5), avg_steps=0.0, avg_dist=0.6734, time=67.5s
+
+[epoch_9] Loading and evaluating...
+[CLIP] Loading ViT-B/32 (frozen)...
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 48014.87it/s]
+[transformers] [1mCLIPModel LOAD REPORT[0m from: openai/clip-vit-base-patch32
+Key                                  | Status     |  | 
+-------------------------------------+------------+--+-
+text_model.embeddings.position_ids   | UNEXPECTED |  | 
+vision_model.embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  Goal 1 (0.3, 0.3): ✗ steps=100, dist=0.2576
+  Goal 2 (0.3, -0.3): ✗ steps=100, dist=0.6633
+  Goal 3 (-0.3, 0.3): ✗ steps=100, dist=0.7965
+  Goal 4 (-0.3, -0.3): ✗ steps=100, dist=0.7172
+  Goal 5 (0.4, 0.1): ✓ steps=85, dist=0.1000
+  => VLA SR=20% (1/5), avg_steps=85.0, avg_dist=0.5069, time=60.3s
+
+[epoch_14] Loading and evaluating...
+[CLIP] Loading ViT-B/32 (frozen)...
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 48453.88it/s]
+[transformers] [1mCLIPModel LOAD REPORT[0m from: openai/clip-vit-base-patch32
+Key                                  | Status     |  | 
+-------------------------------------+------------+--+-
+text_model.embeddings.position_ids   | UNEXPECTED |  | 
+vision_model.embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  Goal 1 (0.3, 0.3): ✗ steps=100, dist=0.3442
+  Goal 2 (0.3, -0.3): ✗ steps=100, dist=0.5606
+  Goal 3 (-0.3, 0.3): ✗ steps=100, dist=0.8684
+  Goal 4 (-0.3, -0.3): ✗ steps=100, dist=1.2268
+  Goal 5 (0.4, 0.1): ✗ steps=100, dist=0.1665
+  => VLA SR=0% (0/5), avg_steps=0.0, avg_dist=0.6333, time=63.9s
+
+[epoch_19] Loading and evaluating...
+[CLIP] Loading ViT-B/32 (frozen)...
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 46637.23it/s]
+[transformers] [1mCLIPModel LOAD REPORT[0m from: openai/clip-vit-base-patch32
+Key                                  | Status     |  | 
+-------------------------------------+------------+--+-
+text_model.embeddings.position_ids   | UNEXPECTED |  | 
+vision_model.embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  Goal 1 (0.3, 0.3): ✗ steps=100, dist=0.3463
+  Goal 2 (0.3, -0.3): ✗ steps=100, dist=0.5139
+  Goal 3 (-0.3, 0.3): ✗ steps=100, dist=0.7879
+  Goal 4 (-0.3, -0.3): ✗ steps=100, dist=0.6379
+  Goal 5 (0.4, 0.1): ✓ steps=60, dist=0.0987
+  => VLA SR=20% (1/5), avg_steps=60.0, avg_dist=0.4770, time=65.3s
+
+[epoch_24] Loading and evaluating...
+[CLIP] Loading ViT-B/32 (frozen)...
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 45412.91it/s]
+[transformers] [1mCLIPModel LOAD REPORT[0m from: openai/clip-vit-base-patch32
+Key                                  | Status     |  | 
+-------------------------------------+------------+--+-
+text_model.embeddings.position_ids   | UNEXPECTED |  | 
+vision_model.embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  Goal 1 (0.3, 0.3): ✗ steps=100, dist=0.4771
+  Goal 2 (0.3, -0.3): ✗ steps=100, dist=0.7550
+  Goal 3 (-0.3, 0.3): ✗ steps=100, dist=0.7735
+  Goal 4 (-0.3, -0.3): ✗ steps=100, dist=0.7452
+  Goal 5 (0.4, 0.1): ✓ steps=82, dist=0.0984
+  => VLA SR=20% (1/5), avg_steps=82.0, avg_dist=0.5699, time=72.4s
+
+[epoch_29] Loading and evaluating...
+[CLIP] Loading ViT-B/32 (frozen)...
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 54546.24it/s]
+[transformers] [1mCLIPModel LOAD REPORT[0m from: openai/clip-vit-base-patch32
+Key                                  | Status     |  | 
+-------------------------------------+------------+--+-
+text_model.embeddings.position_ids   | UNEXPECTED |  | 
+vision_model.embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  Goal 1 (0.3, 0.3): ✗ steps=100, dist=0.5774
+  Goal 2 (0.3, -0.3): ✗ steps=100, dist=0.7191
+  Goal 3 (-0.3, 0.3): ✗ steps=100, dist=0.5286
+  Goal 4 (-0.3, -0.3): ✗ steps=100, dist=1.0569
+  Goal 5 (0.4, 0.1): ✗ steps=100, dist=0.3930
+  => VLA SR=0% (0/5), avg_steps=0.0, avg_dist=0.6550, time=77.0s
+
+======================================================================
+SUMMARY TABLE
+======================================================================
+Checkpoint           Epoch     Loss  VLA SR  VLA ✓ AvgStep  AvgDist P-ctrl SR   Time
+----------------------------------------------------------------------
+epoch_4                  4   0.7380       0%     0/5     0.0   0.6734        0%   67.5s
+epoch_9                  9   0.4800      20%     1/5    85.0   0.5069        0%   60.3s
+epoch_14                14   0.4046       0%     0/5     0.0   0.6333        0%   63.9s
+epoch_19                19   0.3427      20%     1/5    60.0   0.4770        0%   65.3s
+epoch_24                24   0.3354      20%     1/5    82.0   0.5699        0%   72.4s
+epoch_29                29   0.3212       0%     0/5     0.0   0.6550        0%   77.0s
+
+Results saved → results/phase195_fixed_sweep_1776613748.json
+
+[BEST] epoch_9: VLA SR=20% vs P-ctrl=0% (delta=+20%)
