@@ -3,9 +3,9 @@
   "policy_path": "/Users/i_am_ai/hermes_research/lekiwi_vla/results/phase181_vision_train/best_policy.pt",
   "episodes": 5,
   "max_steps": 100,
-  "sr_total": 0.4,
-  "mean_steps": 85.8,
-  "mean_final_dist": 0.4615114865597677,
+  "sr_total": 0.0,
+  "mean_steps": 100.0,
+  "mean_final_dist": 0.6888081123563551,
   "details": [
     {
       "ep": 0,
@@ -15,7 +15,7 @@
       ],
       "success": false,
       "steps": 100,
-      "final_dist": 0.7907363594481939
+      "final_dist": 0.47396161212632504
     },
     {
       "ep": 1,
@@ -23,9 +23,9 @@
         0.2319939418114051,
         0.0986584841970366
       ],
-      "success": true,
-      "steps": 56,
-      "final_dist": 0.09524064755119545
+      "success": false,
+      "steps": 100,
+      "final_dist": 1.3308614451657361
     },
     {
       "ep": 2,
@@ -35,7 +35,7 @@
       ],
       "success": false,
       "steps": 100,
-      "final_dist": 0.35459121415621636
+      "final_dist": 0.6100917429319278
     },
     {
       "ep": 3,
@@ -45,7 +45,7 @@
       ],
       "success": false,
       "steps": 100,
-      "final_dist": 0.9723577683465418
+      "final_dist": 0.42470024692799824
     },
     {
       "ep": 4,
@@ -53,10 +53,10 @@
         0.1011150117432088,
         0.2080725777960455
       ],
-      "success": true,
-      "steps": 73,
-      "final_dist": 0.09463144329669117
+      "success": false,
+      "steps": 100,
+      "final_dist": 0.6044255146297886
     }
   ],
-  "elapsed": 129.69478011131287
+  "elapsed": 152.8977551460266
 }
