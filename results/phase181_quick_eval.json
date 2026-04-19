@@ -1,0 +1,62 @@
+{
+  "phase": 181,
+  "policy_path": "/Users/i_am_ai/hermes_research/lekiwi_vla/results/phase181_vision_train/best_policy.pt",
+  "episodes": 5,
+  "max_steps": 100,
+  "sr_total": 0.4,
+  "mean_steps": 85.8,
+  "mean_final_dist": 0.4615114865597677,
+  "details": [
+    {
+      "ep": 0,
+      "goal": [
+        -0.1254598811526375,
+        0.45071430640991617
+      ],
+      "success": false,
+      "steps": 100,
+      "final_dist": 0.7907363594481939
+    },
+    {
+      "ep": 1,
+      "goal": [
+        0.2319939418114051,
+        0.0986584841970366
+      ],
+      "success": true,
+      "steps": 56,
+      "final_dist": 0.09524064755119545
+    },
+    {
+      "ep": 2,
+      "goal": [
+        -0.3439813595575635,
+        -0.34400547966379735
+      ],
+      "success": false,
+      "steps": 100,
+      "final_dist": 0.35459121415621636
+    },
+    {
+      "ep": 3,
+      "goal": [
+        -0.44191638783180054,
+        0.3661761457749352
+      ],
+      "success": false,
+      "steps": 100,
+      "final_dist": 0.9723577683465418
+    },
+    {
+      "ep": 4,
+      "goal": [
+        0.1011150117432088,
+        0.2080725777960455
+      ],
+      "success": true,
+      "steps": 73,
+      "final_dist": 0.09463144329669117
+    }
+  ],
+  "elapsed": 129.69478011131287
+}
