@@ -110,7 +110,7 @@ class GoalConditionedPolicy(torch.nn.Module):
 # ── P-controller ─────────────────────────────────────────────────────────────
 
 def p_controller_action(sim, goal_xy, kP=0.5):
-    base_xy = sim.data.qpos[4:6].copy()
+    base_xy = sim.data.qpos[:2].copy()
     dx, dy = goal_xy[0] - base_xy[0], goal_xy[1] - base_xy[1]
     dist = np.linalg.norm([dx, dy])
     if dist < 0.005:
@@ -167,7 +167,7 @@ def run_episode_vla(sim, policy, goal, max_steps=100):
             action = policy.infer(DUMMY_IMG, state_t, num_steps=4)
         action_np = np.clip(action.cpu().numpy()[0], -1, 1).astype(np.float32)
         sim.step(action_np)
-        dist = np.linalg.norm(sim.data.qpos[4:6] - goal_arr)
+        dist = np.linalg.norm(sim.data.qpos[:2] - goal_arr)
         if dist < GOAL_THRESHOLD:
             return True, step+1, dist
     return False, max_steps, dist
@@ -182,7 +182,7 @@ def run_episode_pctrl(sim, goal, max_steps=100):
         ctrl = p_controller_action(sim, goal_arr)
         action_np = np.array([0.0]*6 + list(ctrl))
         sim.step(action_np)
-        dist = np.linalg.norm(sim.data.qpos[4:6] - goal_arr)
+        dist = np.linalg.norm(sim.data.qpos[:2] - goal_arr)
         if dist < GOAL_THRESHOLD:
             return True, step+1, dist
     return False, max_steps, dist
