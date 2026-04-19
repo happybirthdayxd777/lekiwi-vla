@@ -339,3 +339,78 @@ After fix:
 
 ### Git
 - Commit: Phase 164 — bridge_node.py: Jacobian IK scale fix (m/s→m/200steps, scale=0.4) in 2 places + base position warmup step
+
+---
+
+## [Phase 182 - 2026-04-19 10:00 UTC] — CRITICAL: Phase 181 VLA has WRONG direction mapping (0% SR)
+
+### ✅ 已完成
+
+**ROOT CAUSE: Phase 181 training data collected with STALE GridSearchController (k_omni=0 era)**
+
+Phase 181 collected 10k frames using GridSearchController whose M-primes were mapped under k_omni overlay (k_omni=15, Phase 85-90 era). After Phase 113 disabled k_omni and Phase 131 remapped primitives for pure contact physics, the training data encodes INCORRECT wheel→direction associations.
+
+**Evidence:**
+```
+P-ctrl (correct Jacobian IK via twist_to_contact_wheel_speeds):
+  Goal (+0.3,-0.2): SUCCESS in 117 steps, dist=0.098m ✓ (100% SR baseline)
+
+Phase 181 VLA (200 steps, CLIP ViT-B/32 flow matching, 10 epochs):
+  Goal (+0.3,-0.2): FAIL, final=(+1.227,+0.287), dist=1.048m
+  Direction error: +X+Y instead of +X-Y (went 1.2m in WRONG direction!)
+
+  Raw wheel actions show w1≈+0.5 (produces +Y) instead of w1≈-0.5 (produces -Y)
+  → VLA learned wrong association from stale data
+```
+
+**Also fixed eval_phase181.py:**
+1. `sim.observe()` → `sim._obs()` (no observe method)
+2. `sim.data.qpos` direct indexing → `obs['arm_positions']` + `obs['wheel_velocities']`
+3. Added `F.interpolate` for 640x480→224x224 CLIP image resize
+4. Fixed quadrant assignment edge case (goal on axis boundary)
+5. Added `import torch.nn.functional as F`
+
+**eval_phase181.py now works but VLA gives 0% SR:**
+- 2-goal quick test: Goal (0.3,-0.2) dist=0.357m/30steps, Goal (0.5,+0.3) dist=0.567m/30steps
+- VLA outputs erratic actions (noisy, not goal-directed)
+
+### 🔍 架構現況
+- `sim_lekiwi_urdf.py` — Phase 113: k_omni=15.0, z-PD REMOVED, pure contact works
+- `scripts/eval_phase181.py` — Phase 182: FIXED eval script bugs, now functional
+- `results/phase181_vision_train/best_policy.pt` — Phase 181 VLA, 10 epochs, loss=0.534, 0% SR (CORRUPTED training data)
+- P-controller baseline: 100% SR confirmed (117 steps for +X-Y goal)
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Retrain VLA with CORRECT data (P-controller)**
+1. Collect 10k new frames using PController (Jacobian IK via twist_to_contact_wheel_speeds)
+2. PController achieves 100% SR → clean wheel action labels
+3. Train new policy on correct data
+4. Re-evaluate
+
+**PRIORITY 2: Verify data quality BEFORE training**
+1. Inspect collected frames: goal vs wheel_action direction consistency
+2. Check that -Y goals produce w1≈-0.5, +Y goals produce w1≈+0.5
+3. Check w2/w3 direction consistency
+
+**PRIORITY 3: Bridge integration still on hold**
+- `bridge_node.py` (1060 lines) reads ROS2 `/lekiwi/cmd_vel`, outputs joint_states
+- `vla_policy_node.py` (664 lines) — VLA inference pipeline
+- No ROS2 environment to test, but scripts functional in simulation
+
+### 🚫 阻礙
+- ~~Phase 181 eval script crashed~~ → **FIXED Phase 182**
+- **Phase 181 VLA trained on STALE data** — needs complete retrain
+- **GridSearchController stale mapping** (Phase 131 noted but not fixed in data collection)
+
+### 📊 實驗記錄
+|| Phase | 內容 | 結果 |
+|-------|------|------|
+| p181 | Vision VLA + symmetrized 10k | Training loss 0.864→0.534 (10 epochs) |
+| p181 | Training data method | GridSearchController with STALE primitives (k_omni=0 era) |
+| **p182** | **eval_phase181.py bugs fixed** | observe→_obs, qpos→obs[], resize→224x224, quadrant edge case |
+| **p182** | **VLA 0% SR root cause** | **Trained on STALE data → wrong wheel→direction mapping** |
+| p182 | P-ctrl baseline | 100% SR (117 steps for +X-Y goal) with correct Jacobian IK |
+
+### Git
+- Commit: Phase 182 — eval_phase181.py FIXED (observe→_obs, qpos→obs[], resize, quadrant), Phase 181 VLA 0% SR ROOT CAUSE: trained on STALE GridSearchController data (k_omni=0 era wrong primitives)

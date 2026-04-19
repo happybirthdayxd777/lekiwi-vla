@@ -8,7 +8,7 @@ Reports per-quadrant SR to detect +Y/-Y bias.
 import sys, os, json, time
 import numpy as np
 import torch
-
+import torch.nn.functional as F
 sys.path.insert(0, '/Users/i_am_ai/hermes_research/lekiwi_vla')
 os.chdir('/Users/i_am_ai/hermes_research/lekiwi_vla')
 
@@ -80,15 +80,22 @@ def evaluate_policy(policy, n_episodes=20, seed=42):
             np.random.uniform(-0.5, 0.5)
         ])
         
-        # Determine quadrant
-        quad = f"{'+' if goal[0] >= 0 else '-'}{'+' if goal[1] >= 0 else '-'}X{'+' if goal[1] >= 0 else '-'}Y"
+        # Determine quadrant (handle edge cases where goal is on axis boundary)
+        if goal[0] >= 0 and goal[1] > 0:
+            quad = '+X+Y'
+        elif goal[0] >= 0 and goal[1] <= 0:
+            quad = '+X-Y'
+        elif goal[0] < 0 and goal[1] >= 0:
+            quad = '-X+Y'
+        else:
+            quad = '-X-Y'
         
         sim.reset()
         # Warmup
         for _ in range(15):
             sim.step([0]*9)
         
-        obs = sim.observe()
+        obs = sim._obs()
         base_xy = sim.data.qpos[:2].copy()
         
         success = False
@@ -96,22 +103,21 @@ def evaluate_policy(policy, n_episodes=20, seed=42):
         dists = []
         
         for step in range(MAX_STEPS):
+            obs = sim._obs()
             # State: arm_pos(6) + wheel_vel(3)
             state = np.concatenate([
-                sim.data.qpos[sim._jpos_idx['j0']:sim._jpos_idx['j0']+6],
-                sim.data.qvel[sim._jvel_idx['w1']]
+                obs['arm_positions'],
+                obs['wheel_velocities']
             ]).astype(np.float32)
             
-            # Normalize state using z-score (from training)
-            # We need mean/std from the dataset
-            # Use simple range normalization for now
-            # arm_pos range: roughly [-2, 2], wheel_vel range: [-0.5, 0.5]
+            # Normalize state
             state[0:6] = np.clip(state[0:6] / 2.0, -1, 1)
             state[6:9] = np.clip(state[6:9] / 0.5, -1, 1)
             
-            # Render image
+            # Render image, resize to CLIP expected 224x224
             img = sim.render().astype(np.float32) / 255.0
             img_t = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).to(DEVICE)
+            img_t = F.interpolate(img_t, size=(224, 224), mode='bilinear', align_corners=False)
             state_t = torch.from_numpy(state).unsqueeze(0).to(DEVICE)
             
             # VLA inference
