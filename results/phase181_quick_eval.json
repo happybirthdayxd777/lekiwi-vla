@@ -5,7 +5,7 @@
   "max_steps": 100,
   "sr_total": 0.0,
   "mean_steps": 100.0,
-  "mean_final_dist": 0.6888081123563551,
+  "mean_final_dist": 0.6037354407816391,
   "details": [
     {
       "ep": 0,
@@ -15,7 +15,7 @@
       ],
       "success": false,
       "steps": 100,
-      "final_dist": 0.47396161212632504
+      "final_dist": 0.8249064972618808
     },
     {
       "ep": 1,
@@ -25,7 +25,7 @@
       ],
       "success": false,
       "steps": 100,
-      "final_dist": 1.3308614451657361
+      "final_dist": 0.24965419343411277
     },
     {
       "ep": 2,
@@ -35,7 +35,7 @@
       ],
       "success": false,
       "steps": 100,
-      "final_dist": 0.6100917429319278
+      "final_dist": 0.8543827515001347
     },
     {
       "ep": 3,
@@ -45,7 +45,7 @@
       ],
       "success": false,
       "steps": 100,
-      "final_dist": 0.42470024692799824
+      "final_dist": 0.6403856901530078
     },
     {
       "ep": 4,
@@ -55,8 +55,8 @@
       ],
       "success": false,
       "steps": 100,
-      "final_dist": 0.6044255146297886
+      "final_dist": 0.44934807155905915
     }
   ],
-  "elapsed": 152.8977551460266
+  "elapsed": 152.07968020439148
 }
