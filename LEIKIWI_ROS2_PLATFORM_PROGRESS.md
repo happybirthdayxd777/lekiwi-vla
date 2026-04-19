@@ -499,3 +499,64 @@ Phase 181 VLA (200 steps, CLIP ViT-B/32 flow matching, 10 epochs):
 
 ### Git
 - Commit: Phase 182 — eval_phase181.py FIXED (observe→_obs, qpos→obs[], resize, quadrant), Phase 181 VLA 0% SR ROOT CAUSE: trained on STALE GridSearchController data (k_omni=0 era wrong primitives)
+
+## Phase 189 — ROOT CAUSE FOUND: VLA State Missing base_xy (2025-01-19 04:17 UTC)
+### 🔴 CRITICAL DISCOVERY
+After 188 phases, found the ROOT CAUSE of VLA's 10-20% success rate vs P-ctrl's 45%:
+- **P-controller**: Uses TRUE `base_xy` from `sim.data.xpos` to compute `goal - base_xy`
+- **VLA state (11D)**: `arm_pos(6) + wheel_vel(3) + goal_norm(2)` — **NO base_xy!**
+- The VLA must infer its position by **integrating wheel_vel** over time (noise accumulates)
+- `goal_norm` is constant per episode — provides no movement/distance information
+
+### Evidence from phase187_clean_50ep.h5 analysis:
+```
+Episode-level correlations:
+  mean(w1) vs goal_x: -0.0438 (SHOULD be ~0.7+)
+  mean(w3) vs goal_y:  0.0263 (SHOULD be ~0.7+)
+
+w1 mean range: [-0.7455, 0.7294]
+goal_x range:  [-0.8098, 0.7800]
+
+Zero correlation confirms: wheel actions are independent of goal direction
+```
+
+### The Fix (2 options):
+1. **State = 13D**: `arm_pos(6) + base_xy(2) + wheel_vel(3) + goal_norm(2)`
+2. **Better**: `arm_pos(6) + base_to_goal(2) + wheel_vel(3) + goal_norm(2)`
+   - `base_to_goal = goal_xy - base_xy` (the direct control variable)
+   - Removes need for VLA to learn localization
+
+### Next Action:
+1. Collect NEW data with 13D state (base_xy or base_to_goal included)
+2. Retrain VLA with state_dim=13
+3. Expect VLA SR ≈ P-ctrl SR once state representation is correct
+## Phase 189 — ROOT CAUSE FOUND: VLA State Missing base_xy (2025-01-19 04:17 UTC)
+### 🔴 CRITICAL DISCOVERY
+After 188 phases, found the ROOT CAUSE of VLA's 10-20% success rate vs P-ctrl's 45%:
+- **P-controller**: Uses TRUE `base_xy` from `sim.data.xpos` to compute `goal - base_xy`
+- **VLA state (11D)**: `arm_pos(6) + wheel_vel(3) + goal_norm(2)` — **NO base_xy!**
+- The VLA must infer its position by **integrating wheel_vel** over time (noise accumulates)
+- `goal_norm` is constant per episode — provides no movement/distance information
+
+### Evidence from phase187_clean_50ep.h5 analysis:
+```
+Episode-level correlations:
+  mean(w1) vs goal_x: -0.0438 (SHOULD be ~0.7+)
+  mean(w3) vs goal_y:  0.0263 (SHOULD be ~0.7+)
+
+w1 mean range: [-0.7455, 0.7294]
+goal_x range:  [-0.8098, 0.7800]
+
+Zero correlation confirms: wheel actions are independent of goal direction
+```
+
+### The Fix (2 options):
+1. **State = 13D**: `arm_pos(6) + base_xy(2) + wheel_vel(3) + goal_norm(2)`
+2. **Better**: `arm_pos(6) + base_to_goal(2) + wheel_vel(3) + goal_norm(2)`
+   - `base_to_goal = goal_xy - base_xy` (the direct control variable)
+   - Removes need for VLA to learn localization
+
+### Next Action:
+1. Collect NEW data with 13D state (base_xy or base_to_goal included)
+2. Retrain VLA with state_dim=13
+3. Expect VLA SR ≈ P-ctrl SR once state representation is correct
