@@ -877,9 +877,9 @@ class LeKiWiSimURDF:
         return self._reward()
 
     def _reward(self) -> float:
-        # Phase 109 FIX: reward = 1.0 - dist (was -dist, causing 100% negative rewards)
-        # With this fix: dist=0 → r=1.0, dist=0.3 → r=0.7, dist=1.0 → r=0.0
-        return 1.0 - float(np.linalg.norm(self._target[:2] - self.data.qpos[:2]))
+        # Phase 195 FIX: use xpos[base][:2] for world XY — avoids qpos layout ambiguity
+        base_xy = self.data.xpos[self.model.body('base').id, :2]
+        return 1.0 - float(np.linalg.norm(self._target[:2] - base_xy))
 
     def render(self) -> Optional[np.ndarray]:
         """Render from front camera (640x480)."""

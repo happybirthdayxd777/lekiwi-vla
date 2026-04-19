@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
-Phase 191: Multi-Epoch Sweep Eval of Phase 190 Policy Checkpoints
-====================================================================
-Evaluates all available epoch checkpoints (4, 9, 14, 19) on 5 goals each.
+Phase 191/195: Multi-Epoch Sweep Eval of Phase 190 Policy Checkpoints
+======================================================================
+Evaluates all available epoch checkpoints (4, 9, 14, 19, 24, 29) on 5 goals each.
 Compares VLA success rate vs P-controller across training progress.
+
+FIXED (Phase 195):
+  - _get_base_xy() helper uses xpos[base][:2] universally (avoids qpos layout ambiguity)
+  - All distance checks and P-controller use _get_base_xy()
+  - P-controller goal_norm computed once at episode start
 
 Usage: python3 scripts/eval_phase190_sweep.py
 """
@@ -28,6 +33,13 @@ torch.manual_seed(SEED)
 IMG_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMG_STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 DUMMY_IMG = torch.zeros(1, 3, 224, 224, dtype=torch.float32)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _get_base_xy(sim):
+    """Universal base XY extraction — use xpos to avoid qpos layout ambiguity."""
+    return sim.data.xpos[sim.model.body('base').id, :2]
 
 
 # ── Policy (same arch as train_phase190.py) ───────────────────────────────────
@@ -110,7 +122,7 @@ class GoalConditionedPolicy(torch.nn.Module):
 # ── P-controller ─────────────────────────────────────────────────────────────
 
 def p_controller_action(sim, goal_xy, kP=0.5):
-    base_xy = sim.data.qpos[:2].copy()
+    base_xy = _get_base_xy(sim)
     dx, dy = goal_xy[0] - base_xy[0], goal_xy[1] - base_xy[1]
     dist = np.linalg.norm([dx, dy])
     if dist < 0.005:
@@ -167,7 +179,7 @@ def run_episode_vla(sim, policy, goal, max_steps=100):
             action = policy.infer(DUMMY_IMG, state_t, num_steps=4)
         action_np = np.clip(action.cpu().numpy()[0], -1, 1).astype(np.float32)
         sim.step(action_np)
-        dist = np.linalg.norm(sim.data.qpos[:2] - goal_arr)
+        dist = np.linalg.norm(_get_base_xy(sim) - goal_arr)
         if dist < GOAL_THRESHOLD:
             return True, step+1, dist
     return False, max_steps, dist
@@ -182,7 +194,7 @@ def run_episode_pctrl(sim, goal, max_steps=100):
         ctrl = p_controller_action(sim, goal_arr)
         action_np = np.array([0.0]*6 + list(ctrl))
         sim.step(action_np)
-        dist = np.linalg.norm(sim.data.qpos[:2] - goal_arr)
+        dist = np.linalg.norm(_get_base_xy(sim) - goal_arr)
         if dist < GOAL_THRESHOLD:
             return True, step+1, dist
     return False, max_steps, dist
@@ -192,7 +204,7 @@ def run_episode_pctrl(sim, goal, max_steps=100):
 
 def main():
     print("=" * 70)
-    print("Phase 191: Multi-Epoch Sweep — Phase 190 VLA Training Progress")
+    print("Phase 195: Multi-Epoch Sweep — Phase 190 VLA (FIXED base_xy)")
     print("=" * 70)
 
     train_dir = 'results/phase190_vision_train'
@@ -289,7 +301,7 @@ def main():
               f"{row['pctrl_sr']:>8.0f}% {row['eval_time']:>6.1f}s")
 
     # Save results
-    out_path = f'results/phase191_sweep_{int(time.time())}.json'
+    out_path = f'results/phase195_fixed_sweep_{int(time.time())}.json'
     with open(out_path, 'w') as f:
         json.dump({
             'summary': summary_rows,
