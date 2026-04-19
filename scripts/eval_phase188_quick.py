@@ -164,11 +164,15 @@ def normalize_action(raw_action):
 
 # ── P-controller baseline ─────────────────────────────────────────────────────
 def twist_to_contact_wheel_speeds(vx, vy, wz=0.0):
-    R = 0.042
-    w1 = (-0.0178 * vx + 0.1544 * vy) / R
-    w2 = (0.3824 * vx + 0.1929 * vy) / R
-    w3 = (-0.4531 * vx + 0.2378 * vy) / R
-    return np.array([w1, w2, w3], dtype=np.float32)
+    # Phase 164 recalibrated IK for k_omni=15.0 overlay
+    # Correct formula from sim_lekiwi_urdf.py line 541-546
+    # Convert m/s → m/200steps (multiply by 200)
+    vx_200 = vx * 200.0
+    vy_200 = vy * 200.0
+    w1 = -0.0124 * vx_200 + 0.1880 * vy_200
+    w2 =  0.1991 * vx_200 + 0.1991 * vy_200
+    w3 = -0.1993 * vx_200 + 0.1872 * vy_200
+    return np.clip(np.array([w1, w2, w3]), -0.5, 0.5)
 
 
 # ── Episode runner ────────────────────────────────────────────────────────────
