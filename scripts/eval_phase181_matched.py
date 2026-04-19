@@ -22,7 +22,7 @@ SEED = 42
 
 def twist_to_contact_wheel_speeds(vx, vy, wz, k_omni=15.0):
     """Jacobian P-controller: desired twist → wheel velocities."""
-    R = 0.041  # wheel radius
+    R = 0.0508  # wheel radius — FIX Phase 183: was 0.041 (24% too small vs URDF actual)
     vx_kin =  0.0000*vx + 0.3824*vy - 0.4531*(-wz)
     vy_kin =  0.1544*vx + 0.1929*vy + 0.2378*(-wz)
     wz_kin =  0.0

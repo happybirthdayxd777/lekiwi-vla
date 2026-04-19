@@ -2,7 +2,7 @@
   "phase": 182,
   "p_controller": {
     "sr": 25.0,
-    "mean_steps": 164.9,
+    "mean_steps": 165.2,
     "details": [
       {
         "ep": 0,
@@ -12,7 +12,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 1.839320998040806
+        "final_dist": 1.697416556325815
       },
       {
         "ep": 1,
@@ -22,7 +22,7 @@
         ],
         "success": true,
         "steps": 68,
-        "final_dist": 0.09932301240051263
+        "final_dist": 0.09805939076161567
       },
       {
         "ep": 2,
@@ -32,7 +32,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 1.6388802425501154
+        "final_dist": 1.7031305143404174
       },
       {
         "ep": 3,
@@ -42,7 +42,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 1.0014262639717504
+        "final_dist": 0.6815832657998154
       },
       {
         "ep": 4,
@@ -51,8 +51,8 @@
           0.2080725777960455
         ],
         "success": true,
-        "steps": 33,
-        "final_dist": 0.09850364714830623
+        "steps": 40,
+        "final_dist": 0.09913945363218492
       },
       {
         "ep": 5,
@@ -62,7 +62,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 0.6150529528388838
+        "final_dist": 0.8491461156769085
       },
       {
         "ep": 6,
@@ -72,7 +72,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 0.508017476741259
+        "final_dist": 0.382851182337636
       },
       {
         "ep": 7,
@@ -82,7 +82,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 1.67141973033764
+        "final_dist": 1.6491803642487726
       },
       {
         "ep": 8,
@@ -91,8 +91,8 @@
           0.02475643163223784
         ],
         "success": true,
-        "steps": 74,
-        "final_dist": 0.09915797933944492
+        "steps": 73,
+        "final_dist": 0.09979416067075356
       },
       {
         "ep": 9,
@@ -102,7 +102,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 0.5848879680433275
+        "final_dist": 1.007911562491355
       },
       {
         "ep": 10,
@@ -112,7 +112,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 1.1026245815829598
+        "final_dist": 0.7752750265642983
       },
       {
         "ep": 11,
@@ -122,7 +122,7 @@
         ],
         "success": true,
         "steps": 50,
-        "final_dist": 0.09434386986462207
+        "final_dist": 0.09434381108208552
       },
       {
         "ep": 12,
@@ -132,7 +132,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 1.1577787873266292
+        "final_dist": 1.168444624952125
       },
       {
         "ep": 13,
@@ -142,7 +142,7 @@
         ],
         "success": true,
         "steps": 73,
-        "final_dist": 0.09855458646647232
+        "final_dist": 0.0988773960828075
       },
       {
         "ep": 14,
@@ -152,7 +152,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 1.7772442666633135
+        "final_dist": 1.7785177512567252
       },
       {
         "ep": 15,
@@ -162,7 +162,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 0.7395029258507523
+        "final_dist": 0.4982483017780554
       },
       {
         "ep": 16,
@@ -172,7 +172,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 0.5772878443834353
+        "final_dist": 0.6740699466707425
       },
       {
         "ep": 17,
@@ -182,7 +182,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 1.1758093870724544
+        "final_dist": 1.1849337525307604
       },
       {
         "ep": 18,
@@ -192,7 +192,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 1.7687753191742832
+        "final_dist": 1.695331823916653
       },
       {
         "ep": 19,
@@ -202,7 +202,7 @@
         ],
         "success": false,
         "steps": 200,
-        "final_dist": 1.1276806288904262
+        "final_dist": 0.9467403566019617
       }
     ]
   },
