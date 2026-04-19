@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+import sys
+from lekiwi_ros2_bridge.bridge_node import main
+main()
