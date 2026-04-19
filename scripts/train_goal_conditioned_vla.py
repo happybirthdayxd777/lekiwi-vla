@@ -369,7 +369,7 @@ def evaluate(policy_path, n_episodes=10, threshold=0.15):
     # Load policy
     policy = GoalConditionedPolicy(state_dim=11, goal_dim=2, action_dim=9, device=DEVICE)
     ckpt = torch.load(policy_path, map_location=DEVICE, weights_only=False)
-    policy.load_state_dict(ckpt['policy_state_dict'])
+    policy.load_state_dict(ckpt['flow_head_state_dict'], strict=False)
     policy.to(DEVICE)
     policy.eval()
     print(f"[EVAL] Loaded policy from {policy_path}")
