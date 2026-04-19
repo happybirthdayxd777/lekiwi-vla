@@ -87,7 +87,7 @@ def collect_episode_clean(sim, controller, goal_pos, max_steps=200,
     # Normalize goal once at start
     goal_norm = np.clip(goal_pos / 0.5, -1, 1).astype(np.float32)
 
-    states_list, actions_list, rewards_list, goals_list = [], [], [], []
+    states_list, actions_list, rewards_list, goals_list, images_list = [], [], [], [], []
 
     # Arm: independent random walk
     arm_pos = np.zeros(6, dtype=np.float32)
@@ -118,13 +118,14 @@ def collect_episode_clean(sim, controller, goal_pos, max_steps=200,
         arm_pos_norm = np.clip(arm_pos / ARM_POS_SCALE, -1, 1).astype(np.float32)
         state11 = np.concatenate([arm_pos_norm, wheel_vels_norm, goal_norm])
 
-        # Render image
+        # Render image — COLLECT EVERY STEP (FIX Phase 189 bug)
         img = sim.render().astype(np.uint8)
 
         states_list.append(state11)
         actions_list.append(action)
         rewards_list.append(reward)
         goals_list.append(goal_norm)
+        images_list.append(img)
 
         if done:
             break
@@ -135,7 +136,7 @@ def collect_episode_clean(sim, controller, goal_pos, max_steps=200,
         'rewards': np.array(rewards_list, dtype=np.float32),
         'goal_norm': np.array(goals_list, dtype=np.float32),
         'goal_world': np.array([goal_pos] * len(states_list), dtype=np.float32),
-        'image': img,  # (H, W, 3) uint8
+        'images': images_list,  # FIXED: list of (H,W,3) per step
     }
 
 
@@ -152,7 +153,7 @@ def main():
     parser = argparse.ArgumentParser(description='Phase 187: Clean goal-directed data collection')
     parser.add_argument('--episodes', type=int, default=50)
     parser.add_argument('--steps', type=int, default=200)
-    parser.add_argument('--output', type=str, default='data/phase187_clean_50ep.h5')
+    parser.add_argument('--output', type=str, default='data/phase189_clean_50ep.h5')
     parser.add_argument('--goal_min', type=float, default=0.2)
     parser.add_argument('--goal_max', type=float, default=0.5)
     parser.add_argument('--seed', type=int, default=42)
@@ -202,7 +203,7 @@ def main():
         all_rewards.append(ep_data['rewards'])
         all_goals_norm.append(ep_data['goal_norm'])
         all_goals_world.append(ep_data['goal_world'])
-        all_images.append(ep_data['image'])  # (H, W, 3) uint8
+        all_images.extend(ep_data['images'])  # FIXED: extend per-step images, not single episode image
 
         episode_starts.append(total_frames + n)
         total_frames += n
@@ -255,7 +256,7 @@ def main():
             all_images_stacked = np.stack(all_images, axis=0)  # (N, H, W, 3)
             f.create_dataset('images', data=all_images_stacked, compression='gzip')
 
-        f.attrs['phase'] = 187
+        f.attrs['phase'] = 189
         f.attrs['controller'] = 'CleanJacobianController (kP=0.5, k_omni=15.0)'
         f.attrs['state_format'] = 'arm_pos(6)+wheel_vel(3)+goal_norm(2)=11D'
         f.attrs['action_format'] = 'arm(6)+wheel(3)=9D normalized [-1,1]'
