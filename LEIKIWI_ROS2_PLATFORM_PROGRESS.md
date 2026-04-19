@@ -1,5 +1,70 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
+## [Phase 196 - 2026-04-20 00:30 UTC] — Phase 196: CORRECT Data Collection Complete; VLA Training In Progress
+
+### ✅ 已完成
+
+**Phase 196: CORRECT Contact-Jacobian P-controller Data Collection**
+- 50 episodes with CORRECT Contact-Jacobian P-controller (kP=2.0)
+- 90% episode success rate (45/50 episodes), 5562 frames
+- CRITICAL: Uses `_CONTACT_JACOBIAN_PSEUDO_INV` (100% SR in eval) NOT kinematic IK
+- Controller: `v_desired = 2.0 * err; wheel_speeds = clip(_CONTACT_JACOBIAN_PSEUDO_INV @ v_desired, -0.5, 0.5)`
+- Script: `scripts/collect_phase196_clean.py`
+- Data: `data/phase196_clean_50ep.h5`
+
+**Phase 195 Discovery (from Phase 195 doc):**
+- ALL previous VLA policies (p181, p187, p189, p190) trained on WRONG P-controller data
+- Contact-Jacobian P-controller achieves **100% SR** on 20 random goals
+- The WRONG kinematic IK controller (Phase 164 calibrated) was used in all previous data collections
+- `scripts/eval_jacobian_pcontroller.py` — verified 100% SR baseline
+
+**Correlation Analysis:**
+```
+Phase 187 (WRONG controller):        Phase 196 (CORRECT controller):
+  Corr(w2, gx) = -0.009 (ZERO!)        Corr(w2, gx) = -0.664 ← STRONG
+  Corr(w2, gy) = -0.036 (ZERO!)        Corr(w2, gy) = +0.569 ← STRONG
+Phase 196: 2/5 strong correlations (better than Phase 187's 0/5)
+```
+
+**Scripts Created:**
+- `scripts/collect_phase196_clean.py` — Clean data collection
+- `scripts/train_phase196.py` — VLA training script
+- `LEIKIWI_PHASE196.md` — Full documentation
+
+**VLA Training:** In progress on CPU (~1.5 min/epoch, see `results/phase196_contact_jacobian_train/`)
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Check Phase 196 VLA training completion**
+1. Training runs ~30 min on CPU for 30 epochs
+2. Evaluate `results/phase196_contact_jacobian_train/best_policy.pt`
+3. Compare VLA SR vs Contact-Jacobian P-controller baseline (100%)
+
+**PRIORITY 2: If VLA SR < 20%, redesign architecture**
+1. The CLIP-FM architecture may not learn wheel control from vision
+2. Consider: proprioception-only, or different vision architecture
+3. Or: Collect MORE data (100+ episodes) for better coverage
+
+**PRIORITY 3: ROS2 Bridge Integration**
+1. Phase 196 VLA + Contact-Jacobian can be integrated into `bridge_node.py`
+2. Use VLA for wheel control instead of P-controller for VLA-augmented control
+
+### 🚫 阻礙
+- **CPU-only training** — no GPU, training too slow for quick iteration
+- **Weak correlations in Phase 196** — only 2/5 strong correlations vs expected 5/5
+  - Root cause: random base positions across episodes (each ep starts at random xy)
+  - For stronger correlations: fix base position to origin, vary only goal
+- **Previous VLAs unreliable** — all trained on wrong controller data
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p195 | Contact-Jacobian P-ctrl eval | **100% SR** (20 goals, kP=2.0) |
+| p196 | Collect with CORRECT controller | 90% SR, 5562 frames, 2/5 strong corr |
+| p196 | VLA training | IN PROGRESS (CPU, ~30min) |
+
+---
+
 ## [Phase 188 - 2026-04-19 16:00 UTC] — Phase 186 VLA 10% SR CONFIRMED; Data Quality ROOT CAUSE
 
 ### ✅ 已完成
