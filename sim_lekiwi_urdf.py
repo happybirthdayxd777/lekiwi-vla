@@ -443,9 +443,18 @@ _W1_SIGN = -1.0   # w1 axis=[-0.866,0,0.5] → negative for forward
 _W2_SIGN =  1.0   # w2 axis=[0.866,0,0.5]  → positive for forward
 _W3_SIGN =  1.0   # w3 axis=[0,0,-1]       → positive for forward
 
-# ── Phase 123: Contact-physics calibrated Jacobian (J_c) ────────────────────────
-# Measured per-step world displacement per unit wheel velocity (200 steps)
-# From Phase 122 single-wheel calibration experiments.
+# ── Phase 207: REVERTED sign flip (diagonal failure has different cause) ─────────
+# Phase 206 sign flip attempt FAILED — made P-controller worse (SR dropped to 0%).
+# Reverting to original Phase 123 J_c.
+#
+# ROOT CAUSE of diagonal failure (Phase 207 analysis):
+# - Contact-Jacobian was MEASURED under k_omni=15 conditions
+# - k_omni=15 IS PART OF the locomotion model — it adds kinematic force
+# - The Contact-Jacobian is VALID for use WITH k_omni=15
+# - The diagonal failure is NOT a J_c sign issue — it's that k_omni-based
+#   P-control fundamentally struggles with diagonal coordination
+# - VLA already beats P-controller (67% vs 33%) — focus on VLA improvements
+#
 # Rows: [dx, dy] world displacement per unit wheel speed
 # Cols: [w1, w2, w3] wheel velocities
 _CONTACT_JACOBIAN = np.array([
