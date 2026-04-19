@@ -502,32 +502,30 @@ def _omni_kinematics(wheel_vels: np.ndarray) -> tuple:
 
 def twist_to_contact_wheel_speeds(vx: float, vy: float, wz: float = 0.0) -> np.ndarray:
     """
-    Phase 192 FIX: Convert desired base velocity (vx, vy, wz in m/s) to wheel
-    angular velocities using the Phase 164 kinematic IK.
+    Phase 195 FIX: Convert desired base velocity (vx, vy, wz in m/s) to wheel
+    angular velocities using the CONTACT JACOBIAN (_CONTACT_JACOBIAN_PSEUDO_INV).
 
-    PREVIOUS BUG (Phase 164-191): The formula incorrectly multiplied vx, vy by 200.
-    This caused ALL small goals (0.3-0.5m) to produce saturating wheel speeds:
-      - vx=0.15 m/s → vx_200=30 → w1 = -0.0124*30 + 0.188*30 = 5.268 → clipped to 0.5
-      - ALL goals → identical saturating wheels → VLA learns constant output → 0% SR
+    PREVIOUS BUG (Phase 164-192): Used kinematic IK model calibrated for
+    k_omni=15 overlay physics. The kinematic model was fundamentally wrong for
+    the URDF's isosceles wheel geometry — it predicted incorrect wheel-to-direction
+    mapping, leading to the P-controller achieving only 0-20% SR.
 
-    ROOT CAUSE: Phase 164 misread calibration data units. The calibration measured
-    displacement per 200 steps (not per second), but the P-controller outputs m/s.
-    The *200 was supposed to convert m/s→m/200steps, but the formula already produces
-    wheel speeds in rad/s that work correctly with the MuJoCo sim timestep.
+    CORRECT approach (Phase 195):
+      Use _CONTACT_JACOBIAN_PSEUDO_INV which was empirically calibrated from
+      pure contact physics measurements (Phase 122-123).
+      wheel_speeds = J_c_pinv @ [vx, vy]
+      (wz is not calibrated yet — ignored for now)
 
-    CORRECT formula (Phase 192):
-      w1 = -0.0124*vx + 0.1880*vy   [rad/s, no multiplication]
-      w2 =  0.1991*vx + 0.1991*vy
-      w3 = -0.1993*vx + 0.1872*vy
-
-    Verified: goal (0.3,0.3), vx=0.15, vy=0.15 → w=[0.026, 0.060, -0.002]
-    (vs old buggy: w=[0.5, 0.5, -0.363] — ALL SATURATED!)
+    CORRECT formula:
+      w1 = 0.1257*vx + 0.4426*vy   [rad/s]
+      w2 = 0.2568*vx + 0.3179*vy   [rad/s]
+      w3 = -0.2606*vx + 0.1596*vy  [rad/s]
 
     Parameters
     ----------
     vx, vy : float
         Desired base velocity in m/s (world frame).
-        P-controller: vx = kP * (goal_x - base_x), kP=0.5
+        P-controller: vx = kP * (goal_x - base_x), kP=2.0 recommended
     wz : float
         Desired angular velocity in rad/s (default=0.0, yaw not calibrated).
 
@@ -537,11 +535,9 @@ def twist_to_contact_wheel_speeds(vx: float, vy: float, wz: float = 0.0) -> np.n
         Wheel angular velocities [w1, w2, w3] in rad/s.
         Clipped to [-0.5, 0.5] rad/s.
     """
-    # Phase 192: REMOVED *200 — was causing ALL wheel speeds to saturate
-    w1 = -0.0124 * vx + 0.1880 * vy
-    w2 =  0.1991 * vx + 0.1991 * vy
-    w3 = -0.1993 * vx + 0.1872 * vy
-    return np.clip(np.array([w1, w2, w3]), -0.5, 0.5)
+    # Phase 195: Use Contact-Jacobian (NOT the old kinematic model!)
+    wheel_speeds = _CONTACT_JACOBIAN_PSEUDO_INV @ np.array([vx, vy])
+    return np.clip(wheel_speeds, -0.5, 0.5)
 
 
 # ── Simulation ───────────────────────────────────────────────────────────────
