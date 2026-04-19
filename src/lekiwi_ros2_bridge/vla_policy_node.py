@@ -430,10 +430,92 @@ def _make_clip_fm_wrapper(pretrained: Optional[str], device: str):
     return CLIPFMPolicyRunner(raw, device)
 
 
+def _make_phase196_policy(pretrained: Optional[str], device: str):
+    """
+    Load Phase 196 Contact-Jacobian VLA policy.
+
+    Architecture: GoalConditionedPolicy (same as train_phase196.py)
+      - CLIP ViT-B/32 vision encoder (frozen)
+      - Goal MLP: 2 → 256 → 128
+      - State net: 11D → 256 → 128
+      - Cross-attention: goal(Q) attends to CLIP(K,V)
+      - Flow matching head: 4-step Euler inference
+      - 155M total params, 0 NaN/Inf tensors
+
+    Checkpoint: results/phase196_contact_jacobian_train/epoch_14.pt
+      - loss=0.3267, 14 epochs on CORRECT Contact-Jacobian data
+      - 90% SR in standalone eval (10/10 random goals, 200 steps)
+
+    State: arm_pos(6) + wheel_vel(3) + goal_norm(2) = 11D
+    Action: arm_torque(6) + wheel_speed(3) = 9D
+    """
+    sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
+    from scripts.train_phase196 import GoalConditionedPolicy as GCPolicy
+
+    policy = GCPolicy(state_dim=11, action_dim=9).to(device)
+
+    if pretrained:
+        ckpt_path = os.path.expanduser(pretrained)
+    else:
+        ckpt_path = os.path.expanduser("~/hermes_research/lekiwi_vla/results/phase196_contact_jacobian_train/epoch_14.pt")
+
+    if os.path.exists(ckpt_path):
+        import torch
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        sd = ckpt.get("policy_state_dict", ckpt)
+        missing, unexpected = policy.load_state_dict(sd, strict=False)
+        print(f"[phase196] Loaded checkpoint epoch={ckpt.get('epoch','?')} loss={ckpt.get('loss','?')} | "
+              f"missing={len(missing)} unexpected={len(unexpected)}")
+    else:
+        print(f"[phase196] WARNING: checkpoint not found: {ckpt_path}")
+
+    return policy
+
+
+def _make_phase196_wrapper(pretrained: Optional[str], device: str):
+    """Wrapper for phase196: GoalConditionedPolicy with Phase196Replay-style inference."""
+    raw = _make_phase196_policy(pretrained, device)
+    return Phase196PolicyRunner(raw, device)
+
+
+class Phase196PolicyRunner:
+    """
+    Inference runner for Phase 196 GoalConditionedPolicy.
+
+    Uses 4-step Euler flow matching, same as train_phase196.py infer().
+    State: arm_pos(6) + wheel_vel(3) + goal_norm(2) = 11D
+    Action: raw policy output (9D), no normalization applied.
+    """
+    def __init__(self, policy, device: str = "cpu"):
+        self.policy = policy
+        self.device = device
+        self.policy.eval()
+
+    def __call__(self, image: np.ndarray, state: np.ndarray) -> np.ndarray:
+        """
+        Args:
+            image: [3, 224, 224] preprocessed image (normalized)
+            state: [11] — arm_pos(6) + wheel_vel(3) + goal_norm(2)
+        Returns:
+            [9] raw action (policy output, no denormalization)
+        """
+        import torch
+        img_t = torch.from_numpy(image[None]).to(self.device)
+        st_t = torch.from_numpy(state[None]).to(self.device)
+        with torch.no_grad():
+            action = self.policy.infer(img_t, st_t, num_steps=4)[0].cpu().numpy()
+        return action
+
+    def reset(self):
+        """No internal state to reset."""
+        pass
+
+
 _POLICY_LOADERS = {
     "mock":          _make_mock_policy,
     "clip_fm":       _make_clip_fm_wrapper,
     "task_oriented": _make_task_oriented_wrapper,
+    "phase196":      _make_phase196_wrapper,
 }
 
 

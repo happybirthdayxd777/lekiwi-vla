@@ -70,12 +70,12 @@ def generate_launch_description() -> LaunchDescription:
         description="Device for VLA inference: cpu, cuda, mps",
     )
     policy = DeclareLaunchArgument(
-        "policy", default_value="task_oriented",
-        description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm, task_oriented",
+        "policy", default_value="phase196",
+        description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm, task_oriented, phase196",
     )
     pretrained = DeclareLaunchArgument(
-        "pretrained", default_value="~/hermes_research/lekiwi_vla/results/task_oriented_goaldirected/checkpoint_epoch_50.pt",
-        description="Path to pretrained policy checkpoint (LeRobot or clip_fm .pt)",
+        "pretrained", default_value="",
+        description="Path to pretrained policy checkpoint (default: phase196's epoch_14.pt)",
     )
     record = DeclareLaunchArgument(
         "record", default_value="false",
