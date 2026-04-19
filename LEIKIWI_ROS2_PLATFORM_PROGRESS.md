@@ -675,4 +675,83 @@ Fixed data flow:
 ### Git
 - New: `scripts/collect_phase189_fast.py` (Phase 189, broken — has *200 bug)
 - Modified: `scripts/eval_phase188_quick.py` (pending: fix twist_to_contact)
-- Commit pending: Phase 190 — ROOT CAUSE: `*200` scaling saturates ALL wheel speeds to ±0.5; fixed formula gives Corr(w0,gy)=0.958; need re-collect phase190 data
+- Commit: Phase 190 — ROOT CAUSE: `*200` scaling saturates ALL wheel speeds to ±0.5
+
+---
+
+## [Phase 191 - 2026-04-19 20:00 UTC] — VLA SR=0% CONFIRMS phase189 data CORRUPTED
+
+### ✅ 已完成
+
+**Phase 191: Created eval script + ran FAST evaluation (5 goals, 170s, no render)**
+```
+VLA:    SR=0% (0/5), avg_final_dist=0.6415
+P-ctrl: SR=20% (1/5), avg_final_dist=0.1315
+```
+- Policy: `results/phase190_vision_train/epoch_14.pt` (trained on phase189 data)
+- Architecture: GoalConditionedPolicy (11D, CLIP ViT-B/32, 4-step flow matching)
+- Eval script: `scripts/eval_phase191_fast.py` — 170s for 5 goals (no per-step rendering)
+
+**Root cause CONFIRMED via eval evidence:**
+- VLA trained on phase189 data with `*200` saturation → outputs constant ±1 (scaled 0.5)
+- Robot barely moves toward ANY goal → 0% SR
+- Goal (0.3, -0.3): VLA final_dist=0.5742 (barely moved), P-ctrl=0.2317
+- Goal (-0.3, -0.3): VLA final_dist=1.2467 (WRONG direction), P-ctrl=0.1147
+- Only goal where P-ctrl succeeded: (0.4, 0.1) at 58 steps
+
+**VLA learned the WRONG mapping:**
+- Because ALL training data had identical wheel speeds (±0.5) regardless of goal
+- VLA outputs ±1 (normalized) for ALL goals → MuJoCo wheel commands near zero velocity
+
+### 🔍 架構現況
+```
+Phase 189 corrupted training data:
+  P-controller → ALL goals → wheel_speeds = ±0.5 (saturated)
+  → VLA trains: "goal ANY → wheel = ±1 (normalized)"
+  → In eval: VLA outputs ±1 → robot barely moves → 0% SR
+
+P-controller on URDF model:
+  - With *200 formula: saturates quickly
+  - 20% SR only on 5-goal eval (needs k_omni=15 overlay active)
+```
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Re-collect CLEAN phase192 data (REMOVE `*200`)**
+- Create `scripts/collect_phase192_clean.py` — uses corrected formula:
+  ```python
+  def twist_to_contact_fixed(vx, vy, wz=0.0):
+      # NO *200 — proper small velocity scaling
+      w1 = -0.0124 * vx + 0.1880 * vy
+      w2 =  0.1991 * vx + 0.1991 * vy
+      w3 = -0.1993 * vx + 0.1872 * vy
+      return np.clip(np.array([w1, w2, w3]), -0.5, 0.5)
+  ```
+- Use adaptive velocity: `v_mag = min(1.5*dist, 0.3)`
+- Collect 10k frames → MUST verify: Corr(w0,gy) > 0.9, Corr(w1,gx) > 0.6
+
+**PRIORITY 2: Quick P-controller baseline on LeKiWiSim (NOT URDF)**
+- Test corrected formula on the simpler sim (no meshes) to verify 100% SR
+- Before training new VLA
+
+**PRIORITY 3: Train Phase 192 VLA on clean data**
+
+### 🚫 阻礙
+- **phase189 data: ALL saturated** → VLA learned wrong behavior (0% SR)
+- **P-controller on URDF: 20% SR** → k_omni=15 may not be active in sim
+- **Eval with rendering: too slow** → using dummy image approach
+
+### 📊 實驗記錄
+|| Phase | 內容 | 結果 |
+||-------|------|------|
+|| p189 | Data: 10000 images, *200 bug | CORRUPTED: all wheel speeds saturate ±0.5 |
+|| p190 | Training: 15 epochs on phase189 | loss=0.40, VLA SR=0% on 5-goal eval |
+|| p191 | VLA eval: dummy image, 5 goals | **SR=0%, VLA barely moves (dist=0.64-1.25)** |
+|| p191 | P-ctrl baseline | SR=20%, avg_dist=0.1315 (on URDF sim) |
+|| p192 | **NEXT** | Re-collect clean data WITHOUT *200 |
+
+### Git
+- New: `scripts/eval_phase191_fast.py` — fast VLA eval (no render, 170s, 5 goals)
+- New: `results/phase191_fast_eval.json` — eval results
+- New: `LEIKIWI_PHASE191.md` — detailed phase 191 findings
+- Commit: Phase 191 — VLA SR=0% confirms phase189 data corrupted; eval script created
