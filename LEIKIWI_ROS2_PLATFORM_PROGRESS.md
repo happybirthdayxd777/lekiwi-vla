@@ -1,6 +1,87 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
 ---
+## [Phase 242 - 2026-04-21 07:30 UTC] — Critical qvel[9:12]→qvel[6:9] Bug Fixed in Train/Eval Scripts
+
+### 🔴 Critical Bug Found: Train/Eval State Mismatch — qvel[9:12] vs qvel[6:9]
+
+**BUG**: `train_phase196.py` line 368 and `eval_phase240_cross_radius.py` line 135 both read:
+```
+wheel_vel = sim.data.qvel[9:12].copy()   ← ARM VELOCITIES (j0, j1, j2)!
+```
+
+But `collect_phase196_clean.py` line 112 reads:
+```
+wheel_vel = sim.data.qvel[6:9].copy()   ← CORRECT: wheel velocities (w1, w2, w3)
+```
+
+**Impact**: ALL VLA eval (train_phase196.py `evaluate_policy()` and eval_phase240_cross_radius.py) was using ARM velocities as "wheel_vel" in the 11D state vector, while training was done with CORRECT wheel_vel from qvel[6:9]. This is a train/eval mismatch — eval was testing a policy on states that never matched the training distribution.
+
+**Fix Applied**:
+```python
+# scripts/train_phase196.py line 368:
+- wheel_vel = sim.data.qvel[9:12].copy()
++ # CORRECT (Phase 222): wheel_vel from qvel[6:9], NOT qvel[9:12]=ARM velocities
++ wheel_vel = sim.data.qvel[6:9].copy()
+
+# scripts/eval_phase240_cross_radius.py line 135:
+- wheel_vel = sim.data.qvel[9:12].copy()
++ # CORRECT (Phase 222): wheel_vel from qvel[6:9], NOT qvel[9:12]=ARM velocities
++ wheel_vel = sim.data.qvel[6:9].copy()
+```
+
+**Phase196 VLA True Performance** (eval_phase196_vla_fixed.py, correct qvel[6:9]):
+- With correct qvel[6:9]: **50% SR** (50 goals, sr=0.10m, early termination)
+- P-controller (Contact-Jacobian kP=2.0): **94% SR** → VLA is ~44% below oracle
+
+**Root Cause of Poor VLA Performance**: The qvel[9:12] bug affects EVAL ONLY. Training was correct (data from qvel[6:9]). The actual root cause is:
+- VLA trained with correct wheel_vel (qvel[6:9])
+- VLA tested with correct wheel_vel (qvel[6:9]) in eval_phase196_vla_fixed.py
+- Still only 50% SR → VLA fundamentally struggles with +X/-Y quadrant (0% SR there)
+- Phase227 (Q2-extended, 30 epochs) still only 4% SR — longer training doesn't fix it
+
+**Next Step**: The qvel[9:12] fix in train_phase196.py `evaluate_policy()` and eval_phase240_cross_radius.py aligns these eval scripts with the correct qvel[6:9] used in data collection. But the fundamental VLA performance problem remains — need DAgger or curriculum learning.
+
+### ✅ 本次心跳完成
+
+**1. Critical qvel index bug identified and fixed**
+- train_phase196.py line 368: qvel[9:12] → qvel[6:9]
+- eval_phase240_cross_radius.py line 135: qvel[9:12] → qvel[6:9]
+- eval_phase196_vla_fixed.py already correct (uses WHEEL_JOINTS dofadr lookup)
+- Phase227 training and eval both correct (qvel[6:9])
+
+**2. Git Committed**
+```
+7a517f7 Phase 242: Fix eval qvel bug — qvel[9:12]→qvel[6:9] for wheel_vel in train_phase196 and eval_phase240
+```
+
+### 🧭 下次心跳（Phase 243）
+
+**Priority 1: Run fixed eval_phase240_cross_radius.py** — now with correct qvel[6:9], this is the definitive Phase196 VLA evaluation
+
+**Priority 2: DAgger data collection** — VLA fails on +X/-Y, collect P-controller corrections for VLA failures → retrain with DAgger
+
+**Priority 3: Phase198 Policy Evaluation** (still open from Phase 221):
+- Phase198 checkpoint exists but never evaluated
+
+### 📊 Experiment Record
+
+| Phase | Content | Result |
+|-------|---------|--------|
+| p196  | CJ P-controller data + VLA train (14 epochs) | 50% SR (fixed eval, sr=0.1m) |
+| p198  | Architecture fix retrain | phase198_v3_final.pt — UNVERIFIED |
+| p227  | Q2-extended data + 30-epoch VLA train | 4% SR (catastrophic failure) |
+| p234  | P-ctrl 94% SR (FIXED), Phase196 VLA 8% (buggy eval) | eval had qvel[9:12] bug |
+| p235  | Phase196 VLA 50% SR (fixed eval, qvel[6:9]) | True performance |
+| p242  | qvel[9:12]→qvel[6:9] fix in train_phase196/eval_phase240 | Fix committed |
+
+### Git
+- Commit: `7a517f7` Phase 242: Fix eval qvel bug — qvel[9:12]→qvel[6:9] for wheel_vel in train_phase196 and eval_phase240
+- Branch: main
+- Working tree: clean
+
+---
+
 ## [Phase 220 - 2026-04-20 14:30 UTC] — Camera Pipeline Verified + Priority 3 Closed
 
 ### ✅ 已完成（本次心跳）
