@@ -8,7 +8,7 @@ from scripts.train_phase196 import GoalConditionedPolicy, DEVICE
 from sim_lekiwi_urdf import LeKiWiSimURDF, ARM_JOINTS, WHEEL_JOINTS
 from PIL import Image
 
-ckpt = torch.load('results/phase196_contact_jacobian_train/epoch_4.pt', map_location='cpu', weights_only=False)
+ckpt = torch.load('results/phase196_contact_jacobian_train/epoch_14.pt', map_location='cpu', weights_only=False)
 policy = GoalConditionedPolicy(state_dim=11, action_dim=9).to(DEVICE)
 policy.load_state_dict(ckpt['policy_state_dict'])
 policy.eval()
