@@ -1,0 +1,26 @@
+{
+  "phase": 227,
+  "config": {
+    "n_episodes": 50,
+    "max_steps": 200,
+    "success_radius": 0.1,
+    "seed": 42
+  },
+  "p_controller": {
+    "policy": "P-controller CJ kP=2.0",
+    "success_rate": 0.94,
+    "successes": 47,
+    "n_episodes": 50,
+    "success_radius": 0.1,
+    "mean_final_dist": 0.15373826831438206,
+    "median_final_dist": 0.09511422805741672,
+    "mean_steps": 110.4,
+    "episodes": [
+      {
+        "goal": [
+          -0.06909491086447811,
+          0.25240001158955305
+        ],
+        "final_dist": 0.08910776055778581,
+        "steps": 129,
+        "success": 
