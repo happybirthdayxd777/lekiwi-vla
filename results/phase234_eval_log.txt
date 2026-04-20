@@ -194,3 +194,76 @@ AGX: exceeded compiled variants footprint limit
 [LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
 [LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
 [LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  [30/50] goal=(-0.32,-0.10) dist=0.726m ✗ | ETA 890s
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  [40/50] goal=(-0.08,-0.22) dist=0.674m ✗ | ETA 444s
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  [50/50] goal=(-0.33,-0.22) dist=0.183m ✗ | ETA 0s
+  Phase227 VLA: 2/50 = 4.0% SR
+
+  [Phase227 VLA] Q2 (gx<0, gy>0) Performance:
+    Q2 SR: 0/15 = 0.0%
+    Q2 gy range: [0.008, 0.273]
+    Q2 with gy > 0.24m (OLD OOD region): 4
+    Q2 FAILURES (15):
+      goal=(-0.07,+0.25) gy=0.252 final_dist=1.297m
+      goal=(-0.31,+0.21) gy=0.205 final_dist=1.301m
+      goal=(-0.33,+0.26) gy=0.263 final_dist=1.256m
+      goal=(-0.12,+0.01) gy=0.014 final_dist=0.262m
+      goal=(-0.01,+0.16) gy=0.160 final_dist=1.305m
+      ... and 10 more
+
+Total evaluation time: 72.1 min
+
+======================================================================
+SUMMARY TABLE
+======================================================================
+Policy                               SR   MeanDist  MedianDist  MeanSteps
+----------------------------------------------------------------------
+P-controller CJ kP=2.0            94.0%     0.154m      0.095m     110.4
+VLA Phase196 (original)            8.0%     0.555m      0.425m     200.0
+VLA Phase227 (Q2-extended)         4.0%     0.693m      0.690m     200.0
+Traceback (most recent call last):
+  File "/Users/i_am_ai/hermes_research/lekiwi_vla/scripts/eval_phase227.py", line 308, in <module>
+    json.dump(results, f, indent=2)
+    ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/miniconda3/lib/python3.13/json/__init__.py", line 181, in dump
+    for chunk in iterable:
+                 ^^^^^^^^
+  File "/opt/miniconda3/lib/python3.13/json/encoder.py", line 435, in _iterencode
+    yield from _iterencode_dict(o, _current_indent_level)
+  File "/opt/miniconda3/lib/python3.13/json/encoder.py", line 409, in _iterencode_dict
+    yield from chunks
+  File "/opt/miniconda3/lib/python3.13/json/encoder.py", line 409, in _iterencode_dict
+    yield from chunks
+  File "/opt/miniconda3/lib/python3.13/json/encoder.py", line 328, in _iterencode_list
+    yield from chunks
+  File "/opt/miniconda3/lib/python3.13/json/encoder.py", line 409, in _iterencode_dict
+    yield from chunks
+  File "/opt/miniconda3/lib/python3.13/json/encoder.py", line 442, in _iterencode
+    o = _default(o)
+  File "/opt/miniconda3/lib/python3.13/json/encoder.py", line 182, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+                    f'is not JSON serializable')
+TypeError: Object of type bool is not JSON serializable

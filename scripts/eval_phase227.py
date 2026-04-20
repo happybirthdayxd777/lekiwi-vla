@@ -54,6 +54,7 @@ def run_evaluation(policy, n_episodes, max_steps, success_radius, seed, policy_n
         ])
         sim = LeKiWiSimURDF()
         sim.reset()
+        base_body_id = sim.model.body('base').id
 
         for step in range(max_steps):
             state = build_state(sim, goal)
@@ -66,11 +67,16 @@ def run_evaluation(policy, n_episodes, max_steps, success_radius, seed, policy_n
                                      num_steps=4).cpu().numpy()[0]
             sim.step(np.clip(action, -0.5, 0.5))
 
-        final_dist = np.linalg.norm(sim.data.qpos[:2] - goal)
-        success = final_dist < success_radius
+            # Early termination when goal reached
+            dist = np.linalg.norm(sim.data.xpos[base_body_id, :2] - goal)
+            if dist < success_radius:
+                break
+
+        final_dist = np.linalg.norm(sim.data.xpos[base_body_id, :2] - goal)
+        success = bool(final_dist < success_radius)
         successes += int(success)
         episodes.append({
-            'goal': goal.tolist(),
+            'goal': list(goal),
             'final_dist': float(final_dist),
             'steps': step + 1,
             'success': success,
@@ -146,12 +152,12 @@ def run_pcontroller(n_episodes, max_steps, success_radius, seed, verbose=True):
                 break
 
         final_dist = np.linalg.norm(sim.data.xpos[base_body_id, :2] - goal)
-        success = final_dist < success_radius
+        success = bool(final_dist < success_radius)
         successes += int(success)
         episodes.append({
-            'goal': goal.tolist(),
+            'goal': list(goal),
             'final_dist': float(final_dist),
-            'steps': actual_steps,
+            'steps': steps,
             'success': success,
         })
 
