@@ -820,3 +820,67 @@ P-controller on URDF model:
 - New: `results/phase191_fast_eval.json` — eval results
 - New: `LEIKIWI_PHASE191.md` — detailed phase 191 findings
 - Commit: Phase 191 — VLA SR=0% confirms phase189 data corrupted; eval script created
+
+---
+
+## [Phase 216 - 2026-04-20 11:30 UTC] — Phase 196 VLA: 80% SR vs P-ctrl 100% (5-goal quick eval)
+
+### ✅ 已完成
+
+**Phase 196 VLA Evaluation (epoch 14 checkpoint)**
+- Quick 5-goal eval (seed=42, 150 steps max):
+  - P-ctrl (Contact-Jacobian kP=2.0): **5/5 = 100% SR**
+  - VLA epoch 14: **4/5 = 80% SR**
+- VLA is **functional** — learning wheel control from vision + goal conditioning
+- VLA underperforms P-ctrl by 20% (4/5 vs 5/5)
+- Training was interrupted at epoch 14/30 (disk space issue)
+
+**VLA Inference Speed**
+- Per-step: ~134ms (4-step Euler flow matching on CPU)
+- 10-goal × 150-step eval would take ~200 seconds
+- Eval script `scripts/eval_phase216.py` created for future eval
+
+**ROS2 Bridge Status**
+- `bridge_node.py` (1186 lines) bridges `/lekiwi/cmd_vel` ↔ MuJoCo
+- Topics: `/lekiwi/cmd_vel` (Twist), `/lekiwi/joint_states` (JointState), camera/wrist_cam images
+- Supports `primitive` and `urdf` sim modes
+- Phase 212: VLA amplification (2.5x) + direction-agreement hybrid
+- Phase 215: Fixed `render_wrist()` — LeKiWiSimWrapper now exposes wrist camera
+
+**lekiwi_modular ROS2 Topics Analysis:**
+- `/lekiwi/cmd_vel` (Twist) → `omni_controller.py` → `/lekiwi/wheel_N/cmd_vel` (Float64)
+- `/lekiwi/odom` (Odometry) from `omni_odometry.py`
+- URDF: `LeKiWi.urdf` with base_plate + omni wheels + servo motors (STL meshes)
+
+### 🧭 下一步（下次心跳）
+
+**PRIORITY 1: Complete VLA eval (20 goals)**
+1. 10-goal eval takes ~200s — acceptable for cron job
+2. Run `scripts/eval_phase216.py` with 10 goals
+3. Compare VLA vs P-ctrl on larger sample
+
+**PRIORITY 2: Resume Phase 196 training**
+1. Clear disk space (move old results)
+2. Resume from epoch 14 checkpoint
+3. Train to 30 epochs — better VLA policy
+
+**PRIORITY 3: ROS2 Bridge integration**
+1. Integrate Phase 196 VLA (epoch 14) into `bridge_node.py`
+2. Add topic `/lekiwi/vla_action` as direct wheel control override
+3. Test full ROS2 launch with VLA policy
+
+### 🚫 阻礙
+- **Disk space**: "No space left on device" — training interrupted at epoch 14
+- **VLA slower than P-ctrl**: 134ms/step vs ~5ms for P-controller
+- **URDF sim unstable**: MuJoCo warnings in log (QACC NaN, unstable sim)
+
+### 📊 實驗記錄
+| Phase | 內容 | 結果 |
+|-------|------|------|
+| p196 | VLA training (epoch 14/30) | Interrupted (disk space) |
+| p216 | VLA-e14 5-goal eval | VLA=80% SR, P-ctrl=100% SR |
+| p215 | render_wrist fix | LeKiWiSimWrapper wrist camera working |
+
+### Git
+- Commit: Phase 216 — Phase 196 VLA eval script (80% SR vs 100% P-ctrl)
+
