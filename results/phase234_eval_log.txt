@@ -103,3 +103,94 @@ Config: 50 goals, 200 steps, sr=0.1m, seed=42
 [LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
 [LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
 [LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  [10/50] goal=(-0.03,-0.12) dist=0.022m ✓ | ETA 1681s
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+AGX: exceeded compiled variants footprint limit
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  [20/50] goal=(0.16,-0.03) dist=0.220m ✗ | ETA 1280s
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  [30/50] goal=(-0.32,-0.10) dist=1.105m ✗ | ETA 846s
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  [40/50] goal=(-0.08,-0.22) dist=0.209m ✗ | ETA 419s
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  [50/50] goal=(-0.33,-0.22) dist=0.925m ✗ | ETA 0s
+  Phase196 VLA: 4/50 = 8.0% SR
+
+  [Phase196 VLA] Q2 (gx<0, gy>0) Performance:
+    Q2 SR: 0/15 = 0.0%
+    Q2 gy range: [0.008, 0.273]
+    Q2 with gy > 0.24m (OLD OOD region): 4
+    Q2 FAILURES (15):
+      goal=(-0.07,+0.25) gy=0.252 final_dist=0.540m
+      goal=(-0.31,+0.21) gy=0.205 final_dist=1.318m
+      goal=(-0.33,+0.26) gy=0.263 final_dist=1.302m
+      goal=(-0.12,+0.01) gy=0.014 final_dist=0.311m
+      goal=(-0.01,+0.16) gy=0.160 final_dist=0.356m
+      ... and 10 more
+
+[Evaluating Phase 227 VLA (Q2-extended)]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  [10/50] goal=(-0.03,-0.12) dist=0.712m ✗ | ETA 1793s
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  [20/50] goal=(0.16,-0.03) dist=0.722m ✗ | ETA 1317s
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
