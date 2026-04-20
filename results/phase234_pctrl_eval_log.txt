@@ -1,0 +1,6 @@
+[Phase 227] Device: cpu
+usage: eval_phase227.py [-h] --vla VLA [--phase196 PHASE196]
+                        [--n_episodes N_EPISODES] [--max_steps MAX_STEPS]
+                        [--success_radius SUCCESS_RADIUS] [--seed SEED]
+                        [--output OUTPUT]
+eval_phase227.py: error: the following arguments are required: --vla

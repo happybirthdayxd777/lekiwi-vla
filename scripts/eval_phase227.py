@@ -99,7 +99,21 @@ def run_evaluation(policy, n_episodes, max_steps, success_radius, seed, policy_n
     }
 
 def run_pcontroller(n_episodes, max_steps, success_radius, seed, verbose=True):
-    """Run P-controller baseline."""
+    """
+    Run P-controller baseline.
+
+    Phase 234 FIX: Two bugs in eval_phase227.py caused P-controller to show 8% SR
+    instead of the true ~94% SR:
+
+    BUG 1 (CRITICAL): No early termination.
+    - eval_phase227.py ran all 200 steps THEN checked final distance.
+    - The controller OVERSHOOTS the goal (inertia) then oscillates.
+    - By step 200, it's far from the goal even though it passed through it at ~step 100.
+    - FIX: Early termination when dist < success_radius.
+
+    BUG 2: Uses qpos[:2] instead of xpos[base_body_id, :2].
+    - Minor (~1cm) but xpos is canonical world position (Phase 195 style).
+    """
     np.random.seed(seed)
     successes = 0
     episodes = []
@@ -111,22 +125,33 @@ def run_pcontroller(n_episodes, max_steps, success_radius, seed, verbose=True):
         ])
         sim = LeKiWiSimURDF()
         sim.reset()
+        base_body_id = sim.model.body('base').id
+        arm = np.array([0., -0.5, 1., 0.5, 0., 0.])
+        actual_steps = max_steps
 
         for step in range(max_steps):
-            base_xy = sim.data.qpos[:2].copy()
+            # Phase 195 style: use xpos (world position) NOT qpos
+            base_xy = sim.data.xpos[base_body_id, :2].copy()
             err = goal - base_xy
             v_desired = 2.0 * err
             ws = np.clip(_CONTACT_JACOBIAN_PSEUDO_INV @ v_desired, -0.5, 0.5)
-            arm = np.array([0., -0.5, 1., 0.5, 0., 0.])
             sim.step(np.concatenate([arm, ws]))
 
-        final_dist = np.linalg.norm(sim.data.qpos[:2] - goal)
+            # Phase 234 FIX BUG 1: Early termination — the P-controller DOES reach
+            # the goal (typically by step 60-130), but overshoots and oscillates.
+            # Without early exit, final_dist after 200 steps is ~0.5m even for
+            # successful trajectories that passed through the goal at step ~100.
+            if np.linalg.norm(err) < success_radius:
+                actual_steps = step + 1
+                break
+
+        final_dist = np.linalg.norm(sim.data.xpos[base_body_id, :2] - goal)
         success = final_dist < success_radius
         successes += int(success)
         episodes.append({
             'goal': goal.tolist(),
             'final_dist': float(final_dist),
-            'steps': step + 1,
+            'steps': actual_steps,
             'success': success,
         })
 
