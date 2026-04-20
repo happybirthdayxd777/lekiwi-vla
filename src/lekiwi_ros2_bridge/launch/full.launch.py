@@ -154,6 +154,9 @@ def generate_launch_description() -> LaunchDescription:
             "enable_hmac": LaunchConfiguration("enable_hmac"),
             "cmd_vel_secret": LaunchConfiguration("cmd_vel_secret"),
             "phase88_translation": LaunchConfiguration("phase88_translation"),
+            # Phase 210: Hybrid bridge goal for P-controller fallback
+            "goal_x": LaunchConfiguration("goal_x"),
+            "goal_y": LaunchConfiguration("goal_y"),
         }],
         output="screen",
     )

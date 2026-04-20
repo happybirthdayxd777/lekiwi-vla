@@ -171,6 +171,15 @@ _JOINT_AXES = np.array([
 _MAX_TRANSLATED = 6.0   # max absolute translated wheel speed (rad/s)
 _MIN_TRANSLATED = -6.0
 
+# ── Hybrid Bridge: P-controller Fallback ──────────────────────────────────────
+# Phase 210: VLA wheel actions are too conservative (3-6x smaller than optimal).
+# When VLA wheel action magnitude < threshold, fall back to P-controller
+# so the robot still moves toward goal when VLA hesitates.
+# Threshold is ~1.5x typical VLA wheel action magnitude (~0.10) and ~0.5x
+# what P-controller needs (~0.20-0.30). This ensures P-controller only
+# intervenes when VLA is being too cautious, not when VLA is actively moving.
+_HYBRID_WHEEL_FALLBACK_THRESHOLD = 0.15  # rad/s — below this VLA magnitude → use P-controller
+
 
 def _translate_phase85_to_phase86(wheel_action: np.ndarray) -> np.ndarray:
     """
@@ -295,6 +304,9 @@ class LeKiWiBridge(Node):
         self.declare_parameter("ctf_mode", False)  # when True, records all CTF flags to JSONL
         # Phase 88: enable/disable policy translation layer (fixes Phase 85→86 mismatch)
         self.declare_parameter("phase88_translation", True)
+        # Phase 210: Hybrid bridge — goal for P-controller fallback
+        self.declare_parameter("goal_x", 0.0)
+        self.declare_parameter("goal_y", 0.0)
 
         p_enable_hmac = self.get_parameter("enable_hmac")
         p_cmd_vel_secret = self.get_parameter("cmd_vel_secret")
@@ -323,6 +335,15 @@ class LeKiWiBridge(Node):
         self._phase88_enabled = bool(p_phase88.value) if p_phase88.value else True
         self._record = bool(p_record.value) if p_record.value else False
         self._record_file = str(p_record_file.value) if p_record_file.value else ""
+
+        # Phase 210: Hybrid bridge goal — loaded here so it's available before VLA node starts
+        p_goal_x = self.get_parameter("goal_x")
+        p_goal_y = self.get_parameter("goal_y")
+        gx = float(p_goal_x.value) if p_goal_x.value else 0.0
+        gy = float(p_goal_y.value) if p_goal_y.value else 0.0
+        self._goal_xy = np.array([gx, gy], dtype=np.float64)
+        if gx != 0.0 or gy != 0.0:
+            self.get_logger().info(f"Hybrid bridge goal: ({gx:.3f}, {gy:.3f})")
 
         # ── Initialise simulation OR real hardware ────────────────────────
         if self.mode == "real":
@@ -450,10 +471,13 @@ class LeKiWiBridge(Node):
         # ── Timer: step MuJoCo & publish at 20 Hz (camera is expensive) ────────
         self.timer = self.create_timer(0.05, self._on_timer)   # 20 Hz
 
-        # ── State ───────────────────────────────────────────────────────────────
+        # ── State ────────────────────────────────────────────────────────────────
         self._last_action = np.zeros(9, dtype=np.float64)   # [arm*6, wheel*3]
         self._vla_action_fresh = False                       # set True when VLA writes action
         self._frame_count = 0
+        # Phase 210: Hybrid bridge — goal already set above from launch params.
+        # Track current base position from sim (updated each _on_timer)
+        self._cached_base_xy = None
 
         # ── Watchdog timer for real hardware mode ──────────────────────────────
         self._last_cmd_vel_time = self.get_clock().now()
@@ -642,17 +666,49 @@ class LeKiWiBridge(Node):
         if self._recorder is not None:
             self._recorder.record_cmd_vel(vx, vy, wz)
 
-        # If VLA has set an arm action, keep arms; otherwise keep last arm pos.
-        # Phase 88: When VLA is fresh, translate wheel actions from Phase 85 policy
-        #           → Phase 86 physics (fixes SR=0% from policy-physics mismatch).
+        # ── P-controller fallback: when VLA is fresh but too conservative ─────────
+        # Phase 210: VLA wheel actions are 3-6x smaller than optimal.
+        # Use P-controller (J_c_pinv @ error) to compute fallback wheel speeds.
+        # Blend between VLA and P-controller based on VLA magnitude.
+        # Small VLA magnitude → mostly P-controller; large VLA magnitude → mostly VLA.
         if self._vla_action_fresh:
             arm_action = self._last_action[0:6]
             vla_wheel_raw = self._last_action[6:9]
-            # Apply Phase 88 translation layer: fix symmetric Phase 85 → correct Phase 86
-            if self._phase88_enabled:
-                wheel_speeds = _translate_phase85_to_phase86(vla_wheel_raw)
+            vla_mag = np.linalg.norm(vla_wheel_raw)
+
+            if vla_mag < _HYBRID_WHEEL_FALLBACK_THRESHOLD:
+                # VLA too conservative → use P-controller fallback with VLA blending
+                # Blend factor: 0 (vla_mag=0) → 1.0 (vla_mag=threshold)
+                blend = 1.0 - min(vla_mag / _HYBRID_WHEEL_FALLBACK_THRESHOLD, 1.0)
+                # P-controller: compute desired velocity from goal error
+                if hasattr(self, '_goal_xy') and self._goal_xy is not None:
+                    base_xy = self._get_base_xy()
+                    err = self._goal_xy - base_xy
+                    # P-controller gain × error = desired velocity (m/s)
+                    kP_FALLBACK = 2.0   # same kP used in eval_jacobian_pcontroller.py
+                    vx_fb = kP_FALLBACK * err[0]
+                    vy_fb = kP_FALLBACK * err[1]
+                    pctrl_ws = twist_to_contact_wheel_speeds(vx_fb, vy_fb, 0.0)
+                    # Scale P-controller output to match expected magnitude range
+                    # P-controller typically needs ~0.20 rad/s for unit error
+                    pctrl_scale = 0.20 / max(np.linalg.norm(pctrl_ws), 0.01)
+                    pctrl_ws = pctrl_ws * pctrl_scale
+                else:
+                    pctrl_ws = np.zeros(3)
+                    blend = 1.0   # no goal known → full P-controller
+
+                # Phase 88 translation (if enabled) for P-controller output
+                if self._phase88_enabled:
+                    pctrl_ws = _translate_phase85_to_phase86(pctrl_ws)
+
+                # Blend P-controller with VLA: blend=1.0 → pure P-controller
+                wheel_speeds = blend * pctrl_ws + (1.0 - blend) * vla_wheel_raw
             else:
-                wheel_speeds = vla_wheel_raw  # passthrough: disable translation for Phase 86-trained policies
+                # VLA active and confident → use VLA directly (with translation if needed)
+                if self._phase88_enabled:
+                    wheel_speeds = _translate_phase85_to_phase86(vla_wheel_raw)
+                else:
+                    wheel_speeds = vla_wheel_raw
         else:
             arm_action = self._last_action[0:6]
 
@@ -748,7 +804,7 @@ class LeKiWiBridge(Node):
 
     # ── Timer callback ─────────────────────────────────────────────────────────
 
-    def _on_timer(self):
+    def _on_timer(self) -> None:
         """Publish state as JointState + Odometry + camera Image."""
         now = self.get_clock().now()
 
@@ -827,6 +883,10 @@ class LeKiWiBridge(Node):
         # ── Simulation mode: read from MuJoCo ───────────────────────────
         obs = self.sim._obs()
         dt = 0.05   # matches timer period
+
+        # Phase 210: Cache base XY for hybrid bridge P-controller fallback
+        base_pos = obs.get("base_position", np.zeros(3))
+        self._cached_base_xy = base_pos[:2].copy()
 
         # ── Odometry ─────────────────────────────────────────────────────────
         wheel_vel = obs.get("wheel_velocities", np.zeros(3))
@@ -964,6 +1024,30 @@ class LeKiWiBridge(Node):
                 self.hw.queue_wheel_velocities(zero_wheel)
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
+
+    def set_goal(self, goal_xy: tuple[float, float]) -> None:
+        """
+        Set the navigation goal for P-controller fallback (Phase 210).
+        goal_xy: (x, y) in world frame (meters).  e.g. (0.5, 0.0)
+
+        Call this after creating the bridge, e.g. when a navigation task starts.
+        If goal is None, P-controller fallback degrades to zero wheel speeds.
+        """
+        self._goal_xy = np.array(goal_xy, dtype=np.float64)
+        self.get_logger().debug(f"Hybrid bridge goal set: ({goal_xy[0]:.3f}, {goal_xy[1]:.3f})")
+
+    def _get_base_xy(self) -> np.ndarray:
+        """
+        Get current base XY position from sim (cached each _on_timer).
+        Returns np.array([x, y]) in world frame.
+        """
+        if self._cached_base_xy is not None:
+            return self._cached_base_xy
+        # Fallback: extract from sim directly
+        if self.sim is not None:
+            obs = self.sim._obs()
+            return obs["base_position"][:2].copy()
+        return np.zeros(2)
 
     def apply_arm_action(self, arm_pos: np.ndarray):
         """
