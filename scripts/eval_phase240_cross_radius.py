@@ -132,7 +132,8 @@ IMG_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 
 def make_obs(sim, goal_xy):
     arm_pos = np.array([0.0, -0.5, 1.0, 0.5, 0.0, 0.0])
-    wheel_vel = sim.data.qvel[9:12].copy()
+    # CORRECT (Phase 222): wheel_vel from qvel[6:9], NOT qvel[9:12]=ARM velocities
+    wheel_vel = sim.data.qvel[6:9].copy()
     state_vec = np.concatenate([arm_pos, wheel_vel, np.array(goal_xy)/0.525]).astype(np.float32)
     
     img = sim.render()

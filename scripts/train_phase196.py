@@ -365,7 +365,8 @@ def evaluate_policy(policy_path, n_goals=20, seed=42):
                 break
 
             # Build state
-            wheel_vel = sim.data.qvel[9:12].copy()
+            # CORRECT (Phase 222): wheel_vel from qvel[6:9], NOT qvel[9:12]=ARM velocities
+            wheel_vel = sim.data.qvel[6:9].copy()
             state_vec = np.concatenate([
                 arm, wheel_vel, g / 0.525
             ]).astype(np.float32)
