@@ -140,3 +140,5 @@ AGX: exceeded compiled variants footprint limit
 [LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
   [40/50] goal=(-0.08,-0.22) dist=0.209m ✗ | ETA 423s
 [LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
