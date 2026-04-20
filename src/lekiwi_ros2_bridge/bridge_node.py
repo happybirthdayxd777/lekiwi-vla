@@ -386,6 +386,10 @@ class LeKiWiBridge(Node):
             self.get_logger().info("Starting LeKiWiSim (cylinder primitives) via make_sim()…")
             self.sim = make_sim("primitive", render=False)
             self.get_logger().info("Primitive simulation initialised.")
+            # Phase 212: Warmup step required — MuJoCo renderer returns all-black before first step
+            # (base_freejoint has qpos[2]=0.14 at init but needs physics tick before camera works)
+            self.sim.step(np.zeros(9))
+            self.get_logger().info("Primitive warmup: 1 step to enable rendering.")
             self.hw = None
 
         # CTF security monitor — placeholder (CTFSecurityAuditor committed separately)
