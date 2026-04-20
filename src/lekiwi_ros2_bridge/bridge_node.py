@@ -179,6 +179,41 @@ _MIN_TRANSLATED = -6.0
 # what P-controller needs (~0.20-0.30). This ensures P-controller only
 # intervenes when VLA is being too cautious, not when VLA is actively moving.
 _HYBRID_WHEEL_FALLBACK_THRESHOLD = 0.15  # rad/s — below this VLA magnitude → use P-controller
+# Phase 212: Direction-agreement hybrid — if VLA direction agrees with P-controller,
+# amplify and use VLA instead of blending. This fixes the 3-6x VLA magnitude underestimation.
+_WHEEL_AMPLIFICATION_FACTOR = 2.5          # amplify VLA actions when direction agrees
+_DIRECTION_AGREEMENT_THRESHOLD = 0.5       # cos(angle) threshold — moderate directional alignment
+
+
+def _wheel_direction_agrees(vla_wheels: np.ndarray, pctrl_ws: np.ndarray,
+                            threshold: float = _DIRECTION_AGREEMENT_THRESHOLD) -> bool:
+    """
+    Phase 212: Check if VLA wheel direction agrees with P-controller direction.
+
+    When VLA direction is correct but magnitude is too small, we amplify the VLA
+    action instead of blending with P-controller. This preserves VLA learned
+    behavior while compensating for its magnitude underestimation.
+
+    Args:
+        vla_wheels: VLA wheel action (3,) in rad/s
+        pctrl_ws: P-controller wheel speeds (3,) in rad/s
+        threshold: cos(angle) threshold (0.5 = 60° alignment required)
+
+    Returns:
+        True if VLA and P-controller directions agree within threshold
+    """
+    vla_norm = np.linalg.norm(vla_wheels)
+    pctrl_norm = np.linalg.norm(pctrl_ws)
+
+    # No reference or zero VLA → cannot determine direction
+    if pctrl_norm < 0.01 or vla_norm < 0.01:
+        return False
+
+    vla_dir = vla_wheels / vla_norm
+    pctrl_dir = pctrl_ws / pctrl_norm
+    cos_angle = np.dot(vla_dir, pctrl_dir)
+
+    return cos_angle > threshold
 
 
 def _translate_phase85_to_phase86(wheel_action: np.ndarray) -> np.ndarray:
@@ -670,43 +705,42 @@ class LeKiWiBridge(Node):
         if self._recorder is not None:
             self._recorder.record_cmd_vel(vx, vy, wz)
 
-        # ── P-controller fallback: when VLA is fresh but too conservative ─────────
-        # Phase 210: VLA wheel actions are 3-6x smaller than optimal.
-        # Use P-controller (J_c_pinv @ error) to compute fallback wheel speeds.
-        # Blend between VLA and P-controller based on VLA magnitude.
-        # Small VLA magnitude → mostly P-controller; large VLA magnitude → mostly VLA.
+        # ── Phase 212: Direction-agreement hybrid ─────────────────────────────────
+        # VLA wheel actions are 3-6x smaller than optimal but direction is correct.
+        # When VLA is conservative (mag < threshold):
+        #   - If VLA direction agrees with P-controller → amplify VLA and use it
+        #   - If VLA direction disagrees → use P-controller directly
+        # When VLA is confident (mag >= threshold) → use VLA directly
         if self._vla_action_fresh:
             arm_action = self._last_action[0:6]
             vla_wheel_raw = self._last_action[6:9]
             vla_mag = np.linalg.norm(vla_wheel_raw)
 
             if vla_mag < _HYBRID_WHEEL_FALLBACK_THRESHOLD:
-                # VLA too conservative → use P-controller fallback with VLA blending
-                # Blend factor: 0 (vla_mag=0) → 1.0 (vla_mag=threshold)
-                blend = 1.0 - min(vla_mag / _HYBRID_WHEEL_FALLBACK_THRESHOLD, 1.0)
-                # P-controller: compute desired velocity from goal error
+                # VLA too conservative → check if direction agrees with P-controller
                 if hasattr(self, '_goal_xy') and self._goal_xy is not None:
                     base_xy = self._get_base_xy()
                     err = self._goal_xy - base_xy
-                    # P-controller gain × error = desired velocity (m/s)
-                    kP_FALLBACK = 2.0   # same kP used in eval_jacobian_pcontroller.py
+                    kP_FALLBACK = 2.0
                     vx_fb = kP_FALLBACK * err[0]
                     vy_fb = kP_FALLBACK * err[1]
                     pctrl_ws = twist_to_contact_wheel_speeds(vx_fb, vy_fb, 0.0)
-                    # NOTE: No arbitrary scale factor here.
-                    # twist_to_contact_wheel_speeds() already outputs clipped wheel speeds
-                    # in rad/s. P-controller SR on training distribution (random goals,
-                    # threshold=0.10) is 98%. Bridge uses the same P-controller.
+
+                    if _wheel_direction_agrees(vla_wheel_raw, pctrl_ws,
+                                               _DIRECTION_AGREEMENT_THRESHOLD):
+                        # VLA direction correct → amplify and use VLA
+                        wheel_speeds = vla_wheel_raw * _WHEEL_AMPLIFICATION_FACTOR
+                    else:
+                        # VLA direction wrong → use P-controller
+                        wheel_speeds = pctrl_ws
                 else:
                     pctrl_ws = np.zeros(3)
-                    blend = 1.0   # no goal known → full P-controller
+                    wheel_speeds = vla_wheel_raw  # no goal → use VLA as-is
 
-                # Phase 88 translation (if enabled) for P-controller output
-                if self._phase88_enabled:
-                    pctrl_ws = _translate_phase85_to_phase86(pctrl_ws)
-
-                # Blend P-controller with VLA: blend=1.0 → pure P-controller
-                wheel_speeds = blend * pctrl_ws + (1.0 - blend) * vla_wheel_raw
+                # Phase 88 translation for P-controller output
+                if self._phase88_enabled and hasattr(self, '_goal_xy') and self._goal_xy is not None:
+                    if not _wheel_direction_agrees(vla_wheel_raw, pctrl_ws, _DIRECTION_AGREEMENT_THRESHOLD):
+                        wheel_speeds = _translate_phase85_to_phase86(wheel_speeds)
             else:
                 # VLA active and confident → use VLA directly (with translation if needed)
                 if self._phase88_enabled:
