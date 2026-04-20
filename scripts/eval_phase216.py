@@ -43,7 +43,8 @@ for mode, label in [('pctrl', 'P-ctrl (CJ kP=2.0)'), ('vla', 'VLA-e14')]:
                 ws = np.clip(_CONTACT_JACOBIAN_PSEUDO_INV @ v, -0.5, 0.5)
                 action = np.concatenate([arm_default, ws])
             else:
-                wv = sim.data.qvel[9:12].copy()
+                # FIXED Phase 222: wheel vels are qvel[6:9], NOT qvel[9:12]=ARM_vel
+                wv = sim.data.qvel[6:9].copy()
                 gn = np.clip(goal / 0.525, -1, 1)
                 sv = np.concatenate([arm_default, wv, gn]).astype(np.float32)
                 img = preprocess(sim.render().astype(np.uint8))

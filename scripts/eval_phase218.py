@@ -84,7 +84,8 @@ def run_vla(sim: LeKiWiSimURDF, goal: np.ndarray, policy) -> dict:
             return {'success': True, 'steps': step, 'final_dist': dist, 'history': history}
 
         # Build state vector
-        wv = sim.data.qvel[9:12].copy()
+        # FIXED Phase 222: wheel vels are qvel[6:9], NOT qvel[9:12]=ARM_vel
+        wv = sim.data.qvel[6:9].copy()
         gn = np.clip(goal / 0.525, -1, 1)
         sv = np.concatenate([ARM_DEFAULT, wv, gn]).astype(np.float32)
 

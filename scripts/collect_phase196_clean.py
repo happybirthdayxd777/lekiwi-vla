@@ -108,7 +108,9 @@ def collect_episode(sim, controller, goal_range=0.35, max_steps=250, seed=None):
         sim.step(action)
         
         # Record state: arm_pos(6) + wheel_vel(3) + goal_norm(2)
-        wheel_vel = sim.data.qvel[9:12].copy()  # wheel joint velocities
+        # FIXED Phase 222: wheel joint velocities are at qvel[6:9]=w1,w2,w3
+        # NOT qvel[9:12] which are ARM velocities j0,j1,j2 (old bug)
+        wheel_vel = sim.data.qvel[6:9].copy()  # CORRECT: wheel joint velocities
         state = np.concatenate([
             arm_pos,                    # 6 arm positions
             wheel_vel,                  # 3 wheel velocities

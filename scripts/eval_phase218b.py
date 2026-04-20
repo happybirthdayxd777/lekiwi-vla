@@ -59,7 +59,8 @@ def run_policy(sim, goal, policy):
         dist = np.linalg.norm(goal - base_xy)
         if dist < SUCCESS_R:
             return {'success': True, 'steps': step, 'final_dist': dist}
-        wv = sim.data.qvel[9:12].copy()
+        # FIXED Phase 222: wheel vels are qvel[6:9], NOT qvel[9:12]=ARM_vel
+        wv = sim.data.qvel[6:9].copy()
         gn = np.clip(goal / 0.525, -1, 1)
         sv = np.concatenate([ARM_DEFAULT, wv, gn]).astype(np.float32)
         img = preprocess(sim.render().astype(np.uint8))
