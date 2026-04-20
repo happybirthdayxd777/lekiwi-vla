@@ -78,7 +78,12 @@ class LeKiWiSimDirect:
         self._action = np.zeros(9)
 
     def render(self, width=640, height=480):
-        return self._sim.render(width, height)
+        """Return numpy RGB array (H, W, 3) uint8."""
+        return np.array(self._sim.render(width, height))
+
+    def render_wrist(self):
+        """Wrist camera not available in primitive mode — return None."""
+        return None
 
     def launch_viewer(self):
         return self._sim.open_viewer()
@@ -172,12 +177,12 @@ class LeKiWiSimWrapper:
         self._action = np.zeros(9)
 
     def render(self, width=640, height=480):
-        # sim_lekiwi_urdf.render() returns numpy array — convert to PIL for bridge
-        arr = self._urdf.render()
-        if hasattr(arr, 'convert'):
-            return arr   # already PIL
-        from PIL import Image
-        return Image.fromarray(arr)
+        """Return numpy RGB array (H, W, 3) uint8 from front camera."""
+        return np.array(self._urdf.render())
+
+    def render_wrist(self):
+        """Return numpy RGB array (H, W, 3) uint8 from wrist camera."""
+        return np.array(self._urdf.render_wrist())
 
     def launch_viewer(self):
         return self._urdf.launch_viewer()
