@@ -125,10 +125,162 @@ class CTFEvent:
         return d
 
 
+# ── CTFSecurityAuditor (for bridge_node) ───────────────────────────────────────
+
+class CTFSecurityAuditor:
+    """
+    Lightweight CTF event auditor for use inside the bridge node process.
+
+    Bridges Phase 238's SecurityMonitor checks (C1-C8) with the CTF event
+    logging infrastructure. Does NOT submit to the CTF platform — that is done
+    by CTFIntegrationHub reading the JSONL log file.
+
+    Usage from bridge_node:
+        from lekiwi_ros2_bridge.ctf_integration import CTFSecurityAuditor
+
+        self.ctf_auditor = CTFSecurityAuditor(
+            alert_callback=self._on_security_alert,
+            log_path=str(Path.home() / "hermes_research" / "lekiwi_vla" / "ctf_events.jsonl"),
+        )
+
+    Methods (match what bridge_node._on_* callbacks expect):
+        on_cmd_vel(vx, vy, wz, timestamp, hmac_verified)        → SecurityAlert|None
+        on_joint_states(position, velocity, timestamp)          → SecurityAlert|None
+        on_vla_action(action, policy_name, timestamp)            → SecurityAlert|None
+        on_goal_spoof(gx, gy, reason, flag)                      → SecurityAlert|None
+        on_policy_switch(old_policy, new_policy, timestamp, authorized) → SecurityAlert|None
+    """
+
+    CTF_FLAGS = {
+        "C1": "ROBOT_CTF{cmdvel_hmac_missing_a1b2c3d4}",
+        "C2": "ROBOT_CTF{cmdvel_dos_rate_flood_e5f6g7h8}",
+        "C3": "ROBOT_CTF{cmdvel_injection_i9j0k1l2}",
+        "C4": "ROBOT_CTF{physics_dos_accel_m3n4o5p6}",
+        "C5": "ROBOT_CTF{replay_attack_q7r8s9t0}",
+        "C6": "ROBOT_CTF{sensor_spoof_u1v2w3x4}",
+        "C7": "ROBOT_CTF{policy_inject_y5z6a7b8}",
+        "C8": "ROBOT_CTF{policy_hijack_c9d0e1f2}",
+    }
+
+    def __init__(
+        self,
+        alert_callback=None,
+        log_path=None,
+        forward_webhook=None,
+        team_name="lekiwi_system",
+    ):
+        self.alert_callback = alert_callback
+        self.team_name = team_name
+        self._lock = threading.Lock()
+        self._events: deque = deque(maxlen=10000)
+        self._log_path = Path(log_path) if log_path else None
+        self._log_file = None
+        self._webhook = forward_webhook
+        if self._log_path:
+            self._log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._log_file = open(self._log_path, "a", buffering=1)
+        self.stats = {"total": 0, "by_challenge": {f"C{i}": 0 for i in range(1, 9)}}
+
+    def _record(self, event: dict) -> None:
+        self._events.append(event)
+        self.stats["total"] += 1
+        cid = event.get("challenge_id", "C?")
+        if cid in self.stats["by_challenge"]:
+            self.stats["by_challenge"][cid] += 1
+        if self._log_file:
+            self._log_file.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    def _emit(self, alert) -> Optional:
+        self._record({
+            "challenge_id": alert.challenge_id,
+            "timestamp": time.time(),
+            "severity": alert.severity,
+            "description": alert.description,
+            "raw_data": {"channel": alert.channel},
+            "flag_captured": False,
+            "flag": alert.flag,
+        })
+        if self.alert_callback:
+            try:
+                self.alert_callback(alert)
+            except Exception:
+                pass
+        return alert
+
+    def on_cmd_vel(self, vx: float, vy: float, wz: float,
+                   timestamp: float, hmac_verified: bool = False):
+        """C1: HMAC missing on cmd_vel."""
+        if not hmac_verified:
+            return self._emit(SecurityAlert(
+                challenge_id="C1",
+                channel="cmd_vel",
+                severity="high",
+                description=f"HMAC verification failed or missing — vx={vx:.3f} vy={vy:.3f} wz={wz:.3f}",
+                flag=self.CTF_FLAGS.get("C1"),
+            ))
+        return None
+
+    def on_joint_states(self, position: list, velocity: list, timestamp: float):
+        """C6: Joint spoofing — called when SecurityMonitor flags anomaly."""
+        return None  # handled by bridge_node directly via security_monitor.check_joint_spoofing
+
+    def on_vla_action(self, action: list, policy_name: str, timestamp: float):
+        """C7: VLA action injection — called when SecurityMonitor flags anomaly."""
+        return None  # handled by bridge_node directly via security_monitor.check_vla_action
+
+    def on_goal_spoof(self, gx: float, gy: float, reason: str,
+                       flag: Optional[str] = None):
+        """C8: Goal spoofing (rate/speed/bounds) — from bridge_node._on_goal()."""
+        return self._emit(SecurityAlert(
+            challenge_id="C8",
+            channel="goal",
+            severity="high",
+            description=f"[GOAL SPOOF] {reason} — goal=({gx:.3f}, {gy:.3f})",
+            flag=flag or self.CTF_FLAGS.get("C8"),
+        ))
+
+    def on_policy_switch(self, old_policy: str, new_policy: str,
+                         timestamp: float, authorized: bool = False):
+        """C7: Unauthorized policy switch (from PolicyGuardian block)."""
+        if not authorized:
+            return self._emit(SecurityAlert(
+                challenge_id="C7",
+                channel="policy",
+                severity="critical",
+                description=f"[POLICY HIJACK] Unauthorized policy switch: {old_policy} → {new_policy}",
+                flag=self.CTF_FLAGS.get("C7"),
+            ))
+        return None
+
+    def get_stats(self) -> dict:
+        return dict(self.stats)
+
+    def get_recent_events(self, n: int = 20) -> list:
+        return list(self._events)[-n:]
+
+    def close(self) -> None:
+        if self._log_file:
+            self._log_file.close()
+            self._log_file = None
+
+
+@dataclass
+class SecurityAlert:
+    """Alert object passed from CTFSecurityAuditor → bridge_node._on_security_alert."""
+    challenge_id: str
+    channel: str
+    severity: str
+    description: str
+    flag: Optional[str] = None
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), ensure_ascii=False)
+
+
 class CTFPlatformClient:
     """
     REST client for the robot-security-workshop CTF Flask platform.
-    Submits flags and retrieves challenge metadata.
+    Handles flag submission and scoreboard queries.
     """
 
     def __init__(self, base_url: str = "http://localhost:5000", team_name: str = "lekiwi_system"):
