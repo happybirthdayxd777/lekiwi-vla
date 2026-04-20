@@ -689,10 +689,10 @@ class LeKiWiBridge(Node):
                     vx_fb = kP_FALLBACK * err[0]
                     vy_fb = kP_FALLBACK * err[1]
                     pctrl_ws = twist_to_contact_wheel_speeds(vx_fb, vy_fb, 0.0)
-                    # Scale P-controller output to match expected magnitude range
-                    # P-controller typically needs ~0.20 rad/s for unit error
-                    pctrl_scale = 0.20 / max(np.linalg.norm(pctrl_ws), 0.01)
-                    pctrl_ws = pctrl_ws * pctrl_scale
+                    # NOTE: No arbitrary scale factor here.
+                    # twist_to_contact_wheel_speeds() already outputs clipped wheel speeds
+                    # in rad/s. P-controller SR on training distribution (random goals,
+                    # threshold=0.10) is 98%. Bridge uses the same P-controller.
                 else:
                     pctrl_ws = np.zeros(3)
                     blend = 1.0   # no goal known → full P-controller
