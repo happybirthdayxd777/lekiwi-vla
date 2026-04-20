@@ -1,0 +1,12 @@
+{
+  "phase": "226b",
+  "policy": "pctrl_cj_kP2.0",
+  "success_radius": 0.15,
+  "n_episodes": 50,
+  "seed": 42,
+  "success_rate": 1.0,
+  "successes": 50,
+  "mean_final_dist": 0.14453315913433945,
+  "mean_steps": 85.76,
+  "elapsed_sec": 1.2640278339385986
+}
