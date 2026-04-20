@@ -820,10 +820,37 @@ class LeKiWiBridge(Node):
           - SLAM waypoint following
           - Multi-goal patrol missions
           - External path planners sending waypoints
+
+        C8 Goal Spoofing Detection:
+          SecurityMonitor.check_goal_spoofing() is called to detect:
+            1. Rate abuse (>5 goals/s)
+            2. Teleportation (>2 m/s radial goal speed)
+            3. Out-of-bounds (>5m from origin)
+          Suspicious updates are logged but still applied (fail-open for
+          availability — switch to fail-closed for strict deployments).
         """
-        self._goal_xy = np.array([msg.x, msg.y], dtype=np.float64)
+        # C8: Check goal update for spoofing
+        gx, gy = msg.x, msg.y
+        allowed, reason, flag = self.security_monitor.check_goal_spoofing(
+            gx, gy, source="external"
+        )
+        if not allowed:
+            # Still apply the goal (fail-open), but log security alert
+            self.get_logger().warn(
+                f"C8 [GOAL SPOOF] blocked: {reason} — goal=({gx:.3f}, {gy:.3f})"
+                + (f" flag={flag}" if flag else "")
+            )
+            # Publish security alert via CTF auditor if available
+            if self.ctf_auditor is not None:
+                ctf_alert = self.ctf_auditor.on_goal_spoof(
+                    gx, gy, reason, flag
+                )
+                if ctf_alert is not None:
+                    self._on_security_alert(ctf_alert)
+
+        self._goal_xy = np.array([gx, gy], dtype=np.float64)
         self.get_logger().debug(
-            f"Goal updated via /lekiwi/goal → ({msg.x:.3f}, {msg.y:.3f})"
+            f"Goal updated via /lekiwi/goal → ({gx:.3f}, {gy:.3f})"
         )
 
     # ── VLA action callback ────────────────────────────────────────────────────

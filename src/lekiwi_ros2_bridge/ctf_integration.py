@@ -445,8 +445,34 @@ class CTFIntegrationHub:
             "sensor_spoof":          "C6",
             "policy_inject":         "C7",
             "policy_hijack":         "C8",
+            "goal_spoof":            "C8",   # C8: goal spoofing via /lekiwi/goal
+            "goal_rate_limit":       "C8",
+            "goal_teleport":         "C8",
+            "goal_out_of_bounds":    "C8",
         }
         return type_to_challenge.get(alert_type)
+
+    def on_goal_spoof(self, gx: float, gy: float, reason: str,
+                      flag: Optional[str] = None) -> Optional[CTFEvent]:
+        """
+        Handle detected goal spoofing attack (C8).
+
+        Called by bridge_node._on_goal() when SecurityMonitor detects a
+        suspicious /lekiwi/goal update (rate abuse, teleportation, OOB).
+
+        Returns a CTFEvent if this is a new (non-duplicate) attack event.
+        """
+        event = CTFEvent(
+            challenge_id="C8",
+            timestamp=time.time(),
+            severity="high",
+            description=f"[GOAL SPOOF] {reason} — goal=({gx:.3f}, {gy:.3f})",
+            raw_data={"gx": gx, "gy": gy, "reason": reason},
+            flag_captured=False,
+            flag=flag or CTF_FLAGS.get("C8"),
+        )
+        self._record_event(event)
+        return event
 
     def _record_event(self, event: CTFEvent) -> None:
         """Log event to deque, file, and stats."""
