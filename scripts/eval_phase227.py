@@ -157,7 +157,7 @@ def run_pcontroller(n_episodes, max_steps, success_radius, seed, verbose=True):
         episodes.append({
             'goal': list(goal),
             'final_dist': float(final_dist),
-            'steps': steps,
+            'steps': actual_steps,
             'success': success,
         })
 
