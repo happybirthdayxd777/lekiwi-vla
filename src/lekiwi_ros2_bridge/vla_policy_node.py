@@ -22,6 +22,7 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 
 from sensor_msgs.msg import JointState, Image
 from std_msgs.msg import Float64MultiArray
+from geometry_msgs.msg import Point
 from cv_bridge import CvBridge
 
 import numpy as np
@@ -616,6 +617,12 @@ class LeKiWiVLAPolicyNode(Node):
         self.wrist_cam_sub = self.create_subscription(
             Image, "/lekiwi/wrist_camera/image_raw", self._on_image, qos
         )
+        # Phase 237: /lekiwi/goal subscriber — allows dynamic goal updates at runtime
+        # without restarting the VLA node.  message type: geometry_msgs/Point
+        # (x, y, z).  Only x and y are used for navigation; z is ignored.
+        self.goal_sub = self.create_subscription(
+            Point, "/lekiwi/goal", self._on_goal, qos
+        )
 
         # ── State ────────────────────────────────────────────────────────────
         self.bridge = CvBridge()
@@ -629,6 +636,7 @@ class LeKiWiVLAPolicyNode(Node):
             "  /lekiwi/joint_states        ← subscribe\n"
             "  /lekiwi/camera/image_raw    ← subscribe\n"
             "  /lekiwi/wrist_camera/       ← subscribe (wrist preferred, falls back to front)\n"
+            "  /lekiwi/goal                ← subscribe (dynamic goal update)\n"
             "  /lekiwi/vla_action          → publish"
         )
 
@@ -730,6 +738,20 @@ class LeKiWiVLAPolicyNode(Node):
                 f"({self._inference_count} total inferences)"
             )
             self._last_inference_time = now
+
+    def _on_goal(self, msg: Point):
+        """Handle dynamic /lekiwi/goal updates (geometry_msgs/Point).
+
+        Updates self._goal_xy and self._goal_xy_norm in-place so that the next
+        policy inference call uses the new goal immediately.  This enables
+        closed-loop navigation where the goal can be updated at runtime from
+        any ROS2 node (e.g. a higher-level planner, SLAM, or CTF attack).
+        """
+        self._goal_xy = np.array([msg.x, msg.y], dtype=np.float32)
+        self._goal_xy_norm = np.clip(self._goal_xy / 1.0, -1.0, 1.0)
+        self.get_logger().debug(
+            f"Goal updated → ({msg.x:.3f}, {msg.y:.3f}) norm={self._goal_xy_norm}"
+        )
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────

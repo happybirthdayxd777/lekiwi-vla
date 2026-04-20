@@ -33,7 +33,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, Point
 from sensor_msgs.msg import JointState, Image
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped
@@ -487,6 +487,10 @@ class LeKiWiBridge(Node):
         self.cmd_vel_sub = self.create_subscription(
             Twist, "/lekiwi/cmd_vel", self._on_cmd_vel, qos
         )
+        # Phase 237: /lekiwi/goal subscriber — dynamic navigation goal from any node
+        self.goal_sub = self.create_subscription(
+            Point, "/lekiwi/goal", self._on_goal, qos
+        )
 
         # VLA action subscriber: arm (6) + wheel (3) in native units from policy node
         from std_msgs.msg import Float64MultiArray
@@ -794,20 +798,33 @@ class LeKiWiBridge(Node):
             if self._recorder is None:
                 return
             self._recorder.stop()
-            self._recorder.flush()
-            self.get_logger().info(
-                f"Trajectory recording: STOP — {self._recorder.num_frames} frames saved"
-            )
+            self.get_logger().info("Trajectory recording: STOP (flushed)")
         elif cmd == "status":
             if self._recorder is None:
                 self.get_logger().info("Recording: DISABLED")
             else:
+                status = self._recorder.status()
                 self.get_logger().info(
-                    f"Recording: {'ACTIVE' if self._recorder.is_recording else 'IDLE'} — "
-                    f"{self._recorder.num_frames} frames buffered"
+                    f"Recording: {status['state']} — "
+                    f"{status['frames']} frames, {status['duration']:.1f}s"
                 )
         else:
-            self.get_logger().warn(f"Unknown record control: {cmd} (use: start, stop, status)")
+            self.get_logger().warn(f"Unknown record command: {cmd}")
+
+    def _on_goal(self, msg: Point):
+        """
+        Handle dynamic /lekiwi/goal updates from any ROS2 node.
+
+        Updates self._goal_xy in-place.  This enables:
+          - CTF navigation challenges where goals are published dynamically
+          - SLAM waypoint following
+          - Multi-goal patrol missions
+          - External path planners sending waypoints
+        """
+        self._goal_xy = np.array([msg.x, msg.y], dtype=np.float64)
+        self.get_logger().debug(
+            f"Goal updated via /lekiwi/goal → ({msg.x:.3f}, {msg.y:.3f})"
+        )
 
     # ── VLA action callback ────────────────────────────────────────────────────
 
