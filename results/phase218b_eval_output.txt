@@ -1,0 +1,94 @@
+[Phase 196] Device: cpu
+Loading phase190_e27 from results/phase190_vision_train/best_policy.pt...
+[INFO] Loading CLIP ViT-B/32 (frozen)...
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 46311.19it/s]
+[transformers] [1mCLIPModel LOAD REPORT[0m from: openai/clip-vit-base-patch32
+Key                                  | Status     |  | 
+-------------------------------------+------------+--+-
+vision_model.embeddings.position_ids | UNEXPECTED |  | 
+text_model.embeddings.position_ids   | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+  epoch=27, loss=0.3211540923267603
+Loading phase196_e14 from results/phase196_contact_jacobian_train/epoch_14.pt...
+[INFO] Loading CLIP ViT-B/32 (frozen)...
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 41811.72it/s]
+[transformers] [1mCLIPModel LOAD REPORT[0m from: openai/clip-vit-base-patch32
+Key                                  | Status     |  | 
+-------------------------------------+------------+--+-
+vision_model.embeddings.position_ids | UNEXPECTED |  | 
+text_model.embeddings.position_ids   | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+  epoch=14, loss=0.3266648154899564
+
+=== Phase 218b: Phase190(30ep) vs Phase196(14ep) — 10 goals, seed=99 ===
+
+Goal 1/10: [ 0.154 -0.006]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase190_e27: ✗ dist=3.030 (steps=200)
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase196_e14: ✓ (steps=84)
+Goal 2/10: [ 0.269 -0.234]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase190_e27: ✗ dist=3.068 (steps=200)
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase196_e14: ✗ dist=0.708 (steps=200)
+Goal 3/10: [0.256 0.033]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase190_e27: ✗ dist=3.158 (steps=200)
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase196_e14: ✓ (steps=98)
+Goal 4/10: [-0.127 -0.227]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase190_e27: ✗ dist=2.642 (steps=200)
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase196_e14: ✓ (steps=138)
+Goal 5/10: [ 0.393 -0.247]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase190_e27: ✗ dist=3.553 (steps=200)
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase196_e14: ✗ dist=0.718 (steps=200)
+Goal 6/10: [0.227 0.123]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase190_e27: ✗ dist=3.085 (steps=200)
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase196_e14: ✓ (steps=107)
+Goal 7/10: [-0.067 -0.003]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase190_e27: ✓ (steps=0)
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase196_e14: ✓ (steps=0)
+Goal 8/10: [ 0.347 -0.052]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase190_e27: ✗ dist=3.067 (steps=200)
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase196_e14: ✓ (steps=104)
+Goal 9/10: [0.38  0.012]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase190_e27: ✗ dist=3.215 (steps=200)
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase196_e14: ✓ (steps=103)
+Goal 10/10: [-0.28   0.157]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase190_e27: ✗ dist=2.621 (steps=200)
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  phase196_e14: ✓ (steps=118)
+
+============================================================
+SUMMARY
+============================================================
+
+phase190_e27:
+  SR: 1/10 = 10%
+  Avg steps: 180.0, Avg final dist: 2.7505m
+
+phase196_e14:
+  SR: 8/10 = 80%
+  Avg steps: 115.2, Avg final dist: 0.2163m
+
+Time: 564.7s
+Saved: results/phase218b_eval.json

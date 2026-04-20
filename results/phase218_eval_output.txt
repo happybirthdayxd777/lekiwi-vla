@@ -1,0 +1,98 @@
+[Phase 196] Device: cpu
+Loading VLA policy...
+[INFO] Loading CLIP ViT-B/32 (frozen)...
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 54986.43it/s]
+[transformers] [1mCLIPModel LOAD REPORT[0m from: openai/clip-vit-base-patch32
+Key                                  | Status     |  | 
+-------------------------------------+------------+--+-
+vision_model.embeddings.position_ids | UNEXPECTED |  | 
+text_model.embeddings.position_ids   | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+  Policy epoch=14, loss=0.3266648154899564
+
+=== Phase 218: Phase 196 VLA vs P-ctrl (10 goals, seed=42) ===
+
+Goal 1/10: goal_xy=[-0.069  0.225]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  P-ctrl: ✓ (steps=127) | VLA: ✓ (steps=127)
+Goal 2/10: goal_xy=[0.199 0.049]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  P-ctrl: ✓ (steps=103) | VLA: ✓ (steps=93)
+Goal 3/10: goal_xy=[-0.233 -0.172]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  P-ctrl: ✓ (steps=106) | VLA: ✓ (steps=116)
+Goal 4/10: goal_xy=[-0.306  0.183]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  P-ctrl: ✓ (steps=126) | VLA: ✓ (steps=121)
+Goal 5/10: goal_xy=[0.101 0.104]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  P-ctrl: ✓ (steps=113) | VLA: ✓ (steps=97)
+Goal 6/10: goal_xy=[-0.335  0.235]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  P-ctrl: ✓ (steps=129) | VLA: ✓ (steps=131)
+Goal 7/10: goal_xy=[ 0.274 -0.144]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  P-ctrl: ✓ (steps=110) | VLA: ✗ dist=0.302 (steps=200)
+Goal 8/10: goal_xy=[-0.214 -0.158]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  P-ctrl: ✓ (steps=103) | VLA: ✓ (steps=121)
+Goal 9/10: goal_xy=[-0.122  0.012]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  P-ctrl: ✓ (steps=62) | VLA: ✓ (steps=44)
+Goal 10/10: goal_xy=[-0.026 -0.104]
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+  P-ctrl: ✓ (steps=19) | VLA: ✓ (steps=31)
+
+============================================================
+SUMMARY
+============================================================
+
+P-ctrl (CJ kP=2.0):
+  Success Rate: 10/10 = 100%
+  Avg steps (success): 99.8
+  Avg final dist: 0.0980m
+    Goal 1: ✓ (steps=127)
+    Goal 2: ✓ (steps=103)
+    Goal 3: ✓ (steps=106)
+    Goal 4: ✓ (steps=126)
+    Goal 5: ✓ (steps=113)
+    Goal 6: ✓ (steps=129)
+    Goal 7: ✓ (steps=110)
+    Goal 8: ✓ (steps=103)
+    Goal 9: ✓ (steps=62)
+    Goal 10: ✓ (steps=19)
+
+VLA-e14:
+  Success Rate: 9/10 = 90%
+  Avg steps (success): 108.1
+  Avg final dist: 0.1191m
+    Goal 1: ✓ (steps=127)
+    Goal 2: ✓ (steps=93)
+    Goal 3: ✓ (steps=116)
+    Goal 4: ✓ (steps=121)
+    Goal 5: ✓ (steps=97)
+    Goal 6: ✓ (steps=131)
+    Goal 7: ✗ 0.302m (steps=200)
+    Goal 8: ✓ (steps=121)
+    Goal 9: ✓ (steps=44)
+    Goal 10: ✓ (steps=31)
+
+Total time: 205.2s
+
+============================================================
+⚠️  VLA is functional but underperforms oracle by 10%
+
+Results saved to results/phase218_eval.json
