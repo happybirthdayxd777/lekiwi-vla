@@ -247,11 +247,13 @@ python3 scripts/eval_phase227.py \
 | p223  | Phase198 v3_first_eval — CLIP encoder mismatch | **VLA 0% vs P-ctrl 100%** |
 | p224  | Phase196 VLA 50-goal eval (FIXED wheel_vel, sr=0.10m) | **VLA 68% vs P-ctrl 96%** |
 | p226  | sr=0.15m fair eval (VLA unchanged, P-ctrl 100%) | **VLA 68% vs P-ctrl 100%** |
-| p227  | Q2 gy gap ROOT CAUSE + 15 Q2 episodes + train Phase227 | 🔄 Training in progress |
+| p227  | Q2 gy gap ROOT CAUSE + 15 Q2 episodes + 30-epoch train Phase227 | ✅ Training complete (all 30 epochs, best=620MB) |
+| p234  | Phase 234: P-controller steps bug fix + 50-goal 3-way eval running | 🔄 Eval in progress |
 
 ### Git
-- Commit (scripts): Phase227: Q2 gy gap fix — data collection + training + eval scripts
-- Training: Running in background (pid=52810), 30 epochs on 7589 frames
+- Commit `0c0f104`: Phase234: Fix eval_phase227.py steps variable bug (steps→actual_steps)
+- Branch: main, working tree: clean
+- Training artifacts: 8 checkpoints saved (epoch_5/10/15/20/25/30, best_policy.pt, final_policy.pt)
 - Commit (data+results): pending after training completes
 
 
