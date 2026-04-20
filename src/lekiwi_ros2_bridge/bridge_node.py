@@ -52,6 +52,7 @@ from lekiwi_ros2_bridge.lekiwi_sim_loader import make_sim
 from sim_lekiwi_urdf import twist_to_contact_wheel_speeds
 from security_monitor import SecurityMonitor
 from policy_guardian import PolicyGuardian
+from camera_adapter import CameraAdapter  # noqa: F401 — used by urdf sim mode at line ~412
 
 # ── Joint name mapping: URDF Gazebo names → bridge canonical names ─────────────
 # From lekiwi.urdf Gazebo plugin joint list:
