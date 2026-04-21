@@ -1,7 +1,88 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
 ---
-## [Phase 246 - 2026-04-21 12:00 UTC] — DAgger Pipeline Created, First Evaluation Done
+## [Phase 261 - 2026-04-22 03:00 CST] — Stage2 Curriculum 72% SR, Stage3 DISK FULL Crash
+
+### 🎯 Stage2 Curriculum Eval: **72% SR** (BEST VLA result with early termination)
+
+**Result: `stage2_r045.pt` 50-goal eval, sr=0.10m, early termination:**
+- **36/50 = 72% SR** ← Phase196 (8%) and Phase227 (4%) were catastrophic, this is **9× better**
+- P-controller baseline: 94% SR (still gold standard)
+- All 4 quadrants working: Q1=60%, Q2=93%, Q3=69%, Q4=58%
+- Mean steps: 146 (VLA slower than P-controller's ~100)
+- **14 total failures**, spread across Q1 (4), Q3 (4), Q4 (5), Q2 only 1 failure
+
+**Stage 3 DISK FULL crash**: Curriculum training completed stages 1+2, Stage 3 (15 epochs) crashed at end with:
+```
+RuntimeError: [enforce fail at inline_container.cc:743] . open file failed with strerror: No space left on device
+```
+Disk at 91% / 1.6Gi free. Stage 3 checkpoints NOT saved (4.0GB needed).
+
+### 🔍 Disk Space Emergency — Free Up for Stage 3 Retry
+
+**Big results dirs (>1.7GB each):**
+| Dir | Size | Age |
+|-----|------|-----|
+| phase227_contact_jacobian_train/ | 4.6GB | Apr 14 |
+| phase190_vision_train/ | 4.6GB | Apr 14 |
+| phase158_merged_jacobian_lr2e-05_ep10/ | 2.3GB | Apr 18 |
+| phase158_merged_jacobian_lr2e-05_ep7/ | 1.7GB | Apr 19 |
+| dagger_phase254_train/ | 1.0GB | Apr 21 |
+
+**Safe to delete:** phase158 merged dirs (2.3GB + 1.7GB = **4.0GB freed**)
+
+**Plan:** Remove phase158 dirs → retry Stage 3 (15 epochs, ~4GB checkpoint)
+
+### ✅ 本次心跳完成
+
+**1. Stage2 Curriculum Eval: 72% SR** ← Best VLA ever with early termination
+- 36/50 successes, mean 146 steps
+- Quadrant breakdown: Q1=6/10, Q2=14/15, Q3=9/13, Q4=7/12
+- eval_stage2_50goal.py committed (commit: 40274ec)
+
+**2. Stage3 Crash Confirmed — "No space left on device"**
+- Training log shows all 15 Stage 3 epochs completed but checkpoint save failed
+- Need ~1.2GB per checkpoint (×3 = 3.6GB needed) but only 1.6GB free
+
+**3. Git Status**
+- Working tree: results/phase261_curriculum_eval/ (untracked)
+- Commit: 40274ec "Phase 261: eval_stage2_curriculum.py scripts"
+
+### 🧭 下次心跳（Phase 262）
+
+**Priority 1: Free disk → retry Stage 3**
+```bash
+rm -rf ~/hermes_research/lekiwi_vla/results/phase158_merged_jacobian_lr2e-05_ep10_20260418_1915
+rm -rf ~/hermes_research/lekiwi_vla/results/phase158_merged_jacobian_lr2e-05_ep7_20260419_0136
+# Then retry Stage 3 from stage2_r045.pt
+```
+
+**Priority 2: Stage 3 → Final Policy eval**
+- `final_policy.pt` + `best_policy.pt` → 50-goal eval (sr=0.10m)
+- Compare with Stage2 (72% SR) — expect higher with all-goal training
+
+**Priority 3: Disk space monitoring**
+- Implement per-run disk check before saving checkpoints
+- Alert if < 5GB free before training starts
+
+### 📊 Experiment Record
+
+| Phase | Content | Result |
+|-------|---------|--------|
+| p196 | CJ P-controller + VLA train (14 epochs) | 8% SR (with early term) |
+| p227 | Q2-extended data + 30-epoch VLA train | 4% SR |
+| p234 | P-ctrl 94% SR (FIXED), Phase196 8%, Phase227 4% | 50-goal complete |
+| p254 | DAgger-254 training (30ep, 20 epochs) | best_loss=0.0018 |
+| p256 | DAgger-254 10-goal quick eval | **20% SR** |
+| p257 | Bridge health monitor (14/14 ✓) | ✅ |
+| p260 | Curriculum training: Stage1+2 done, Stage3 DISK FULL | PID=2359 |
+| p261 | Stage2 50-goal eval | **72% SR** ← best VLA ever |
+| p261b | Stage3 retrain (pending) | DISK FULL |
+
+### Git
+- Commit: `40274ec` Phase 261: eval_stage2_curriculum.py scripts — Stage2 10-goal 80% SR
+- Working tree: results/phase261_curriculum_eval/ (untracked)
+- Disk space: 1.6GB free (needs ~4GB cleanup for Stage3 retry)
 
 ### ✅ 已完成（本次心跳）
 
