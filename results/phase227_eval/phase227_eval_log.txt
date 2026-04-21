@@ -1,11 +1,11 @@
 ======================================================================
 Phase 227: VLA Evaluation (50-goal, Q2-Focused)
 ======================================================================
-Config: 50 goals, 200 steps, sr=0.15m, seed=42
+Config: 3 goals, 200 steps, sr=0.15m, seed=42
 
 SUMMARY:
-  P-controller: 50/50 = 100.0%
-  Phase196 VLA: 39/50 = 78.0%
-  Phase227 VLA: 40/50 = 80.0%
+  P-controller: 3/3 = 100.0%
+  Phase196 VLA: 2/3 = 66.7%
+  Phase227 VLA: 2/3 = 66.7%
 
-Total time: 37.2 min
+Total time: 2.8 min
