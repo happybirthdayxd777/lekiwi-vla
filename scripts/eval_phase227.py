@@ -56,6 +56,11 @@ def run_evaluation(policy, n_episodes, max_steps, success_radius, seed, policy_n
         sim.reset()
         base_body_id = sim.model.body('base').id
 
+        # Warmup step to fix render-black bug (LeKiWiSimURDF returns black at t=0.002s)
+        if ep_i == 0:
+            _ = sim.render()  # First render is black, warmup
+        sim.step(np.zeros(9))  # Physics warmup step
+
         for step in range(max_steps):
             state = build_state(sim, goal)
             image = sim.render()
