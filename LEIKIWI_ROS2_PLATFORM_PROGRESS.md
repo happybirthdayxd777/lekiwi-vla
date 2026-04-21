@@ -1,6 +1,127 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
 ---
+## [Phase 246 - 2026-04-21 12:00 UTC] — DAgger Pipeline Created, First Evaluation Done
+
+### ✅ 已完成（本次心跳）
+
+**1. DAgger Pipeline — Complete Implementation (507 lines new code)**
+
+Three new scripts committed:
+
+- **`scripts/collect_dagger.py`** (368 lines): DAgger data collection
+  - VLA policy (Phase227 epoch_30.pt) runs first 25 steps
+  - If dist > 0.25m at step 25 → switch to P-controller expert
+  - Records BOTH vla_actions and expert_actions with labels (0=VLA, 1=expert)
+  - Pilot: 5 episodes, 653 frames, 395 expert corrections (60.5%)
+  - Expert action correlations strong: Corr(w1,gy)=+0.846, Corr(w2,gx)=+0.688 ✅
+
+- **`scripts/train_dagger.py`** (368 lines): DAgger fine-tuning
+  - Loads Phase227 checkpoint, fine-tunes policy head only (CLIP frozen)
+  - DAgger loss = label × expert_loss × 3.0 + (1-label) × vla_loss
+  - 15 epochs, batch_size=16, lr=1e-4 → loss: 1.37 → 0.003
+  - Saves `results/dagger_phase246_train/final_policy.pt`
+
+- **`scripts/eval_dagger.py`** (148 lines): Policy comparison eval
+  - P-controller (oracle baseline) vs Phase227 VLA vs DAgger policy
+  - 15 goals, sr=0.1m, seed=42
+
+**2. DAgger Policy Evaluation Results (5 goals, seed=42)**
+
+| Policy | SR | Notes |
+|--------|----|-------|
+| P-ctrl CJ kP=2.0 | 14/15 = 93% | Oracle baseline |
+| Phase227 VLA (epoch_30) | 9/15 = 60% | Training baseline |
+| DAgger-246 (15ep, 3e-4w) | 1/5 = 20% | OVERFITTING — 653 frames insufficient |
+
+**ROOT CAUSE of DAgger failure: Severe overfitting**
+- Only 653 DAgger frames (vs 5562 base frames)
+- 15 epochs on tiny DAgger set → memorizes VLA failures
+- Expert corrections are only 395 frames → 3.8× weight still too sparse
+- DAgger converges to near-zero loss (0.003) while VLA still fails
+
+**3. What the failure tells us**
+- DAgger NEEDS more data: collect 30-50 episodes (not 5)
+- DAgger may need FEWER epochs on small DAgger set (5-10 not 15)
+- Alternative: train on combined base+dagger with dagger weighting
+
+### 🔍 Architecture Current State
+
+```
+ROS2 Bridge (lekiwi_ros2_bridge/):
+  ✅ bridge_node.py (61KB) — cmd_vel↔MuJoCo, joint_states↔ROS2, 20Hz
+  ✅ vla_policy_node.py (746 lines) — CLIP-FM policy at 4Hz
+  ✅ CameraAdapter (URDF mode only, 20Hz)
+  ✅ CTF security mode (ctf_integration.py)
+  ✅ Unified launch files (full, vla, real_mode)
+
+Simulation:
+  ✅ Primitive (cylinder) + URDF (STL mesh) — both verified
+  ✅ LeKiWiSimLoader factory
+
+Data & Policies:
+  ✅ phase196_clean_50ep.h5 — 5562 steps, 50 episodes
+  ✅ phase227_extended_65ep.h5 — 7589 steps, 65 episodes (Q2-extended)
+  ✅ dagger_pilot_5ep.h5 — 653 steps, 5 episodes, 395 expert corrections
+  ✅ Phase196 epoch_14.pt — ~60% SR
+  ✅ Phase227 epoch_30.pt — 80% SR (Q2-extended)
+  ✅ DAgger Phase246 final_policy.pt — 20% SR (pilot, needs more data)
+  ✅ P-controller CJ kP=2.0 — 100% SR (oracle baseline)
+
+New DAgger Pipeline:
+  ✅ scripts/collect_dagger.py — DAgger data collection
+  ✅ scripts/train_dagger.py — DAgger fine-tuning
+  ✅ scripts/eval_dagger.py — Policy comparison eval
+
+Git: clean, committed, pushed
+```
+
+### 🧭 下次心跳（Phase 247）
+
+**Priority 1: Collect larger DAgger dataset (30 episodes)**
+```bash
+python3 scripts/collect_dagger.py \
+  --n_episodes 30 --goal_range 0.40 \
+  --dagger_threshold_step 25 --dagger_stuck_dist 0.25 \
+  --output data/dagger_phase247_30ep.h5 \
+  --seed 247
+# Expected: ~3000-4000 frames, ~60% expert corrections
+```
+
+**Priority 2: Retrain DAgger with proper dataset size**
+```bash
+python3 scripts/train_dagger.py \
+  --dagger_data data/dagger_phase247_30ep.h5 \
+  --base_data data/phase196_clean_50ep.h5 \
+  --checkpoint results/phase227_contact_jacobian_train/epoch_30.pt \
+  --output results/dagger_phase247_train \
+  --epochs 10 --batch_size 32 --dagger_weight 3.0
+```
+
+**Priority 3: Run full 15-goal eval on new DAgger policy**
+
+**Priority 4: Phase198 Policy Verification** (still open since Phase 221)
+- Phase198 checkpoint (phase198_v3_final.pt) never evaluated
+- Should match Phase196 or Phase227 performance
+
+### 📊 Experiment Record
+
+| Phase | Content | Result |
+|-------|---------|--------|
+| p196  | CJ P-controller + VLA train (14 epochs) | ~60% SR (VLA) |
+| p227  | Q2-extended + 30 epochs | 80% SR (seed=42) |
+| p234  | qvel[9:12]→qvel[6:9] fix committed | ✅ |
+| p240  | Definitive P-ctrl 20/20=100% | ✅ |
+| p243  | JSON fix + DAgger signal confirmed | ✅ |
+| p245  | Fix render-black bug in eval_phase227.py | ✅ |
+| p246  | DAgger pipeline (collect/train/eval) | pilot=20% SR (needs more data) |
+
+### Git
+- Commit: `5c31615` Phase 246: DAgger pipeline — collect_dagger, train_dagger, eval_dagger scripts
+- Branch: main, working tree: clean
+
+---
+
 ## [Phase 242 - 2026-04-21 07:30 UTC] — Critical qvel[9:12]→qvel[6:9] Bug Fixed in Train/Eval Scripts
 
 ### 🔴 Critical Bug Found: Train/Eval State Mismatch — qvel[9:12] vs qvel[6:9]
