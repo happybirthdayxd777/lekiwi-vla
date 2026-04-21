@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-DAgger Data Collection for LeKiWi VLA
-======================================
+Phase 252: DAgger Data Collection for LeKiWi VLA
+=================================================
 
 Implements DAgger (Ross & Bagnell 2013): collect VLA failures, then use P-controller
 as expert to provide corrective actions for those failure states.
@@ -216,13 +216,13 @@ def collect_dagger_episode(vla_policy, p_controller, sim,
 
 def main():
     parser = argparse.ArgumentParser(description='DAgger data collection for LeKiWi VLA')
-    parser.add_argument('--n_episodes', type=int, default=30)
+    parser.add_argument('--n_episodes', type=int, default=50)
     parser.add_argument('--max_steps', type=int, default=250)
     parser.add_argument('--goal_range', type=float, default=0.40,
                         help='Goal range in meters (use >0.35 to target failure modes)')
     parser.add_argument('--output', type=str, default='data/dagger_phase246_30ep.h5')
     parser.add_argument('--vla_checkpoint', type=str,
-                        default='results/phase227_contact_jacobian_train/epoch_30.pt')
+                        default='results/phase227_contact_jacobian_train/best_policy.pt')
     parser.add_argument('--dagger_threshold_step', type=int, default=30,
                         help='Switch to expert after this many steps')
     parser.add_argument('--dagger_stuck_dist', type=float, default=0.25,

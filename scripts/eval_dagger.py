@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Phase 246: Quick eval of DAgger policy vs Phase196/Phase227 VLA vs P-controller
+Phase 252: Quick eval of DAgger policy vs Phase227 VLA vs P-controller
 """
 import sys, os, json, time
 from pathlib import Path
@@ -119,10 +119,10 @@ def main():
     print(f"  → {r['successes']}/{args.n_goals} = {r['success_rate']*100:.0f}% SR, mean_dist={r['mean_final_dist']:.3f}m")
     print()
 
-    # Phase227 VLA (baseline)
-    print("[Phase227 VLA (epoch_30.pt)]")
+    # Phase227 VLA (best checkpoint)
+    print("[Phase227 VLA (best_policy.pt)]")
     p227 = GoalConditionedPolicy(state_dim=11, action_dim=9, hidden=512, device=DEVICE).to(DEVICE)
-    ckpt = torch.load('results/phase227_contact_jacobian_train/epoch_30.pt', map_location=DEVICE, weights_only=False)
+    ckpt = torch.load('results/phase227_contact_jacobian_train/best_policy.pt', map_location=DEVICE, weights_only=False)
     p227.load_state_dict(ckpt['policy_state_dict'], strict=False)
     p227.eval()
     r = eval_policy(p227, args.n_goals, args.max_steps, args.success_radius, args.seed, "VLA Phase227")
@@ -130,16 +130,29 @@ def main():
     print(f"  → {r['successes']}/{args.n_goals} = {r['success_rate']*100:.0f}% SR, mean_dist={r['mean_final_dist']:.3f}m")
     print()
 
-    # DAgger policy
-    print("[DAgger policy (final_policy.pt)]")
-    p_dagger = GoalConditionedPolicy(state_dim=11, action_dim=9, hidden=512, device=DEVICE).to(DEVICE)
-    ckpt = torch.load('results/dagger_phase246_train/final_policy.pt', map_location=DEVICE, weights_only=False)
-    p_dagger.load_state_dict(ckpt['policy_state_dict'], strict=False)
-    p_dagger.eval()
-    r = eval_policy(p_dagger, args.n_goals, args.max_steps, args.success_radius, args.seed, "VLA DAgger-246")
-    results['vla_dagger'] = r
-    print(f"  → {r['successes']}/{args.n_goals} = {r['success_rate']*100:.0f}% SR, mean_dist={r['mean_final_dist']:.3f}m")
-    print()
+    # DAgger-246 policy (for comparison)
+    if os.path.exists('results/dagger_phase246_train/best_policy.pt'):
+        print("[DAgger-246 policy (best_policy.pt)]")
+        p_dagger246 = GoalConditionedPolicy(state_dim=11, action_dim=9, hidden=512, device=DEVICE).to(DEVICE)
+        ckpt = torch.load('results/dagger_phase246_train/best_policy.pt', map_location=DEVICE, weights_only=False)
+        p_dagger246.load_state_dict(ckpt['policy_state_dict'], strict=False)
+        p_dagger246.eval()
+        r = eval_policy(p_dagger246, args.n_goals, args.max_steps, args.success_radius, args.seed, "VLA DAgger-246")
+        results['vla_dagger246'] = r
+        print(f"  → {r['successes']}/{args.n_goals} = {r['success_rate']*100:.0f}% SR, mean_dist={r['mean_final_dist']:.3f}m")
+        print()
+
+    # DAgger-252 policy (new run)
+    if os.path.exists('results/dagger_phase252_train/best_policy.pt'):
+        print("[DAgger-252 policy (best_policy.pt)]")
+        p_dagger252 = GoalConditionedPolicy(state_dim=11, action_dim=9, hidden=512, device=DEVICE).to(DEVICE)
+        ckpt = torch.load('results/dagger_phase252_train/best_policy.pt', map_location=DEVICE, weights_only=False)
+        p_dagger252.load_state_dict(ckpt['policy_state_dict'], strict=False)
+        p_dagger252.eval()
+        r = eval_policy(p_dagger252, args.n_goals, args.max_steps, args.success_radius, args.seed, "VLA DAgger-252")
+        results['vla_dagger252'] = r
+        print(f"  → {r['successes']}/{args.n_goals} = {r['success_rate']*100:.0f}% SR, mean_dist={r['mean_final_dist']:.3f}m")
+        print()
 
     total_time = time.time() - total_start
 
@@ -152,7 +165,7 @@ def main():
     print(f"\nTotal time: {total_time/60:.1f} min")
 
     # Save results
-    out_dir = Path('results/dagger_phase246_eval')
+    out_dir = Path('results/dagger_phase252_eval')
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f'eval_results.json'
 

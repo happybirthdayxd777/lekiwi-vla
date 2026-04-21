@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Phase 246: DAgger Training for LeKiWi VLA
+Phase 252: DAgger Training for LeKiWi VLA
 ==========================================
 
 DAgger (Ross & Bagnell 2013) retraining:
@@ -144,6 +144,7 @@ def train_dagger(dagger_obs, dagger_states, dagger_vla_actions, dagger_expert_ac
     n_trainable = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     print(f"  Trainable params: {n_trainable:,}")
 
+    best_loss = float('inf')
     for epoch in range(epochs):
         epoch_losses = []
         batches_per_epoch = max(n_base, n_dagger) // batch_size
@@ -236,12 +237,22 @@ def train_dagger(dagger_obs, dagger_states, dagger_vla_actions, dagger_expert_ac
         if (epoch + 1) % 5 == 0 or epoch == 0:
             print(f"  Epoch {epoch+1}/{epochs}: loss={avg_loss:.4f}, lr={lr_now:.2e}")
 
+        # ── Save best checkpoint ─────────────────────────────────────────────
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            torch.save({
+                'epoch': epoch + 1,
+                'loss': avg_loss,
+                'policy_state_dict': policy.state_dict(),
+            }, f"{output_dir}/best_policy.pt")
+            print(f"  ★ New best loss={avg_loss:.4f} at epoch {epoch+1}")
+
     # Plot loss
     plt.figure(figsize=(8, 4))
     plt.plot(losses, 'b-', linewidth=1)
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.title('Phase 246: DAgger Training Loss')
+    plt.title(f'Phase 252: DAgger Training Loss (best={best_loss:.4f})')
     plt.savefig(f"{output_dir}/training_loss.png", dpi=100)
     plt.close()
 
@@ -249,10 +260,12 @@ def train_dagger(dagger_obs, dagger_states, dagger_vla_actions, dagger_expert_ac
     torch.save({
         'epoch': epochs,
         'loss': losses[-1],
+        'best_loss': best_loss,
         'policy_state_dict': policy.state_dict(),
     }, f"{output_dir}/final_policy.pt")
 
     print(f"\n✅ Training complete: {output_dir}/final_policy.pt")
+    print(f"   Best loss: {best_loss:.4f}")
     return losses
 
 
@@ -263,10 +276,10 @@ def main():
     parser.add_argument('--base_data', type=str, default='data/phase196_clean_50ep.h5',
                         help='Base P-controller dataset for training')
     parser.add_argument('--checkpoint', type=str,
-                        default='results/phase227_contact_jacobian_train/epoch_30.pt',
+                        default='results/phase227_contact_jacobian_train/best_policy.pt',
                         help='Starting checkpoint (Phase 227 or Phase 196)')
     parser.add_argument('--output', type=str,
-                        default='results/dagger_phase246_train',
+                        default='results/dagger_phase252_train',
                         help='Output directory')
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--batch_size', type=int, default=32)

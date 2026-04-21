@@ -481,7 +481,7 @@ def _make_phase196_wrapper(pretrained: Optional[str], device: str):
 
 def _make_dagger_policy(pretrained: Optional[str], device: str):
     """
-    Load Phase 246 DAgger policy (trained on P-controller expert corrections).
+    Load Phase 252 DAgger policy (trained on P-controller expert corrections).
 
     Architecture: GoalConditionedPolicy (same as train_phase227/train_phase196.py)
       - CLIP ViT-B/32 vision encoder (frozen)
@@ -490,9 +490,11 @@ def _make_dagger_policy(pretrained: Optional[str], device: str):
       - Cross-attention: goal(Q) attends to CLIP(K,V)
       - Flow matching head: 4-step Euler inference
       - 155M total params
-      - Train: 15 epochs, loss=0.00298, DAgger-corrected data
+      - Train: 30 epochs on 50ep DAgger data + 50ep base data
+      - Base: results/phase227_contact_jacobian_train/best_policy.pt (loss=0.195)
+      - Best checkpoint: results/dagger_phase252_train/best_policy.pt
 
-    Checkpoint: results/dagger_phase246_train/final_policy.pt
+    Checkpoint order: best_policy.pt > final_policy.pt (best is epoch with lowest loss)
     State: arm_pos(6) + wheel_vel(3) + goal_norm(2) = 11D
     Action: arm_torque(6) + wheel_speed(3) = 9D
     """
@@ -504,9 +506,10 @@ def _make_dagger_policy(pretrained: Optional[str], device: str):
     if pretrained:
         ckpt_path = os.path.expanduser(pretrained)
     else:
-        ckpt_path = os.path.expanduser(
-            "~/hermes_research/lekiwi_vla/results/dagger_phase246_train/final_policy.pt"
-        )
+        # Prefer best_policy.pt (lowest loss epoch) over final_policy.pt (last epoch)
+        best_path = os.path.expanduser("~/hermes_research/lekiwi_vla/results/dagger_phase252_train/best_policy.pt")
+        final_path = os.path.expanduser("~/hermes_research/lekiwi_vla/results/dagger_phase252_train/final_policy.pt")
+        ckpt_path = best_path if os.path.exists(best_path) else final_path
 
     if os.path.exists(ckpt_path):
         import torch
@@ -514,7 +517,7 @@ def _make_dagger_policy(pretrained: Optional[str], device: str):
         sd = ckpt.get("policy_state_dict", ckpt)
         missing, unexpected = policy.load_state_dict(sd, strict=False)
         print(f"[dagger] Loaded checkpoint epoch={ckpt.get('epoch','?')} "
-              f"loss={ckpt.get('loss','?')} | "
+              f"loss={ckpt.get('loss','?')} best_loss={ckpt.get('best_loss','?')} | "
               f"missing={len(missing)} unexpected={len(unexpected)}")
     else:
         print(f"[dagger] WARNING: checkpoint not found: {ckpt_path}")
