@@ -815,3 +815,87 @@ python3 scripts/eval_phase227.py  # needs ~40min, run as background job
 - Commit: `6fc40bc` Phase 243: Fix JSON serialization in eval_phase227.py
 - Working tree: clean
 - All changes pushed
+
+---
+## [Phase 260 - 2026-04-22 01:30 CST] — Curriculum Training Stage 3 Running (PID=2359)
+
+### 🎓 Curriculum Training — 3-Stage Progressive Learning
+
+**Base checkpoint:** `phase227_epoch30.pt`
+**Data:** `phase227_extended_65ep.h5` (7589 frames, 65 episodes)
+**Architecture:** CLIP-FM VLA, flow matching, freeze CLIP / train goal+state nets
+
+| Stage | Goal Radius | Epochs | Output | Status |
+|-------|-------------|--------|--------|--------|
+| 1 | \|r\| ≤ 0.25m | 5 | `stage1_r025.pt` | ✅ Done (01:40) |
+| 2 | \|r\| ≤ 0.45m | 10 | `stage2_r045.pt` | ✅ Done (00:48) |
+| 3 | ALL goals | 15 | `final_policy.pt`, `best_policy.pt` | 🔄 Running (~15min ETA) |
+
+**Key insight:** DAgger failed (Phase259: DAgger-254 = 50% < VLA Phase227 = 70%) because it adds data from the same imperfect P-controller without addressing the visual goal encoding difficulty. Curriculum training teaches easier goals first.
+
+**Training command:**
+```bash
+python3 scripts/train_curriculum.py \
+  --epochs_1 5 --epochs_2 10 --epochs_3 15 \
+  --batch_size 32 \
+  --output results/phase260_curriculum_train
+# PID=2359, running ~25min total
+```
+
+### 🔍 URDF Joint Analysis
+
+**lekiwi.urdf.resolved** — 50 total joints:
+- **3 wheel joints** (continuous revolute): `ST3215_Servo_Motor-v1-2_Revolute-60`, `ST3215_Servo_Motor-v1-1_Revolute-62`, `ST3215_Servo_Motor-v1_Revolute-64`
+- **6 arm joints** (continuous revolute): shoulder/elbow/wrist pitch+roll
+- **41 fixed** structural joints (base plates, mounts, battery, camera)
+
+**omni_controller.py** → `/lekiwi/wheel_{i}/cmd_vel` (Float64 × 3) = exact bridge interface
+
+### ✅ 本次心跳完成
+
+**1. Curriculum Training Stage 1+2 Complete**
+- Stage 1 (5 epochs, easy goals |r|<0.25m) → `stage1_r025.pt` (saved 00:40)
+- Stage 2 (10 epochs, medium goals |r|<0.45m) → `stage2_r045.pt` (saved 00:48)
+- Stage 3 running since ~00:48
+
+**2. Committed `scripts/train_curriculum.py`**
+- 486 lines, multi-stage curriculum training pipeline
+- Freezes CLIP, trains goal_mlp/state_net/cross_attn/flow_head
+- Caps 200 batches/epoch, cosine LR decay, gradient clipping
+
+**3. Git Push**
+- Commit: `f564282` Phase 260: curriculum train stage1+2 done, stage3 running
+- Pushed to origin/main
+
+### 🧭 下次心跳（Phase 261）
+
+**Priority 1: Stage 3 Completion + Evaluation**
+```bash
+# When final_policy.pt is ready (~01:55):
+python3 scripts/eval_dagger.py --policy phase260 --n_goals 50
+# Evaluate sr=0.10m, early termination
+```
+
+**Priority 2: VLA Closed-Loop Integration**
+- Phase 260 curriculum policy needs full 50-goal eval
+- Compare with Phase 227 (30 epochs, no curriculum) = 4% SR
+
+**Priority 3: Bridge-to-Real-Hardware Verification**
+- Test bridge_node in `mode=real` with actual ST3215 servos
+- Verify cmd_vel → wheel speed conversion on physical robot
+
+### 📊 Experiment Record
+
+| Phase | Content | Result |
+|-------|---------|--------|
+| p196 | CJ P-controller + VLA train (14 epochs) | 8% SR (with early term) |
+| p227 | Q2-extended data + 30-epoch VLA train | 4% SR |
+| p234 | P-ctrl 94% SR (FIXED), Phase196 8%, Phase227 4% | 50-goal complete |
+| p254 | DAgger-254 training (30ep, 20 epochs) | best_loss=0.0018 |
+| p256 | DAgger-254 10-goal quick eval | **20% SR** |
+| p257 | Bridge health monitor (14/14 ✓) | ✅ |
+| p260 | Curriculum training: Stage1+2 done, Stage3 running | PID=2359 |
+
+### Git
+- Commit: `f564282` Phase 260: curriculum train stage1+2 done, stage3 running
+- Working tree: clean
