@@ -154,6 +154,18 @@ def main():
         print(f"  → {r['successes']}/{args.n_goals} = {r['success_rate']*100:.0f}% SR, mean_dist={r['mean_final_dist']:.3f}m")
         print()
 
+    # DAgger-254 policy (30ep collection, 20ep training)
+    if os.path.exists('results/dagger_phase254_train/best_policy.pt'):
+        print("[DAgger-254 policy (best_policy.pt)]")
+        p_dagger254 = GoalConditionedPolicy(state_dim=11, action_dim=9, hidden=512, device=DEVICE).to(DEVICE)
+        ckpt = torch.load('results/dagger_phase254_train/best_policy.pt', map_location=DEVICE, weights_only=False)
+        p_dagger254.load_state_dict(ckpt['policy_state_dict'], strict=False)
+        p_dagger254.eval()
+        r = eval_policy(p_dagger254, args.n_goals, args.max_steps, args.success_radius, args.seed, "VLA DAgger-254")
+        results['vla_dagger254'] = r
+        print(f"  → {r['successes']}/{args.n_goals} = {r['success_rate']*100:.0f}% SR, mean_dist={r['mean_final_dist']:.3f}m")
+        print()
+
     total_time = time.time() - total_start
 
     # Summary
