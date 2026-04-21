@@ -154,15 +154,16 @@ root cause 分析完成，發現三個問題：
 | Camera Adapter | ✅ URDF 20Hz | front + wrist camera |
 | 5× Launch Files | ✅ | bridge/vla/ctf/full/real_mode |
 | DAgger Pipeline | ⚠️ 需修復 | checkpoint 保存錯誤 |
+| Curriculum Stage 3 | 🟡 RUNNING | 15 epochs, epoch 1/15 done |
 
 ### 下一步
 
-- [ ] Phase 252: 修復 `train_dagger.py` — 正確保存 best_loss checkpoint
-- [ ] Phase 253: 擴展 DAgger 數據收集（20+ episodes，針對大位移目標）
-- [ ] Phase 254: 重新訓練並驗證 DAgger policy SR 提升
+- [ ] Phase 265: Monitor Stage 3 — wait for epoch 3 checkpoint, evaluate
+- [ ] Phase 266: If checkpoint at epoch 3, eval Stage 3 policy (goal-radius=all)
+- [ ] Phase 267: If SR improved, integrate Stage 3 with bridge_node ROS2 topic
 
 ### 阻礙
 
-- DAgger 數據不足：5 episodes → 需要 20-30
-- 訓練時 best_loss 追蹤缺失，導致保存錯誤 epoch 的模型
+- Disk space: 7.8GB free → need to monitor checkpoint saves
+- Training takes ~30 min/epoch on CPU → full 15 epochs = ~7.5 hours
 
