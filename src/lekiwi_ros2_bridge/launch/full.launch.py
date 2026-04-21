@@ -1,20 +1,22 @@
 """
 Unified LeKiWi Launch — Full Platform
 ======================================
-One launch file to rule them all (defaults use CLIP-FM with trained checkpoint):
+One launch file to rule them all (defaults use DAgger policy trained on P-controller corrections):
 
-  ros2 launch lekiwi_ros2_bridge full.launch.py           # task_oriented policy + URDF (no extra args needed)
-  ros2 launch lekiwi_ros2_bridge full.launch.py policy:=clip_fm  # switch to CLIP-FM policy
+  ros2 launch lekiwi_ros2_bridge full.launch.py           # dagger policy + URDF (no extra args needed)
+  ros2 launch lekiwi_ros2_bridge full.launch.py policy:=phase196  # switch to Phase196 policy
   ros2 launch lekiwi_ros2_bridge full.launch.py sim_type:=urdf  # explicit URDF mode
 
 Modes:
   sim_type : primitive | urdf
-  policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm | task_oriented
+  policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm | task_oriented | phase196 | dagger
 
-  # Default policy is task_oriented (reward-weighted CLIP-FM, 20% success @ 0.3m)
-  #   checkpoint: results/task_oriented_goaldirected/checkpoint_epoch_30.pt
-  # For original CLIP-FM (no reward weighting):
-  #   results/fresh_train_5k/final_clean.pt
+  # Default policy is dagger (DAgger-trained, 15 epochs, loss=0.003)
+  #   checkpoint: results/dagger_phase246_train/final_policy.pt
+  # For Phase196 (Contact-Jacobian baseline):
+  #   results/phase196_contact_jacobian_train/epoch_14.pt
+
+Recording + Replay:
 
 Recording + Replay:
   # Record a trajectory (HDF5 at 20 Hz)
@@ -70,8 +72,8 @@ def generate_launch_description() -> LaunchDescription:
         description="Device for VLA inference: cpu, cuda, mps",
     )
     policy = DeclareLaunchArgument(
-        "policy", default_value="phase196",
-        description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm, task_oriented, phase196",
+        "policy", default_value="dagger",
+        description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm, task_oriented, phase196, dagger",
     )
     pretrained = DeclareLaunchArgument(
         "pretrained", default_value="",

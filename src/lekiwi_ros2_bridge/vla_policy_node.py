@@ -479,6 +479,55 @@ def _make_phase196_wrapper(pretrained: Optional[str], device: str):
     return Phase196PolicyRunner(raw, device)
 
 
+def _make_dagger_policy(pretrained: Optional[str], device: str):
+    """
+    Load Phase 246 DAgger policy (trained on P-controller expert corrections).
+
+    Architecture: GoalConditionedPolicy (same as train_phase227/train_phase196.py)
+      - CLIP ViT-B/32 vision encoder (frozen)
+      - Goal MLP: 2 → 256 → 128
+      - State net: 11D → 256 → 128
+      - Cross-attention: goal(Q) attends to CLIP(K,V)
+      - Flow matching head: 4-step Euler inference
+      - 155M total params
+      - Train: 15 epochs, loss=0.00298, DAgger-corrected data
+
+    Checkpoint: results/dagger_phase246_train/final_policy.pt
+    State: arm_pos(6) + wheel_vel(3) + goal_norm(2) = 11D
+    Action: arm_torque(6) + wheel_speed(3) = 9D
+    """
+    sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
+    from scripts.train_phase227 import GoalConditionedPolicy as GCPolicy
+
+    policy = GCPolicy(state_dim=11, action_dim=9, hidden=512, device=device).to(device)
+
+    if pretrained:
+        ckpt_path = os.path.expanduser(pretrained)
+    else:
+        ckpt_path = os.path.expanduser(
+            "~/hermes_research/lekiwi_vla/results/dagger_phase246_train/final_policy.pt"
+        )
+
+    if os.path.exists(ckpt_path):
+        import torch
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        sd = ckpt.get("policy_state_dict", ckpt)
+        missing, unexpected = policy.load_state_dict(sd, strict=False)
+        print(f"[dagger] Loaded checkpoint epoch={ckpt.get('epoch','?')} "
+              f"loss={ckpt.get('loss','?')} | "
+              f"missing={len(missing)} unexpected={len(unexpected)}")
+    else:
+        print(f"[dagger] WARNING: checkpoint not found: {ckpt_path}")
+
+    return policy
+
+
+def _make_dagger_wrapper(pretrained: Optional[str], device: str):
+    """Wrapper for dagger: GoalConditionedPolicy DAgger-trained policy."""
+    raw = _make_dagger_policy(pretrained, device)
+    return Phase196PolicyRunner(raw, device)
+
+
 class Phase196PolicyRunner:
     """
     Inference runner for Phase 196 GoalConditionedPolicy.
@@ -517,6 +566,7 @@ _POLICY_LOADERS = {
     "clip_fm":       _make_clip_fm_wrapper,
     "task_oriented": _make_task_oriented_wrapper,
     "phase196":      _make_phase196_wrapper,
+    "dagger":        _make_dagger_wrapper,
 }
 
 
