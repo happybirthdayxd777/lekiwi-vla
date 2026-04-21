@@ -3,6 +3,7 @@
 Phase 246: Quick eval of DAgger policy vs Phase196/Phase227 VLA vs P-controller
 """
 import sys, os, json, time
+from pathlib import Path
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

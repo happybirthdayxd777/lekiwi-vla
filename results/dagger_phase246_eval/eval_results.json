@@ -1,0 +1,33 @@
+{
+  "config": {
+    "n_goals": 15,
+    "max_steps": 200,
+    "success_radius": 0.10,
+    "seed": 42
+  },
+  "summary": {
+    "P-ctrl CJ kP=2.0": {"success_rate": 0.933, "successes": 14, "n_episodes": 15, "mean_final_dist": 0.106},
+    "VLA Phase227": {"success_rate": 0.733, "successes": 11, "n_episodes": 15, "mean_final_dist": null},
+    "VLA DAgger-246": {"success_rate": 0.333, "successes": 5, "n_episodes": 15, "mean_final_dist": 0.166}
+  },
+  "phase227_failed_goals": [
+    {"goal": [0.27, -0.2], "dist": 1.197, "steps": 200},
+    {"goal": [-0.05, -0.14], "dist": 0.746, "steps": 200},
+    {"goal": [0.09, -0.25], "dist": 1.228, "steps": 200},
+    {"goal": [-0.17, -0.09], "dist": 0.100, "steps": 70, "note": "success at step 70 per log"}
+  ],
+  "dagger_failed_goals": [
+    {"goal": [-0.1, 0.31], "dist": 0.119, "steps": 200},
+    {"goal": [-0.28, -0.23], "dist": 0.270, "steps": 200},
+    {"goal": [0.27, -0.2], "dist": 0.132, "steps": 200},
+    {"goal": [-0.05, -0.14], "dist": 0.161, "steps": 200},
+    {"goal": [0.09, -0.25], "dist": 0.201, "steps": 200},
+    {"goal": [-0.17, -0.09], "dist": 0.208, "steps": 200},
+    {"goal": [-0.24, 0.01], "dist": 0.170, "steps": 200},
+    {"goal": [0.07, -0.31], "dist": 0.246, "steps": 200},
+    {"goal": [-0.38, 0.32], "dist": null, "steps": 200},
+    {"goal": [-0.25, -0.22], "dist": null, "steps": 200}
+  ],
+  "total_time_min": 13.3,
+  "note": "DAgger significantly underperforms P-controller and Phase227. Phase227 also underperforms P-controller. P-controller remains oracle baseline."
+}

@@ -18,6 +18,7 @@ from PIL import Image
 from typing import Optional, Tuple
 import mujoco
 import mujoco.viewer
+import mujoco._render as _render
 import os
 
 FloatArray = NDArray[np.floating]
@@ -555,6 +556,17 @@ def twist_to_contact_wheel_speeds(vx: float, vy: float, wz: float = 0.0) -> np.n
     return np.clip(wheel_speeds, -0.5, 0.5)
 
 
+# ── Camera helper ──────────────────────────────────────────────────────────
+
+def _copy_cam_from_model(model, cam, cam_id):
+    """Copy camera parameters from model camera into MjvCamera struct."""
+    model_cam = model.camera(cam_id)
+    # FIXED (Phase 250): MuJoCo 3.6.0 _MjModelCameraViews has no lookat/distance/azimuth/elevation
+    # Only pos, fovy, bodyid, mode, targetbodyid are available on model.camera()
+    cam.trackbodyid = int(model_cam.bodyid[0]) if model_cam.bodyid.size > 0 else -1
+    # For fixed cameras, the MjvCamera position is driven by the model; no need to copy pos
+
+
 # ── Simulation ───────────────────────────────────────────────────────────────
 
 class LeKiWiSimURDF:
@@ -571,6 +583,56 @@ class LeKiWiSimURDF:
         print(f"[LeKiWiSimURDF] bodies={self.model.nbody}, "
               f"meshes={self.model.nmesh}, joints={self.model.njnt}, "
               f"geoms={self.model.ngeom}")
+
+        # ── Phase 250: Headless image generation ─────────────────────────────────
+        # mujoco.Renderer + MjrContext require a working GL context.
+        # On headless machines (MUJOCO_GL=disable or no GPU), these segfault.
+        # We detect this at import time and use fast synthetic images instead.
+        _MUJOCO_GL_MODE = os.environ.get('MUJOCO_GL', '').lower()
+        _IS_HEADLESS = (
+            _MUJOCO_GL_MODE in ('disable', 'disabled', '') or
+            __import__('platform').system() == 'Darwin'
+        )
+
+        self._width  = 640
+        self._height = 480
+        self._headless = _IS_HEADLESS
+        self._con     = None
+        self._rect    = None
+        self._scn_front = None
+        self._scn_wrist = None
+        self._rgb_buf   = None
+        self._depth_buf = None
+
+        if not _IS_HEADLESS:
+            try:
+                _MAX_GEOM = 10000
+                self._con  = _render.MjrContext(self.model, _MAX_GEOM)
+                self._rect = _render.MjrRect(0, 0, self._width, self._height)
+                self._scn_front = mujoco.MjvScene(self.model, _MAX_GEOM)
+                self._scn_wrist = mujoco.MjvScene(self.model, _MAX_GEOM)
+                self._rgb_buf   = np.empty((self._height, self._width, 3), dtype=np.uint8)
+                self._depth_buf = np.empty((self._height, self._width), dtype=np.float32)
+                print("[LeKiWiSimURDF] GPU rendering enabled (MjrContext)")
+            except Exception as e:
+                self._headless = True
+                print(f"[LeKiWiSimURDF] Headless mode — synthetic camera images ({e})")
+        else:
+            print("[LeKiWiSimURDF] Headless mode — synthetic camera images")
+
+        # Camera handles (look up once at init, reuse every frame)
+        self._cam_front_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "front")
+        self._cam_wrist_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist")
+        # MjvCamera objects for mjv_updateScene — use fixedcamid approach
+        self._cam_front = mujoco.MjvCamera()
+        self._cam_wrist = mujoco.MjvCamera()
+        self._cam_front.type = mujoco.mjtCamera.mjCAMERA_FIXED
+        self._cam_wrist.type = mujoco.mjtCamera.mjCAMERA_FIXED
+        self._cam_front.fixedcamid = self._cam_front_id
+        self._cam_wrist.fixedcamid = self._cam_wrist_id
+        # Copy lookat/distance/azimuth/elevation from model cameras
+        _copy_cam_from_model(self.model, self._cam_front, self._cam_front_id)
+        _copy_cam_from_model(self.model, self._cam_wrist, self._cam_wrist_id)
 
     def _obs(self) -> dict:
         """Return observation as dict (compatible with LeKiWiSim._obs interface).
@@ -897,25 +959,143 @@ class LeKiWiSimURDF:
         return 1.0 - float(np.linalg.norm(self._target[:2] - base_xy))
 
     def render(self) -> Optional[np.ndarray]:
-        """Render from front camera (640x480)."""
-        cam_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "front")
-        r = mujoco.Renderer(self.model, 640, 480)
-        r.update_scene(self.data, camera=cam_id)
-        img = r.render()
-        r.close()
-        return img
+        """Render from front camera (640x480) — GPU mode or headless synthetic."""
+        if not self._headless:
+            mujoco.mjv_updateScene(
+                self.model, self.data, mujoco.MjvOption(), None,
+                self._cam_front, mujoco.mjtCatBit.mjCAT_ALL,
+                self._scn_front)
+            mujoco.mjr_render(self._rect, self._scn_front, self._con)
+            mujoco.mjr_readPixels(self._rgb_buf, self._depth_buf, self._rect, self._con)
+            return np.flipud(self._rgb_buf).copy()
+        return self._synthetic_image()
 
     def render_wrist(self) -> Optional[np.ndarray]:
-        """Render from wrist camera (640x480, follows arm_j4 rotation)."""
-        cam_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist")
-        r = mujoco.Renderer(self.model, 640, 480)
-        r.update_scene(self.data, camera=cam_id)
-        img = r.render()
-        r.close()
+        """Render from wrist camera (640x480) — GPU mode or headless synthetic."""
+        if not self._headless:
+            mujoco.mjv_updateScene(
+                self.model, self.data, mujoco.MjvOption(), None,
+                self._cam_wrist, mujoco.mjtCatBit.mjCAT_ALL,
+                self._scn_wrist)
+            mujoco.mjr_render(self._rect, self._scn_wrist, self._con)
+            mujoco.mjr_readPixels(self._rgb_buf, self._depth_buf, self._rect, self._con)
+            return np.flipud(self._rgb_buf).copy()
+        return self._synthetic_wrist_image()
+
+    def _synthetic_image(self) -> np.ndarray:
+        """Generate a top-down synthetic camera view from robot state (headless fallback).
+
+        Returns a 640x480 RGB image showing:
+        - Floor grid (gray)
+        - Target marker (green dot)
+        - Omni base (orange square)
+        - 3 wheel positions (blue dots)
+        - Arm endpoint (red dot)
+        - Arrow indicating heading direction
+        """
+        W, H = self._width, self._height
+        scale = 600.0  # pixels per meter
+        cx, cy = W // 2, H // 2
+
+        img = np.full((H, W, 3), 60, dtype=np.uint8)  # gray floor
+
+        # Draw grid
+        for gx in range(0, W, 80):
+            img[:, gx] = [80, 80, 80]
+        for gy in range(0, H, 80):
+            img[gy, :] = [80, 80, 80]
+
+        # Target (green)
+        tx = int(cx + self._target[0] * scale)
+        ty = int(cy - self._target[1] * scale)
+        for dx in range(-12, 13):
+            for dy in range(-12, 13):
+                if dx*dx + dy*dy < 144:
+                    px, py = tx+dx, ty+dy
+                    if 0 <= px < W and 0 <= py < H:
+                        img[py, px] = [0, 220, 0]
+
+        # Base position
+        base_id = self.model.body('base').id
+        bx = int(cx + self.data.xpos[base_id, 0] * scale)
+        by = int(cy - self.data.xpos[base_id, 1] * scale)
+
+        # Base square (orange)
+        bs = 18
+        for dx in range(-bs, bs+1):
+            for dy in range(-bs, bs+1):
+                px, py = bx+dx, by+dy
+                if 0 <= px < W and 0 <= py < H:
+                    img[py, px] = [230, 130, 20]
+
+        # Heading arrow
+        q = self.data.xquat[base_id]
+        heading = np.arctan2(2*(q[0]*q[3]+q[1]*q[2]),
+                              1-2*(q[2]**2+q[3]**2))
+        arrow_len = 30
+        ax = int(bx + arrow_len * np.cos(heading))
+        ay = int(by - arrow_len * np.sin(heading))
+        ax = np.clip(ax, 0, W-1)
+        ay = np.clip(ay, 0, H-1)
+        # Simple line (Bresenham)
+        steps = max(abs(ax-bx), abs(ay-by))
+        if steps > 0:
+            for i in range(steps+1):
+                px = int(bx + (ax-bx)*i/steps)
+                py = int(by + (ay-by)*i/steps)
+                if 0 <= px < W and 0 <= py < H:
+                    img[py, px] = [255, 200, 0]
+
+        # Wheel positions (blue dots) — equilateral triangle, Phase 100 corrected
+        wheel_local = [
+            (0.1500,  0.0866),   # w1
+            (-0.1500, 0.0866),   # w2
+            (0.0000, -0.1732),   # w3
+        ]
+        wheel_colors = [(50, 100, 255), (100, 150, 255), (0, 200, 255)]
+        for (wx_local, wy_local), wc in zip(wheel_local, wheel_colors):
+            wx = self.data.xpos[base_id, 0] + wx_local
+            wy = self.data.xpos[base_id, 1] + wy_local
+            wpx = int(cx + wx * scale)
+            wpy = int(cy - wy * scale)
+            for dx in range(-5, 6):
+                for dy in range(-5, 6):
+                    if dx*dx + dy*dy <= 36:
+                        px, py = wpx+dx, wpy+dy
+                        if 0 <= px < W and 0 <= py < H:
+                            img[py, px] = wc
+
+        return img
+
+    def _synthetic_wrist_image(self) -> np.ndarray:
+        """Generate a simple wrist camera view (arm joint angles → colored bands)."""
+        W, H = self._width, self._height
+        img = np.full((H, W, 3), 30, dtype=np.uint8)
+        # Vertical color bars encoding arm joint angles
+        arm_qpos = [self.data.qpos[self._jpos_idx[j]] for j in ARM_JOINTS]
+        n = len(arm_qpos)
+        bar_w = W // n
+        for i, q in enumerate(arm_qpos):
+            hue = int(120 + 120 * (q / 3.14)) % 256
+            r = int(128 + 127 * np.sin(hue * np.pi / 128))
+            g = int(128 + 127 * np.sin(hue * np.pi / 64))
+            b = int(128 + 127 * np.cos(hue * np.pi / 128))
+            img[:, i*bar_w:(i+1)*bar_w] = [r, g, b]
         return img
 
     def render_window(self):
-        return mujoco.viewer.launch_passive(self.model, self.data)
+        """Launch MuJoCo passive viewer in a daemon thread (non-blocking, macOS-safe)."""
+        import mujoco.viewer
+        import threading
+
+        def _view():
+            with mujoco.viewer.passive(self.model, self.data) as v:
+                while v.is_running():
+                    v.sync()
+
+        t = threading.Thread(target=_view, daemon=True)
+        t.start()
+        return t
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
