@@ -324,6 +324,8 @@ if __name__ == "__main__":
                 return [make_json_safe(v) for v in obj]
             elif isinstance(obj, (np.bool_,)):
                 return bool(obj)
+            elif isinstance(obj, bool):
+                return bool(obj)
             elif isinstance(obj, (np.integer,)):
                 return int(obj)
             elif isinstance(obj, (np.floating,)):

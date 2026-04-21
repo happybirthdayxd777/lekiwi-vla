@@ -492,7 +492,7 @@ def _make_dagger_policy(pretrained: Optional[str], device: str):
       - 155M total params
       - Train: 30 epochs on 50ep DAgger data + 50ep base data
       - Base: results/phase227_contact_jacobian_train/best_policy.pt (loss=0.195)
-      - Best checkpoint: results/dagger_phase252_train/best_policy.pt
+      - Best checkpoint: results/dagger_phase254_train/best_policy.pt (loss=0.0018, epoch 20)
 
     Checkpoint order: best_policy.pt > final_policy.pt (best is epoch with lowest loss)
     State: arm_pos(6) + wheel_vel(3) + goal_norm(2) = 11D
@@ -507,8 +507,8 @@ def _make_dagger_policy(pretrained: Optional[str], device: str):
         ckpt_path = os.path.expanduser(pretrained)
     else:
         # Prefer best_policy.pt (lowest loss epoch) over final_policy.pt (last epoch)
-        best_path = os.path.expanduser("~/hermes_research/lekiwi_vla/results/dagger_phase252_train/best_policy.pt")
-        final_path = os.path.expanduser("~/hermes_research/lekiwi_vla/results/dagger_phase252_train/final_policy.pt")
+        best_path = os.path.expanduser("~/hermes_research/lekiwi_vla/results/dagger_phase254_train/best_policy.pt")
+        final_path = os.path.expanduser("~/hermes_research/lekiwi_vla/results/dagger_phase254_train/final_policy.pt")
         ckpt_path = best_path if os.path.exists(best_path) else final_path
 
     if os.path.exists(ckpt_path):
