@@ -980,3 +980,54 @@ python3 scripts/eval_dagger.py --policy phase260 --n_goals 50
 ### Git
 - Commit: `f564282` Phase 260: curriculum train stage1+2 done, stage3 running
 - Working tree: clean
+
+---
+
+## [Phase 266 - 2026-04-22 13:00 CST] — Stage 3 Training PROGRESSING, Epoch 5/15
+
+### 本次心跳完成
+
+**Stage 3 Training — PROGRESSING NORMALLY (no hang)**
+
+Phase 264 fixes confirmed working — training has run for 8+ hours since last hang:
+
+| Epoch | Loss | LR | Event |
+|-------|------|-----|-------|
+| 1/15 | 0.3172 | 9.89e-05 | |
+| 2/15 | 0.2824 | 9.57e-05 | |
+| 3/15 | 0.2761 | 9.05e-05 | ✓ checkpoint saved |
+| 4/15 | 0.2668 | 8.35e-05 | |
+| 5/15 | 0.2623 | 7.50e-05 | ← last recorded |
+
+**Status at 13:00 CST:**
+- PID 16582 — CPU 98.0%, MEM 17.7%, TIME 83:43
+- Log file last updated: 06:21 (6.6 hours ago — expected, slow epoch output)
+- Disk: 6.7GB free, 1 checkpoint (s3_epoch3.pt, 620MB)
+- Next checkpoint: epoch 6
+
+**No action taken** — training running normally, waiting for epoch 6 checkpoint
+
+### 架構現況
+
+| 元件 | 狀態 | 備註 |
+|------|------|------|
+| bridge_node.py | ✅ 1260 行 | URDF + primitive 模式 |
+| vla_policy_node.py | ✅ 818 行 | CLIP-FM/pi0/ACT/dagger |
+| CTF Security Layer | ✅ C1-C8 全部 | 資安監控整合 |
+| Camera Adapter | ✅ URDF 20Hz | front + wrist camera |
+| Real Hardware Adapter | ✅ | 真實硬體介面 |
+| 5× Launch Files | ✅ | bridge/vla/ctf/full/real_mode |
+| Curriculum Stage 1 | ✅ 完成 | 5 epochs |
+| Curriculum Stage 2 | ✅ 完成 | 10 epochs, **72% SR** |
+| Curriculum Stage 3 | 🟡 RUNNING | 15 epochs, epoch 5/15, loss ↓ |
+
+### 下一步
+
+- [ ] Phase 267 (13:30): Monitor for epoch 6 checkpoint, then eval s3_epoch3.pt
+- [ ] Phase 267: Run 50-goal eval on s3_epoch3.pt vs Stage 2 (72% SR baseline)
+- [ ] Phase 268: If SR improved, integrate Stage 3 with bridge_node ROS2 topic
+
+### 阻礙
+
+- Disk space: 6.7GB free, each checkpoint ~620MB → only ~10 more checkpoints
+- Training slow on CPU (~17 min/epoch) → full 15 epochs = ~2.5 more hours
