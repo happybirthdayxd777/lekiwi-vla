@@ -311,7 +311,23 @@ if __name__ == "__main__":
     }
 
     with open(f"{output_dir}/phase227_results.json", 'w') as f:
-        json.dump(results, f, indent=2)
+        # Phase 243 FIX: Ensure all numpy types are converted to Python native types for JSON
+        def make_json_safe(obj):
+            if isinstance(obj, dict):
+                return {k: make_json_safe(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [make_json_safe(v) for v in obj]
+            elif isinstance(obj, (np.bool_,)):
+                return bool(obj)
+            elif isinstance(obj, (np.integer,)):
+                return int(obj)
+            elif isinstance(obj, (np.floating,)):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            else:
+                return obj
+        json.dump(make_json_safe(results), f, indent=2)
 
     with open(f"{output_dir}/phase227_eval_log.txt", 'w') as f:
         f.write("=" * 70 + "\n")
