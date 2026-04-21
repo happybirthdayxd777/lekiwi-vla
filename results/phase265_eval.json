@@ -1,0 +1,14 @@
+{
+  "phase": 265,
+  "checkpoint": "/Users/i_am_ai/hermes_research/lekiwi_vla/results/phase264_curriculum_train/s3_epoch6.pt",
+  "p_controller": {
+    "sr": 0.85,
+    "mean_fail_dist": 1.4172406818771126,
+    "mean_steps": 111.29411764705883
+  },
+  "stage3_vla": {
+    "sr": 0.15,
+    "mean_fail_dist": 0.41815667126145434,
+    "mean_steps": 121.66666666666667
+  }
+}
