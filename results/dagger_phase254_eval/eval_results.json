@@ -1,0 +1,23 @@
+{
+  "p_controller": {
+    "policy": "P-ctrl CJ kP=2.0",
+    "successes": 43,
+    "n_goals": 50,
+    "success_rate": 0.86,
+    "mean_final_dist": null
+  },
+  "vla_phase227": {
+    "policy": "VLA Phase227",
+    "successes": 35,
+    "n_goals": 50,
+    "success_rate": 0.7,
+    "mean_final_dist": null
+  },
+  "vla_dagger254": {
+    "policy": "VLA DAgger-254",
+    "successes": 25,
+    "n_goals": 50,
+    "success_rate": 0.5,
+    "mean_final_dist": 0.14
+  }
+}

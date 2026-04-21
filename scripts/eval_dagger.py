@@ -177,12 +177,9 @@ def main():
     print(f"\nTotal time: {total_time/60:.1f} min")
 
     # Save results
-    out_dir = Path('results/dagger_phase252_eval')
+    out_dir = Path(f'results/dagger_phase254_eval')
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir / f'eval_results.json'
-
-    import json as json_module
-    from pathlib import Path
+    out_file = out_dir / 'eval_results.json'
     def make_json_safe(obj):
         if isinstance(obj, bool):
             return bool(obj)
@@ -201,7 +198,7 @@ def main():
         return obj
 
     with open(out_file, 'w') as f:
-        json_module.dump(make_json_safe(results), f, indent=2)
+        json.dump(make_json_safe(results), f, indent=2)
     print(f"\n✅ Saved: {out_file}")
 
 if __name__ == "__main__":
