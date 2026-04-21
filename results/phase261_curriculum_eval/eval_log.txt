@@ -1,0 +1,131 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[Stage2 Curriculum — 50-goal eval, sr=0.10m, early termination]
+  Checkpoint: stage=stage2_r045, epoch=s2_10, loss=0.2938
+[Phase 227] Device: cpu
+[INFO] Loading CLIP ViT-B/32 (frozen)...
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]Loading weights: 100%|██████████| 398/398 [00:00<00:00, 73988.70it/s]
+[transformers] [1mCLIPModel LOAD REPORT[0m from: openai/clip-vit-base-patch32
+Key                                  | Status     |  | 
+-------------------------------------+------------+--+-
+text_model.embeddings.position_ids   | UNEXPECTED |  | 
+vision_model.embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+  Policy loaded OK
+
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+  [10/50] SR so far: 8/10 = 80.0%
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+  [20/50] SR so far: 14/20 = 70.0%
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+  [30/50] SR so far: 21/30 = 70.0%
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+  [40/50] SR so far: 28/40 = 70.0%
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+[LeKiWiSimURDF] bodies=14, meshes=26, joints=10, geoms=28
+[LeKiWiSimURDF] Headless mode — synthetic camera images
+  [50/50] SR so far: 36/50 = 72.0%
+
+  FINAL: 36/50 = 72.0%, mean_steps=146.2
+  Quadrant breakdown:
+    Q1: 6/10 = 60%
+    Q2: 14/15 = 93%
+    Q3: 9/13 = 69%
+    Q4: 7/12 = 58%
+  Results saved to results/phase261_curriculum_eval/stage2_results.json
+
+RESULT: 36/50 = 72% SR
