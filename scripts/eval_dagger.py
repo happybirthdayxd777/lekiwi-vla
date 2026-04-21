@@ -184,7 +184,11 @@ def main():
     import json as json_module
     from pathlib import Path
     def make_json_safe(obj):
-        if isinstance(obj, (np.bool_, np.integer)):
+        if isinstance(obj, bool):
+            return bool(obj)
+        elif isinstance(obj, (np.bool_,)):
+            return bool(obj)
+        elif isinstance(obj, (np.integer,)):
             return int(obj)
         elif isinstance(obj, np.floating):
             return float(obj)

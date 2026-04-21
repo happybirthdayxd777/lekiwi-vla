@@ -318,14 +318,15 @@ if __name__ == "__main__":
     with open(f"{output_dir}/phase227_results.json", 'w') as f:
         # Phase 243 FIX: Ensure all numpy types are converted to Python native types for JSON
         def make_json_safe(obj):
-            if isinstance(obj, dict):
+            # Check bool FIRST — bool is a subclass of int, not dict
+            if isinstance(obj, bool):
+                return bool(obj)
+            elif isinstance(obj, (np.bool_,)):
+                return bool(obj)
+            elif isinstance(obj, dict):
                 return {k: make_json_safe(v) for k, v in obj.items()}
             elif isinstance(obj, list):
                 return [make_json_safe(v) for v in obj]
-            elif isinstance(obj, (np.bool_,)):
-                return bool(obj)
-            elif isinstance(obj, bool):
-                return bool(obj)
             elif isinstance(obj, (np.integer,)):
                 return int(obj)
             elif isinstance(obj, (np.floating,)):
