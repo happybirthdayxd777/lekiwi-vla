@@ -176,7 +176,7 @@ def collect_dagger_episode(vla_policy, p_controller, sim,
 
         # Record
         obs_tensors.append(img_tensor.squeeze(0).cpu().numpy())
-        raw_images.append(raw_img)
+        raw_images.append(raw_img)  # Store RAW image for training (not preprocessed!)
         states.append(state)
         vla_actions.append(vla_action)
         expert_actions.append(expert_action)
