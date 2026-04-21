@@ -4,6 +4,37 @@
 
 ---
 
+## [2026-04-21 13:04] Phase 248 — Portable STL Mesh Paths
+
+### 已完成
+
+- `lekiwi_modular_meshes` symlink → `lekiwi_modular/src/lekiwi_description/urdf/meshes`
+- `sim_lekiwi_urdf.py` path resolution: `__file__`-relative + symlink (no hardcoded home path)
+- Verified: `LeKiWiSimURDF` init OK, `nmesh=26`, `njnt=10`, `reset()` OK
+
+**Bridge Architecture — Phase 239-248 summary**
+| 元件 | 狀態 | 檔案 |
+|------|------|------|
+| `bridge_node.py` | ✅ 1260 行，primitive + URDF 模式 | `src/lekiwi_ros2_bridge/` |
+| `vla_policy_node.py` | ✅ 768 行，CLIP-FM/pi0/ACT/mock | `src/lekiwi_ros2_bridge/` |
+| CTF Security Layer | ✅ Phase 239-243，C1-C8 挑戰全 | `ctf_integration.py` |
+| Camera Adapter | ✅ URDF 模式 20Hz RGB | `camera_adapter.py` |
+| Real Hardware Adapter | ✅ 真實硬體介面 | `real_hardware_adapter.py` |
+| 5× Launch Files | ✅ bridge/vla/ctf/full/real_mode | `launch/` |
+| STL Mesh Paths | ✅ Phase 248 — portable symlink | `lekiwi_modular_meshes` |
+
+### 下一步
+
+- [ ] Phase 249: 測試 `full.launch.py` end-to-end（無 ROS2 環境只能靜態審查）
+- [ ] Phase 250: DAgger 擴展數據收集（pilot SR=20% 需提升）
+- [ ] Phase 251: 整合 lekiwi_modular 的 actual URDF STL meshes 進 bridge
+
+### 阻礙
+
+- DAgger pilot eval SR=20%（遠低於 P-controller 100%），需要更多數據
+
+---
+
 ## [2026-04-21 01:00] Phase 247 — DAgger Pilot Results Commit
 
 ### 已完成
