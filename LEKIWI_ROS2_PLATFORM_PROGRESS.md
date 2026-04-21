@@ -118,3 +118,51 @@ ROS2 Topics
 
 ### 阻礙
 - VLA 成功率落後 P-controller 33%，數據不足是主要瓶頸
+
+---
+
+## [2026-04-21 15:30] Phase 251 — DAgger Failure Root Cause Analysis
+
+### 本次心跳完成
+
+**Phase 250 分析追蹤：為何 DAgger SR=33% 而非預期更高？**
+
+root cause 分析完成，發現三個問題：
+
+1. **Checkpoint 保存錯誤**：final_policy.pt 儲存於 epoch 15（訓練中途），而非 epoch 30 或最佳 epoch
+   - 訓練 30 epoch，loss 從 0.012 降至 0.003
+   - 但 checkpoint 只在 epoch 15 保存（非最佳）
+   - 修復：`train_dagger.py` 需追蹤 best_loss，正確保存最佳模型
+
+2. **DAgger 數據不足**：5 episodes × 653 frames = 60% 專家標籤數據
+   - 395 個專家糾正 frame（label=1）用於訓練
+   - 但相對於 3000+ frame 的 base data（phase196_clean_50ep.h5），DAgger 訊號太弱
+   - 需要收集 20-30 episodes 的大規模 DAgger 數據才能看到改進
+
+3. **P-controller oracle 太強**：SR=93% 是高標準 baseline
+   - 接觸Jacobian P-controller（kP=2.0）在接觸物理環境中表現出色
+   - DAgger 試圖學習，但訓練訊號摻雜了弱的 VLA 示範（label=0）
+   - 失敗目標分佈：10/15 在邊緣（|g|>0.3m 或 |g_y|>0.2m）
+
+### 架構現狀（Phase 239-251）
+
+| 元件 | 狀態 | 備註 |
+|------|------|------|
+| bridge_node.py | ✅ 1260 行 | URDF + primitive 模式 |
+| vla_policy_node.py | ✅ 818 行 | CLIP-FM/pi0/ACT/dagger |
+| CTF Security Layer | ✅ C1-C8 全部 | 資安監控整合 |
+| Camera Adapter | ✅ URDF 20Hz | front + wrist camera |
+| 5× Launch Files | ✅ | bridge/vla/ctf/full/real_mode |
+| DAgger Pipeline | ⚠️ 需修復 | checkpoint 保存錯誤 |
+
+### 下一步
+
+- [ ] Phase 252: 修復 `train_dagger.py` — 正確保存 best_loss checkpoint
+- [ ] Phase 253: 擴展 DAgger 數據收集（20+ episodes，針對大位移目標）
+- [ ] Phase 254: 重新訓練並驗證 DAgger policy SR 提升
+
+### 阻礙
+
+- DAgger 數據不足：5 episodes → 需要 20-30
+- 訓練時 best_loss 追蹤缺失，導致保存錯誤 epoch 的模型
+
