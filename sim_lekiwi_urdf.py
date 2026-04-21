@@ -23,8 +23,14 @@ import os
 FloatArray = NDArray[np.floating]
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-_3DP   = os.path.expanduser("~/hermes_research/lekiwi_modular/src/lekiwi_description/3DPrintMeshes")
-_URDFM = os.path.expanduser("~/hermes_research/lekiwi_modular/src/lekiwi_description/urdf/meshes")
+# lekiwi_modular is a sibling of lekiwi_vla under ~/hermes_research/
+# Symlink: lekiwi_modular_meshes → lekiwi_modular/src/lekiwi_description/urdf/meshes
+_Self = os.path.dirname(os.path.abspath(__file__))
+_HERMES = os.path.expanduser("~/hermes_research")
+_LEKIWI_MODULAR = os.path.join(_HERMES, "lekiwi_modular")
+_LEKIWI_MODULAR_MESHES = os.path.join(_Self, "lekiwi_modular_meshes")   # symlink
+_URDFM = _LEKIWI_MODULAR_MESHES   # use symlink (portable)
+_3DP = os.path.join(_LEKIWI_MODULAR, "src", "lekiwi_description", "3DPrintMeshes")
 
 def _mp(n: str) -> str: return os.path.join(_3DP, n)
 def _mp2(n: str) -> str: return os.path.join(_URDFM, n)
