@@ -10,13 +10,15 @@ Usage:
   ros2 launch lekiwi_ros2_bridge vla.launch.py policy:=clip_fm pretrained:=~/hermes_research/lekiwi_vla/results/fm_50ep_improved/policy_ep10.pt device:=cpu
 
 Policies:
-  mock    — sinusoidal testing (no GPU)
-  pi0     — LeRobot pi0 policy
-  pi0_fast— LeRobot pi0_fast policy
-  act     — LeRobot ACT policy
-  diffusion — LeRobot diffusion policy
-  clip_fm — CLIP ViT-B/32 + Flow Matching (scripts/train_clip_fm.py), default
-             checkpoint: ~/hermes_research/lekiwi_vla/results/fm_50ep_improved/policy_ep10.pt
+  mock       — sinusoidal testing (no GPU)
+  pi0        — LeRobot pi0 policy
+  pi0_fast   — LeRobot pi0_fast policy
+  act        — LeRobot ACT policy
+  diffusion  — LeRobot diffusion policy
+  clip_fm    — CLIP ViT-B/32 + Flow Matching (scripts/train_clip_fm.py)
+  stage2     — Curriculum Stage 2, |r|<0.45m, 72% SR, default checkpoint:
+                 ~/hermes_research/lekiwi_vla/results/phase260_curriculum_train/stage2_r045.pt
+  stage3     — Curriculum Stage 3, all goals, best: s3_epoch9.pt (loss=0.2324)
 
 Topics:
   Subscribes:
@@ -35,8 +37,8 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description() -> LaunchDescription:
 
     policy_arg = DeclareLaunchArgument(
-        "policy", default_value="clip_fm",
-        description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm",
+        "policy", default_value="stage2",
+        description="VLA policy: mock, pi0, pi0_fast, act, diffusion, clip_fm, stage2, stage3",
     )
     pretrained_arg = DeclareLaunchArgument(
         "pretrained", default_value="~/hermes_research/lekiwi_vla/results/fresh_train_5k/final_policy.pt",

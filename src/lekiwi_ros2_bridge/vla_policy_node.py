@@ -564,12 +564,169 @@ class Phase196PolicyRunner:
         pass
 
 
+class Stage2PolicyRunner:
+    """
+    Inference runner for Stage 2 Curriculum policy (GoalConditionedPolicy).
+
+    Architecture (from scripts/train_curriculum.py):
+      - CLIP ViT-B/32 vision encoder (frozen)
+      - Goal MLP: 2 → 256 → 128 → 768 (goal_q_proj)
+      - State net: 11D → 256 → 128
+      - Cross-attention: goal_query attends to CLIP image features
+      - Flow matching head: 4-step Euler inference
+      - State: arm_pos(6) + wheel_vel(3) + goal_norm(2) = 11D
+      - Action: arm_torque(6) + wheel_speed(3) = 9D
+
+    Checkpoint: results/phase260_curriculum_train/stage2_r045.pt
+      - 72% SR on |r|<0.45m goals (50-goal eval, 200 steps)
+      - This is the best practical VLA policy we have
+
+    NOTE: Stage 2 is constrained to |r|<0.45m goals.
+    At inference, only goals within this radius should be sent.
+    """
+    def __init__(self, policy, device: str = "cpu"):
+        self.policy = policy
+        self.device = device
+        self.policy.eval()
+
+    def __call__(self, image: np.ndarray, state: np.ndarray) -> np.ndarray:
+        """
+        Args:
+            image: [3, 224, 224] preprocessed image (normalized)
+            state: [11] — arm_pos(6) + wheel_vel(3) + goal_norm(2)
+        Returns:
+            [9] raw action (policy output)
+        """
+        import torch
+        img_t = torch.from_numpy(image[None]).to(self.device)
+        st_t = torch.from_numpy(state[None]).to(self.device)
+        with torch.no_grad():
+            action = self.policy.infer(img_t, st_t, num_steps=4)[0].cpu().numpy()
+        return action
+
+    def reset(self):
+        """No internal state to reset."""
+        pass
+
+
+def _make_stage2_policy(pretrained: Optional[str], device: str):
+    """
+    Load Stage 2 Curriculum policy from scripts/train_curriculum.py.
+
+    Architecture: GoalConditionedPolicy (same as train_curriculum.py)
+      - CLIP ViT-B/32 vision encoder (frozen)
+      - Goal MLP: 2 → 256 → 128 → 768
+      - State net: 11D → 256 → 128
+      - Cross-attention: goal_query attends to CLIP(K,V)
+      - Flow matching head: 4-step Euler inference
+      - 155M total params
+
+    Checkpoint: results/phase260_curriculum_train/stage2_r045.pt
+      - 72% SR on |r|<0.45m goals (50-goal eval, 200 steps)
+      - Trained on phase227_extended_65ep.h5 with max_goal_radius=0.45m
+
+    State: arm_pos(6) + wheel_vel(3) + goal_norm(2) = 11D
+    Action: arm_torque(6) + wheel_speed(3) = 9D
+    """
+    sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
+    from scripts.train_curriculum import GoalConditionedPolicy as GCPolicy
+
+    policy = GCPolicy(state_dim=11, action_dim=9, hidden=512, device=device).to(device)
+
+    if pretrained:
+        ckpt_path = os.path.expanduser(pretrained)
+    else:
+        ckpt_path = os.path.expanduser(
+            "~/hermes_research/lekiwi_vla/results/phase260_curriculum_train/stage2_r045.pt"
+        )
+
+    if os.path.exists(ckpt_path):
+        import torch
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        sd = ckpt.get("policy_state_dict", ckpt)
+        missing, unexpected = policy.load_state_dict(sd, strict=False)
+        print(f"[stage2] Loaded checkpoint epoch={ckpt.get('epoch','?')} "
+              f"loss={ckpt.get('loss','?')} | "
+              f"missing={len(missing)} unexpected={len(unexpected)}")
+    else:
+        print(f"[stage2] WARNING: checkpoint not found: {ckpt_path}")
+
+    return policy
+
+
+def _make_stage2_wrapper(pretrained: Optional[str], device: str):
+    """Wrapper for stage2: GoalConditionedPolicy Stage-2 curriculum policy."""
+    raw = _make_stage2_policy(pretrained, device)
+    return Stage2PolicyRunner(raw, device)
+
+
+def _make_stage3_policy(pretrained: Optional[str], device: str):
+    """
+    Load Stage 3 Curriculum policy from scripts/train_curriculum_stage3.py.
+
+    Architecture: GoalConditionedPolicy (same as train_curriculum.py)
+      - CLIP ViT-B/32 vision encoder (frozen)
+      - Goal MLP: 2 → 256 → 128 → 768 (goal_q_proj)
+      - State net: 11D → 256 → 128
+      - Cross-attention: goal_query attends to CLIP(K,V)
+      - Flow matching head: 4-step Euler inference
+      - 155M total params
+
+    Checkpoints (results/phase264_curriculum_train/):
+      - s3_epoch3.pt  — loss=0.2761
+      - s3_epoch6.pt  — loss=0.2558
+      - s3_epoch9.pt  — loss=0.2324 ← BEST (lowest loss, epoch 9/15)
+      - s3_epoch12.pt — loss=0.2372 ← OVERFITTING (loss increased after epoch 9)
+
+    NOTE: Stage 3 is trained on ALL goals (|r|=any distance) with 7589 frames.
+    Best checkpoint is s3_epoch9.pt (72% SR on |r|<0.45m was Stage2; Stage3
+    with all goals is still failing — 0-15% SR in evals).
+    Default is s3_epoch9.pt (best loss).
+
+    State: arm_pos(6) + wheel_vel(3) + goal_norm(2) = 11D
+    Action: arm_torque(6) + wheel_speed(3) = 9D
+    """
+    sys.path.insert(0, os.path.expanduser("~/hermes_research/lekiwi_vla"))
+    from scripts.train_curriculum_stage3 import GoalConditionedPolicy as GCPolicy
+
+    policy = GCPolicy(state_dim=11, action_dim=9, hidden=512, device=device).to(device)
+
+    if pretrained:
+        ckpt_path = os.path.expanduser(pretrained)
+    else:
+        # Use s3_epoch9.pt as default (lowest loss = best model)
+        ckpt_path = os.path.expanduser(
+            "~/hermes_research/lekiwi_vla/results/phase264_curriculum_train/s3_epoch9.pt"
+        )
+
+    if os.path.exists(ckpt_path):
+        import torch
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        sd = ckpt.get("policy_state_dict", ckpt)
+        missing, unexpected = policy.load_state_dict(sd, strict=False)
+        print(f"[stage3] Loaded checkpoint epoch={ckpt.get('epoch','?')} "
+              f"loss={ckpt.get('loss','?')} | "
+              f"missing={len(missing)} unexpected={len(unexpected)}")
+    else:
+        print(f"[stage3] WARNING: checkpoint not found: {ckpt_path}")
+
+    return policy
+
+
+def _make_stage3_wrapper(pretrained: Optional[str], device: str):
+    """Wrapper for stage3: GoalConditionedPolicy Stage-3 curriculum policy."""
+    raw = _make_stage3_policy(pretrained, device)
+    return Stage2PolicyRunner(raw, device)
+
+
 _POLICY_LOADERS = {
     "mock":          _make_mock_policy,
     "clip_fm":       _make_clip_fm_wrapper,
     "task_oriented": _make_task_oriented_wrapper,
     "phase196":      _make_phase196_wrapper,
     "dagger":        _make_dagger_wrapper,
+    "stage2":        _make_stage2_wrapper,
+    "stage3":        _make_stage3_wrapper,
 }
 
 

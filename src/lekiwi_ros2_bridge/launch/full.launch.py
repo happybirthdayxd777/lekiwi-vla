@@ -4,12 +4,13 @@ Unified LeKiWi Launch — Full Platform
 One launch file to rule them all (defaults use DAgger policy trained on P-controller corrections):
 
   ros2 launch lekiwi_ros2_bridge full.launch.py           # dagger policy + URDF (no extra args needed)
+  ros2 launch lekiwi_ros2_bridge full.launch.py policy:=stage2  # switch to Stage2 curriculum (72% SR on |r|<0.45m)
   ros2 launch lekiwi_ros2_bridge full.launch.py policy:=phase196  # switch to Phase196 policy
-  ros2 launch lekiwi_ros2_bridge full.launch.py sim_type:=urdf  # explicit URDF mode
 
+  policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm | task_oriented | phase196 | dagger | stage2 | stage3
 Modes:
   sim_type : primitive | urdf
-  policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm | task_oriented | phase196 | dagger
+  policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm | task_oriented | phase196 | dagger | stage2 | stage3
 
   # Default policy is dagger (DAgger-trained, 15 epochs, loss=0.003)
   #   checkpoint: results/dagger_phase246_train/final_policy.pt
