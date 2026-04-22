@@ -1,0 +1,9 @@
+{
+  "phase": 266,
+  "checkpoint": "s3_epoch9.pt",
+  "p_sr": 60.0,
+  "vla_sr": 0.0,
+  "p_successes": 6,
+  "vla_successes": 0,
+  "improvement_vs_s3epoch6": -15.0
+}
