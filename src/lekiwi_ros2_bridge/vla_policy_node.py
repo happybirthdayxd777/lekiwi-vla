@@ -597,6 +597,15 @@ class Stage2PolicyRunner:
         Returns:
             [9] raw action (policy output)
         """
+        # Phase 268: Stage2 goal-radius filtering
+        # Stage2 was trained on |r|<0.45m goals. If goal is outside this radius,
+        # return zeros so the bridge falls back to P-controller (safe fallback).
+        goal_norm = state[9:11]   # [-1, 1] normalized goal
+        goal_xy_m = goal_norm * 0.4   # un-normalize to meters (same scale as training)
+        goal_radius = np.linalg.norm(goal_xy_m)
+        if goal_radius > 0.45:
+            return np.zeros(9, dtype=np.float32)
+
         import torch
         img_t = torch.from_numpy(image[None]).to(self.device)
         st_t = torch.from_numpy(state[None]).to(self.device)
