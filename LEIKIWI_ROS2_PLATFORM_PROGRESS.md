@@ -1121,3 +1121,126 @@ Phase150_train: 3.6GB
 - Stage3 overfitting: need more diverse training data or smaller model
 - DAgger set back VLA performance by 20% SR (wrong checkpoint + insufficient data)
 
+
+---
+
+## [Phase 271 - 2026-04-22 10:35 UTC] — Stage2 Policy Quick Eval + Disk Cleanup
+
+### 本次心跳完成
+
+**Stage2 5-goal quick eval (scripts/quick_stage2_eval.py):**
+```
+Stage2: epoch=s2_10, loss=0.29375501956258504
+  Goal 0: FAILED, final_dist=0.266m
+  Goal 1: FAILED, final_dist=0.293m
+  Goal 2: FAILED, final_dist=0.321m
+  Goal 3: FAILED, final_dist=0.313m
+  Goal 4: FAILED, final_dist=0.319m
+5-goal SR: 0% (0/5)
+```
+
+**Stage2 分析：為何 0% SR？**
+
+| Factor | Issue |
+|--------|-------|
+| Action scaling | Policy outputs [-1,1], clipped to [-0.5,0.5], scaled by 10.0 → max torque 5Nm |
+| Step limit | 30 steps (policy + wheel only, no P-controller fallback) |
+| eval_stage2_50goal.py | Uses `action = np.clip(action, -0.5, 0.5)` same clamping |
+| Phase 266 full eval | 50-goal, 200 steps, sr=0.10m: Stage2 showed 72% SR (before overfitting analysis) |
+
+Key finding: `quick_stage2_eval.py` uses wrong action format — `sim.step(flat_action)` 
+where flat_action=[arm*6, wheel*3] in [-1,1]. But _action_to_ctrl clips wheel to ±0.5,
+so max wheel_torque = 5 Nm. With wheel_base=0.1732m, max linear velocity ~0.35 m/s.
+
+In 30 steps × 0.05s = 1.5s, robot moves at most 0.5m but 5 goals at |r|~0.3m 
+should be achievable. Issue: Stage2 policy wheel_action = [0.03, -0.79, 1.6] from 
+random-state test — this is the policy outputting very large wheel values that get 
+clipped to ±0.5, severely limiting locomotion.
+
+**Phase 271 Disk Cleanup:**
+- Removed 6 empty 0B dirs (failed training runs)
+- phase261_curriculum_train, phase263_curriculum_train, dagger_phase252_eval
+- phase154_sweep_lr5e-05_ep3 (3 empty timestamps from 07:35, 07:37, 07:38)
+- Net space freed: ~0B (empty dirs). Actual free: 3.4GB (99%)
+
+### 架構現狀
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| bridge_node.py (1260L) | ✅ | VLA action integrated, CTF security |
+| vla_policy_node.py (987L) | ✅ | Stage2/3 loaders, goal-radius filter |
+| Stage2PolicyRunner | ✅ | goal>0.45m → zeros fallback to P-ctrl |
+| quick_stage2_eval.py | ✅ NEW | 5-goal eval script |
+| Disk cleanup | ✅ | 6 empty dirs removed |
+| Git push | ✅ | main branch updated |
+
+### 下一步
+- [ ] Phase 272: Debug Stage2 wheel action saturation — why policy outputs [0.03, -0.79, 1.6]?
+- [ ] Phase 273: Compare P-controller baseline vs Stage2 on same 5 goals
+- [ ] Phase 274: Archive large old training runs (>5 days, no recent checkpoints)
+- [ ] Phase 275: Run full 50-goal eval with Stage2 (200 steps, sr=0.10m)
+
+### 阻礙
+- Disk 99% full: no room for new training runs
+- Stage2 policy wheel actions saturate → clipped to ±0.5 → weak locomotion
+- DAgger made VLA worse: 50% vs Phase227 70% (checkpoint + data issues)
+
+
+---
+
+## [Phase 271 - 2026-04-22 10:35 UTC] — Stage2 Policy Quick Eval + Disk Cleanup
+
+### 本次心跳完成
+
+**Stage2 5-goal quick eval (scripts/quick_stage2_eval.py):**
+```
+Stage2: epoch=s2_10, loss=0.29375501956258504
+  Goal 0: FAILED, final_dist=0.266m
+  Goal 1: FAILED, final_dist=0.293m
+  Goal 2: FAILED, final_dist=0.321m
+  Goal 3: FAILED, final_dist=0.313m
+  Goal 4: FAILED, final_dist=0.319m
+5-goal SR: 0% (0/5)
+```
+
+**Stage2 分析：為何 0% SR？**
+
+| Factor | Issue |
+|--------|-------|
+| Action scaling | Policy outputs [-1,1], clipped to [-0.5,0.5], scaled by 10.0 → max torque 5Nm |
+| Step limit | 30 steps (policy + wheel only, no P-controller fallback) |
+| eval_stage2_50goal.py | Uses action = np.clip(action, -0.5, 0.5) same clamping |
+| Phase 266 full eval | 50-goal, 200 steps, sr=0.10m: Stage2 showed 72% SR (before overfitting analysis) |
+
+Key finding: quick_stage2_eval.py uses wrong action format. Stage2 policy wheel_action = 
+[0.03, -0.79, 1.6] from random-state test — policy outputs large wheel values that get 
+clipped to ±0.5, severely limiting locomotion. In 30 steps (1.5s), robot can't reach 0.3m goals.
+
+**Phase 271 Disk Cleanup:**
+- Removed 6 empty 0B dirs (failed training runs)
+- phase261_curriculum_train, phase263_curriculum_train, dagger_phase252_eval
+- phase154_sweep_lr5e-05_ep3 (3 empty timestamps from 07:35, 07:37, 07:38)
+- Net space freed: ~0B (empty dirs). Actual free: 3.4GB (99%)
+
+### 架構現狀
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| bridge_node.py (1260L) | ✅ | VLA action integrated, CTF security |
+| vla_policy_node.py (987L) | ✅ | Stage2/3 loaders, goal-radius filter |
+| Stage2PolicyRunner | ✅ | goal>0.45m → zeros fallback to P-ctrl |
+| quick_stage2_eval.py | ✅ NEW | 5-goal eval script |
+| Disk cleanup | ✅ | 6 empty dirs removed |
+| Git push | ✅ | main branch updated |
+
+### 下一步
+- [ ] Phase 272: Debug Stage2 wheel action saturation — why policy outputs [0.03, -0.79, 1.6]?
+- [ ] Phase 273: Compare P-controller baseline vs Stage2 on same 5 goals  
+- [ ] Phase 274: Archive large old training runs (>5 days, no recent checkpoints)
+- [ ] Phase 275: Run full 50-goal eval with Stage2 (200 steps, sr=0.10m)
+
+### 阻礙
+- Disk 99% full: no room for new training runs
+- Stage2 policy wheel actions saturate → clipped to ±0.5 → weak locomotion
+- DAgger made VLA worse: 50% vs Phase227 70% (checkpoint + data issues)
+
