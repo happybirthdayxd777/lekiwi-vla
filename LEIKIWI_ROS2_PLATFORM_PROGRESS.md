@@ -1031,3 +1031,33 @@ Phase 264 fixes confirmed working — training has run for 8+ hours since last h
 
 - Disk space: 6.7GB free, each checkpoint ~620MB → only ~10 more checkpoints
 - Training slow on CPU (~17 min/epoch) → full 15 epochs = ~2.5 more hours
+
+---
+## [2026-04-22 07:30] Phase 265 — Stage3 VLA=15% SR vs P-ctrl=85% SR
+
+### 🎓 Curriculum Stage3 Training (background PID=16582)
+- Epochs 3/6/9 checkpoints saved
+- Loss decreasing: 0.3172 → 0.2324 (epochs 1-9)
+- ETA: epoch 15/15 ≈ ~07:09
+
+### 📊 Phase265 Results (s3_epoch6.pt, 20-goal eval)
+```
+P-controller baseline:  85% SR (17/20)
+Stage 3 VLA (s3_epoch6): 15% SR  (3/20)
+Gap:                          70%-points
+```
+**Stage3 SR=15% is a regression from Stage2 SR=72%.**
+
+### ✅ 本次心跳完成
+- Phase265 eval: VLA=15% SR vs P-ctrl=85% SR on s3_epoch6.pt
+- Git commit+push: `e231d00`
+- Stage3 background training continuing (epoch 10/15 running)
+
+### 下一步
+- [ ] Phase266: Wait for Stage3 completion, eval final checkpoint (50-goal)
+- [ ] Analyze Stage3 degradation vs Stage2 (72% → 15%)
+- [ ] Bridge integration of best policy
+
+### 阻礙
+- Stage3 VLA severely regressing from Stage2 (72% → 15%)
+- P-controller itself only 85% SR (down from 94-100% in prior evals)
