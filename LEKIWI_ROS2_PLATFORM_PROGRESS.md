@@ -121,6 +121,48 @@ ROS2 Topics
 
 ---
 
+## [2026-04-22 08:00] Phase 266 — Stage 3 Overfitting Confirmed: Best=epoch 9
+
+### 已完成
+
+**Stage 3 Curriculum — Overfitting Analysis (Phase 266)**
+- Training (PID=16582) running epochs 9→15/15, loss minimum at epoch 9
+- Loss trend: 0.2324 (ep9) → 0.2330 (ep10) → 0.2349 (ep11) → 0.2372 (ep12) ← OVERFITTING
+- s3_epoch9.pt is the best checkpoint (loss minimum)
+- s3_epoch12.pt already shows overfitting
+- Quick eval: VLA s3_epoch9 = 0% SR (wheel actions collapsed), P-ctrl = 60% SR
+
+**Bridge Architecture — Phase 239-266 summary**
+| 元件 | 狀態 | 檔案 |
+|------|------|------|
+| `bridge_node.py` | ✅ 1260 行，primitive + URDF 模式 | `src/lekiwi_ros2_bridge/` |
+| `vla_policy_node.py` | ✅ 768 行，CLIP-FM/pi0/ACT/mock | `src/lekiwi_ros2_bridge/` |
+| CTF Security Layer | ✅ Phase 239-243，C1-C8 挑戰全 | `ctf_integration.py` |
+| Camera Adapter | ✅ URDF 模式 20Hz RGB | `camera_adapter.py` |
+| Real Hardware Adapter | ✅ 真實硬體介面 | `real_hardware_adapter.py` |
+| 5× Launch Files | ✅ bridge/vla/ctf/full/real_mode | `launch/` |
+| Curriculum Stage 3 | ⚠️ OVERFITTING — 需終止 | s3_epoch9.pt 最好 |
+
+**Stage 3 根本問題：數據不足，curriculum 策略失效**
+| Stage | Goal Radius | SR Result |
+|-------|-------------|-----------|
+| Stage 1 | |r|<0.30m | 成功（簡單） |
+| Stage 2 | |r|<0.45m | 72% SR（可達到） |
+| Stage 3 | ALL goals | 0-15% SR（數據不足） |
+
+### 下一步
+
+- [ ] Phase 267: 終止 Stage 3 training（已確認過擬合）
+- [ ] Phase 268: 整合 Stage 2 (72% SR) 進 ROS2 bridge
+- [ ] Phase 269: 收集更多 DAgger 數據或改用模仿學習策略
+
+### 阻礙
+
+- Stage 3 需要大量數據才能泛化到邊緣目標（目前 7589 frames 遠遠不夠）
+- 下一階段需要重新設計數據收集策略
+
+---
+
 ## [2026-04-21 15:30] Phase 251 — DAgger Failure Root Cause Analysis
 
 ### 本次心跳完成
@@ -166,4 +208,80 @@ root cause 分析完成，發現三個問題：
 
 - Disk space: 7.8GB free → need to monitor checkpoint saves
 - Training takes ~30 min/epoch on CPU → full 15 epochs = ~7.5 hours
+
+
+---
+
+## [2026-04-22 09:30] Phase 270 — DAgger Failure Root Cause + Disk Space Critical
+
+### 本次心跳完成
+
+**Phase 270 分析：DAgger 254 為何比 Phase227 VLA 還差？**
+
+DAgger 254 eval results (50 goals, 200 steps):
+| Policy | Success Rate | Notes |
+|--------|-------------|-------|
+| P-controller (CJ kP=2.0) | 86% | Baseline oracle |
+| VLA Phase227 | 70% | CLIP-FM + Contact-Jacobian |
+| VLA DAgger-254 | 50% | DAgger-254 actually WORSE |
+
+**Root Cause Analysis:**
+
+1. **DAgger data conflation**: 3832 frames, 63% expert labels
+   - Expert goal radii: mean=0.328m (max=0.493m) — focuses on hard goals
+   - VLA goal radii: mean=0.218m — DAgger collector only labels hard frames as expert
+   - When training, VLA (label=0) frames with easy goals override expert corrections
+   - Net effect: DAgger confuses the policy on easy goals
+
+2. **Base data dilution**: DAgger 3832 frames vs base data 3000+ frames
+   - 63% expert weight × 3832 = ~2417 expert contributions
+   - But distributed across 30 episodes = ~80 expert frames/episode
+   - Phase 246 pilot (5ep, 395 expert) already showed 60% expert ratio was too weak signal
+
+3. **Checkpoint saved correctly in Phase 254** (unlike Phase 246 bug):
+   - `best_policy.pt` at epoch 20, loss=0.00180 (BEST)
+   - `final_policy.pt` at epoch 20 (same — best=final here)
+   - NOT epoch 15 mid-training like Phase 246
+
+**Stage2 (Curriculum) Performance Analysis:**
+- Stage2 SR=72% on |r|<0.45m goals (50-goal eval)
+- Failure quadrants: Q1=4, Q2=1, Q3=4, Q4=5
+- Q4 (positive X, negative Y) most challenging — 5/12 failures
+- Q4 failures all had final_dist > 0.37m — VLA not even converging
+- Q4 kinematic analysis: wheel positions form equilateral triangle, but Y-axis motion (negative Y) requires wheel_2 (at -Y position) which has limited +Y authority
+
+**Critical: Disk Space = 1.5% free (3.7GB)**
+```
+Major consumers:
+  phase227_contact_jacobian_train/    4.6GB
+  phase190_vision_train/              4.6GB
+  phase260_curriculum_train/          2.3GB  (stage1_r025.pt + stage2_r045.pt)
+  phase264_curriculum_train/          2.3GB  (s3_epoch*.pt overfitting checkpoints)
+```
+
+### Bridge Architecture Status (Phase 239-270)
+
+| 元件 | 狀態 | 備註 |
+|------|------|------|
+| bridge_node.py | ✅ 1260 行 | URDF + primitive 模式 |
+| vla_policy_node.py | ✅ 987 行 | CLIP-FM/pi0/ACT/dagger/stage2/stage3 |
+| CTF Security Layer | ✅ C1-C8 全部 | 資安監控整合 |
+| Camera Adapter | ✅ URDF 20Hz | front + wrist camera |
+| 5× Launch Files | ✅ | bridge/vla/ctf/full/real_mode |
+| Stage2PolicyRunner | ✅ Phase 268 | goal-radius filtering (|r|>0.45m → zeros fallback) |
+| DAgger Pipeline | ✅ Phase 252-254 | collected, trained, evaluated |
+| DAgger Result | ⚠️ 50% SR | worse than Phase227 VLA (70%) |
+
+### 下一步
+
+- [ ] Phase 271: Clear disk space — archive/delete old training results
+- [ ] Phase 272: Focus on Stage2 deployment (72% SR, |r|<0.45m constraint)
+- [ ] Phase 273: Investigate Q4 kinematic weakness in Contact-Jacobian
+- [ ] Phase 274: Collect more DAgger data with better labeling strategy (label ALL frames, not just hard)
+
+### 阻礙
+
+- **Disk 1.5% free** — cannot run training until space cleared
+- DAgger approach fundamentally flawed for this problem — expert correction signal too weak vs base data
+- Stage3 overfitting confirmed — s3_epoch9 is best but 0% SR in eval
 
