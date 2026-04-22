@@ -1061,3 +1061,63 @@ Gap:                          70%-points
 ### 阻礙
 - Stage3 VLA severely regressing from Stage2 (72% → 15%)
 - P-controller itself only 85% SR (down from 94-100% in prior evals)
+
+---
+
+## [Phase 270 - 2026-04-22 10:30 UTC] — Disk Critical + Stage3 Overfitting Monitoring
+
+### 本次心跳完成
+
+**Phase 269-270 Review：架構現狀全面確認**
+
+| 元件 | 行數 | 狀態 | 備註 |
+|------|------|------|------|
+| bridge_node.py | 1260 | ✅ | URDF+primitive 雙模式，VLA action 整合，CTF |
+| vla_policy_node.py | 987 | ✅ | Stage2/Stage3 loader，goal-radius 過濾 |
+| camera_adapter.py | — | ✅ | URDF 20Hz front+wrist |
+| ctf_integration.py | 975 | ✅ | C1-C8 資安審計 |
+| 5× launch files | — | ✅ | bridge/vla/ctf/full/real_mode |
+| Stage2PolicyRunner | — | ✅ | goal-radius>0.45m → zeros fallback |
+| LeKiWiSimURDF | 1165 | ✅ | STL mesh 混合幾何 |
+
+**Stage3 Training Status** (phase264_curriculum_train):
+- s3_epoch12.pt: 620MB, saved 2026-04-22 08:08 (2h22m ago)
+- Previous checkpoints: s3_epoch3.pt (06:52), s3_epoch6.pt (07:22), s3_epoch9.pt (08:08)
+- Best eval: s3_epoch9 = 0% SR (Phase 266 overfitting analysis)
+- Phase 266 conclusion: overfitting at epoch 9→12, Stage3 unusable without more data
+
+**關鍵指標** (Phase 254 DAgger eval):
+- P-controller: 86% SR (baseline)
+- VLA Phase227: 70% SR
+- VLA DAgger-254: **50% SR** (DAgger made it WORSE!)
+- DAgger fail root cause: checkpoint saved at wrong epoch + small dataset
+
+**磁碟危機**:
+```
+Filesystem: 228GB total, 187GB used, 3.4GB free (99%)
+phase264_curriculum_train: 2.3GB (4 checkpoint files)
+phase227_contact_jacobian_train: 4.6GB
+Phase150_train: 3.6GB
+```
+建議：清理 phase154 sweep 失敗的 0B 目錄 + 合併 old checkpoint
+
+### 架構 Phase 7 (VLA 集成) 現狀
+
+- `/lekiwi/cmd_vel` → bridge_node → MuJoCo
+- `/lekiwi/joint_states` ← bridge_node ← MuJoCo
+- `/lekiwi/vla_action` ← VLA policy node ← /lekiwi/camera + /lekiwi/joint_states
+- bridge_node._on_vla_action() 整合 VLA 動作到模擬迴路
+- Stage2PolicyRunner: goal-radius>0.45m → zeros (P-controller fallback)
+- **CTF Security**: 每個 vla_action 經 SecurityMonitor.check_vla_action() + CTFSecurityAuditor
+
+### 下一步
+- [ ] Phase 271: Cleanup disk — remove 0B phase154 sweep dirs, consolidate checkpoints
+- [ ] Phase 272: Run Stage2 50-goal eval (stage2_r045.pt, sr=0.10m threshold)
+- [ ] Phase 273: If Stage2 SR > 70%, integrate with bridge via /lekiwi/goal topic
+- [ ] Phase 274: Archive old training artifacts (>7 days old)
+
+### 阻礙
+- Disk 99% full: risk of training crash during Stage3 save
+- Stage3 overfitting: need more diverse training data or smaller model
+- DAgger set back VLA performance by 20% SR (wrong checkpoint + insufficient data)
+
