@@ -274,6 +274,37 @@ def _translate_phase85_to_phase86(wheel_action: np.ndarray) -> np.ndarray:
     return np.array([w1, w2, w3], dtype=np.float64)
 
 
+def _contact_jacobian_pctrl(base_xy: np.ndarray, goal_xy: np.ndarray, kP: float = 2.0) -> np.ndarray:
+    """
+    Phase 276: Contact-Jacobian P-controller for URDF sim.
+
+    Uses _CONTACT_JACOBIAN_PSEUDO_INV from sim_lekiwi_urdf — the physically calibrated
+    contact-physics Jacobian that achieves 100% SR in URDF sim vs ~20% with kinematic IK.
+
+    The CJ P-controller was verified in Phase 274 to reach 100% SR (10/10 goals) in URDF sim.
+
+    Parameters
+    ----------
+    base_xy : np.ndarray
+        Current base position [x, y] in meters.
+    goal_xy : np.ndarray
+        Goal position [x, y] in meters.
+    kP : float
+        Proportional gain for position error (default=2.0, verified optimal in Phase 274).
+
+    Returns
+    -------
+    np.ndarray, shape (3,)
+        Wheel angular velocities [w1, w2, w3] in rad/s, clipped to [-0.5, 0.5].
+    """
+    from sim_lekiwi_urdf import _CONTACT_JACOBIAN_PSEUDO_INV
+    err = goal_xy - base_xy
+    vx = kP * err[0]
+    vy = kP * err[1]
+    wheel_speeds = _CONTACT_JACOBIAN_PSEUDO_INV @ np.array([vx, vy])
+    return np.clip(wheel_speeds, -0.5, 0.5)
+
+
 def twist_to_wheel_speeds(vx: float, vy: float, wz: float) -> np.ndarray:
     """
     Phase 158: Convert robot-level Twist (vx, vy, wz) into 3 wheel angular velocities
@@ -341,6 +372,10 @@ class LeKiWiBridge(Node):
         self.declare_parameter("ctf_mode", False)  # when True, records all CTF flags to JSONL
         # Phase 88: enable/disable policy translation layer (fixes Phase 85→86 mismatch)
         self.declare_parameter("phase88_translation", True)
+        # Phase 276: Contact-Jacobian mode for URDF sim — use physically calibrated
+        # _CONTACT_JACOBIAN_PSEUDO_INV instead of the old kinematic k_omni overlay model.
+        # P-controller achieves 100% SR with CJ on URDF sim vs ~20% with kinematic model.
+        self.declare_parameter("use_contact_jacobian", True)
         # Phase 210: Hybrid bridge — goal for P-controller fallback
         self.declare_parameter("goal_x", 0.0)
         self.declare_parameter("goal_y", 0.0)
@@ -370,6 +405,9 @@ class LeKiWiBridge(Node):
         # Phase 88: translation layer for Phase 85 policy → Phase 86 physics
         p_phase88 = self.get_parameter("phase88_translation")
         self._phase88_enabled = bool(p_phase88.value) if p_phase88.value else True
+        # Phase 276: Contact-Jacobian mode (URDF sim only)
+        p_cj = self.get_parameter("use_contact_jacobian")
+        self._use_contact_jacobian = bool(p_cj.value) if p_cj.value else True
         self._record = bool(p_record.value) if p_record.value else False
         self._record_file = str(p_record_file.value) if p_record_file.value else ""
 
@@ -719,6 +757,10 @@ class LeKiWiBridge(Node):
         #   - If VLA direction agrees with P-controller → amplify VLA and use it
         #   - If VLA direction disagrees → use P-controller directly
         # When VLA is confident (mag >= threshold) → use VLA directly
+        #
+        # Phase 276: P-controller has two implementations:
+        #   - use_contact_jacobian=True  → _contact_jacobian_pctrl (100% SR in URDF sim)
+        #   - use_contact_jacobian=False → kinematic + Phase88 translation (~20% SR in URDF)
         if self._vla_action_fresh:
             arm_action = self._last_action[0:6]
             vla_wheel_raw = self._last_action[6:9]
@@ -728,11 +770,16 @@ class LeKiWiBridge(Node):
                 # VLA too conservative → check if direction agrees with P-controller
                 if hasattr(self, '_goal_xy') and self._goal_xy is not None:
                     base_xy = self._get_base_xy()
-                    err = self._goal_xy - base_xy
                     kP_FALLBACK = 2.0
-                    vx_fb = kP_FALLBACK * err[0]
-                    vy_fb = kP_FALLBACK * err[1]
-                    pctrl_ws = twist_to_contact_wheel_speeds(vx_fb, vy_fb, 0.0)
+                    if self._use_contact_jacobian:
+                        # Phase 276: CJ P-controller — no Phase88 translation needed
+                        pctrl_ws = _contact_jacobian_pctrl(base_xy, self._goal_xy, kP_FALLBACK)
+                    else:
+                        # Legacy kinematic P-controller — needs Phase88 translation
+                        err = self._goal_xy - base_xy
+                        vx_fb = kP_FALLBACK * err[0]
+                        vy_fb = kP_FALLBACK * err[1]
+                        pctrl_ws = twist_to_contact_wheel_speeds(vx_fb, vy_fb, 0.0)
 
                     if _wheel_direction_agrees(vla_wheel_raw, pctrl_ws,
                                                _DIRECTION_AGREEMENT_THRESHOLD):
@@ -741,17 +788,16 @@ class LeKiWiBridge(Node):
                     else:
                         # VLA direction wrong → use P-controller
                         wheel_speeds = pctrl_ws
+                        # Phase 88 translation ONLY for kinematic P-controller output
+                        if not self._use_contact_jacobian and self._phase88_enabled:
+                            wheel_speeds = _translate_phase85_to_phase86(wheel_speeds)
                 else:
                     pctrl_ws = np.zeros(3)
                     wheel_speeds = vla_wheel_raw  # no goal → use VLA as-is
-
-                # Phase 88 translation for P-controller output
-                if self._phase88_enabled and hasattr(self, '_goal_xy') and self._goal_xy is not None:
-                    if not _wheel_direction_agrees(vla_wheel_raw, pctrl_ws, _DIRECTION_AGREEMENT_THRESHOLD):
-                        wheel_speeds = _translate_phase85_to_phase86(wheel_speeds)
             else:
                 # VLA active and confident → use VLA directly (with translation if needed)
-                if self._phase88_enabled:
+                # Phase 88 translation only needed for old-phase VLA policies on kinematic model
+                if self._phase88_enabled and not self._use_contact_jacobian:
                     wheel_speeds = _translate_phase85_to_phase86(vla_wheel_raw)
                 else:
                     wheel_speeds = vla_wheel_raw

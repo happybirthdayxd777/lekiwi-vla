@@ -137,9 +137,17 @@ def generate_launch_description() -> LaunchDescription:
 
     # Phase 88: policy translation layer (fixes Phase 85 policy → Phase 86 physics)
     phase88_translation = DeclareLaunchArgument(
-        "phase88_translation", default_value="true",
+        "phase88_translation", default_value="false",
         description="Enable Phase 88 translation layer for Phase 85-trained policies "
-                    "(disable when using policies trained on Phase 86 or later)",
+                    "(disable when using policies trained on Phase 86 or later). "
+                    "Now superseded by use_contact_jacobian=True.",
+    )
+
+    # Phase 276: Contact-Jacobian P-controller for URDF sim
+    use_contact_jacobian = DeclareLaunchArgument(
+        "use_contact_jacobian", default_value="true",
+        description="Use Contact-Jacobian P-controller (100% SR in URDF sim) instead of "
+                    "kinematic IK + Phase88 translation (~20% SR). Only effective in URDF mode.",
     )
 
     bridge_node = Node(
@@ -157,6 +165,8 @@ def generate_launch_description() -> LaunchDescription:
             "enable_hmac": LaunchConfiguration("enable_hmac"),
             "cmd_vel_secret": LaunchConfiguration("cmd_vel_secret"),
             "phase88_translation": LaunchConfiguration("phase88_translation"),
+            # Phase 276: Contact-Jacobian P-controller
+            "use_contact_jacobian": LaunchConfiguration("use_contact_jacobian"),
             # Phase 210: Hybrid bridge goal for P-controller fallback
             "goal_x": LaunchConfiguration("goal_x"),
             "goal_y": LaunchConfiguration("goal_y"),
