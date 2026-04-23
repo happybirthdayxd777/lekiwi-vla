@@ -1,0 +1,15 @@
+{
+  "phase": 282,
+  "checkpoint": "s3_epoch9.pt",
+  "n_goals": 50,
+  "success_radius": 0.1,
+  "seed": 42,
+  "p_controller": {
+    "successes": 39,
+    "success_rate": 78.0
+  },
+  "stage3_vla": {
+    "successes": 1,
+    "success_rate": 2.0
+  }
+}
