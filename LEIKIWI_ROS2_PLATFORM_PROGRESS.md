@@ -1770,3 +1770,62 @@ While investigating why Stage2 policy evaluates at 0% SR (was 72% reported), dis
 ### 阻礙
 - DAgger 50% SR 需要 200+ episodes 才能超越 Phase227
 - Stage3 需要更多數據才能泛化
+
+---
+
+## [Phase 282 - 2026-04-23 15:30 CST] — Stage3 s3_epoch9 50-Goal Evaluation
+
+### ✅ 本次心跳完成
+
+**Phase 282: s3_epoch9 50-Goal Evaluation Launched**
+
+**Background Eval Running** (PID=53564, ~40min estimated):
+```bash
+scripts/eval_stage3_s3epoch9_50goal.py
+- 50 goals, sr=0.10m, seed=42, max_steps=300
+- P-controller baseline (gold standard)
+- Stage3 VLA (s3_epoch9.pt from phase264_curriculum_train)
+- Output: results/phase282_s3epoch9_50goal_eval.json
+```
+
+**Prior Results (10-goal, Phase 281)**:
+- P-controller: 10/10 = 100% SR
+- Stage3 VLA s3_epoch9: 2/10 = 20% SR
+- HIGH VARIANCE — need 50-goal eval for ±10% CI at 80% power
+
+**Policy Performance Summary (as of Phase 281)**:
+| Policy | SR | n_goals | Notes |
+|--------|-----|---------|-------|
+| P-controller CJ kP=2.0 | 86% | 50 | Gold standard |
+| VLA-227 | 70% | 50 | Phase 227 contact-jacobian |
+| Stage2 r<0.45m | 72% | 50 | Curriculum Stage2 |
+| DAgger-254 | 50% | 50 | DAgger < P-controller |
+| Stage3 s3_epoch9 | **EVAL** | **50** | **RUNNING NOW** |
+
+### Bridge Architecture Status (Phase 282)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| bridge_node.py | ✅ 1306 lines | CJ P-ctrl, hybrid fallback |
+| vla_policy_node.py | ✅ 987 lines | normalize_action bug FIXED Phase 278 |
+| CTF Security Layer | ✅ C1-C8 | ctf_integration.py |
+| Camera Adapter | ✅ URDF 20Hz | front + wrist camera |
+| 5× Launch Files | ✅ | bridge/vla/ctf/full/real_mode |
+| Stage3 s3_epoch9 eval | **RUNNING** | PID=53564, ~40min |
+
+### 下一步
+
+- [ ] Phase 283: Collect Stage3 數據（100+ episodes with ALL goals, once SR is confirmed）
+- [ ] Phase 284: If Stage3 SR > Stage2 (72%), retrain with more data
+- [ ] Phase 285: Stage2 整合進 ROS2 bridge（72% SR as production fallback）
+- [ ] Phase 286: full.launch.py end-to-end test (needs ROS2 environment)
+
+### 阻礙
+
+- Stage3 s3_epoch9 may have collapsed wheel actions (prior eval 20% SR)
+- No ROS2 environment for end-to-end testing
+- DAgger needs 200+ episodes to beat P-controller
+
+### Git
+
+- Commit: f2475fe Phase 282: eval_stage3_s3epoch9_50goal.py — 50-goal SR eval for s3_epoch9
