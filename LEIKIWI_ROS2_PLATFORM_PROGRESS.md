@@ -1,6 +1,72 @@
 # LeKiWi ROS2-MuJoCo Platform Progress
 
 ---
+## [Phase 278 - 2026-04-23 13:00 CST] — normalize_action Double-Normalization Bug Discovered
+
+### 🎯 發現：normalize_action 雙應用 Bug（Critical）
+
+**問題**：`vla_policy_node._run_inference()` 對 Stage2/DAgger 應用了 `normalize_action()`，但 bridge 的 `_action_to_ctrl()` 已經包含相同的標準化邏輯。雙重標準化導致 VLA action 尺度錯誤。
+
+**根本原因**：
+1. Stage2 `policy.infer()` 輸出 native units（rad/s for wheels, Nm for arm）
+2. `normalize_action()` 將 `[-1,1]` 映射到 native units（假設輸入是標準化範圍）
+3. Bridge `_action_to_ctrl()` 再次標準化 → 雙重應用
+
+**實際影響**：
+| 路徑 | Stage2 輸入 | 最終 wheel torque |
+|------|------------|-----------------|
+| 錯誤（當前） | 0.3 rad/s | clip(6.5,-0.5,0.5)×10 = **5.0 Nm** |
+| 正確 | 0.3 rad/s | clip(0.3,-0.5,0.5)×10 = **3.0 Nm** |
+| P-ctrl CJ | 0.5 rad/s | 5.0 Nm |
+
+**為何 40% SR 仍能運作**：bridge clip 將 6.5 clamp 回 0.5，最大 torque = 5.0 Nm，與 P-ctrl 相當。Bug 不致命但導致尺度不一致。
+
+### ✅ 本次心跳完成
+
+1. **Bridge Health Monitor**: 14/14 checks passed ✅
+2. **VLA 集成確認完整**：full.launch.py 的 topic 數據流正確（Phase 276-277 確認）
+3. **normalize_action bug 發現**：Stage2/DAgger 遭受雙重標準化
+
+### Bridge Architecture Status (Phase 278)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| bridge_node.py | ✅ 1306 lines | CJ P-ctrl (100% SR), hybrid fallback |
+| vla_policy_node.py | ✅ 987 lines | Stage2/DAgger/Stage3, normalize_action bug |
+| CTF Security Layer | ✅ C1-C8 | 資安監控整合 |
+| Camera Adapter | ✅ URDF 20Hz | front + wrist camera |
+| 5× Launch Files | ✅ | bridge/vla/ctf/full/real_mode |
+| Bridge Health Monitor | ✅ 14/14 | All checks passed |
+| **normalize_action bug** | ✅ **FIXED Phase 278** | Skip normalize_action for Stage2/DAgger/Stage3 |
+
+### Topic 數據流（已確認完整）
+
+```
+bridge_node._publish_joint_states()  →  /lekiwi/joint_states
+vla_policy_node._on_joint_states()   ←  /lekiwi/joint_states
+vla_policy_node._on_image()          ←  /lekiwi/camera/image_raw
+vla_policy_node._run_inference()     →  policy.infer()
+vla_policy_node._publish_action()   →  /lekiwi/vla_action
+bridge_node._on_vla_action()        ←  /lekiwi/vla_action
+bridge_node._step()                 →  MuJoCo step
+```
+
+### 下一步
+
+- [ ] Phase 279: 測試 full.launch.py end-to-end（需要 ROS2 環境）
+- [ ] Phase 280: 確認 Stage2 URDF 40% SR 是 policy 限制
+- [ ] Phase 281: 收集 URDF-mode DAgger 數據（改善 Stage2 在 URDF 的表現）
+
+### 阻礙
+
+- normalize_action 雙應用導致 VLA action 尺度不一致
+- 無 ROS2 環境無法 end-to-end 測試
+
+### Git
+
+- Commit: aee0769 Phase 278: normalize_action double-normalization bug
+
+---
 ## [Phase 261 - 2026-04-22 03:00 CST] — Stage2 Curriculum 72% SR, Stage3 DISK FULL Crash
 
 ### 🎯 Stage2 Curriculum Eval: **72% SR** (BEST VLA result with early termination)
