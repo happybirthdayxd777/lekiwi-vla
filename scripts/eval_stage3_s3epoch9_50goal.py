@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from pathlib import Path
 
-WORKDIR = Path(__file__).parent if '__file__' in dir() else Path("/Users/i_am_ai/hermes_research/lekiwi_vla")
+WORKDIR = Path(__file__).resolve().parent.parent
 os.chdir(WORKDIR)
 sys.path.insert(0, str(WORKDIR))
 sys.path.insert(0, str(WORKDIR / "scripts"))
@@ -76,24 +76,21 @@ class GoalConditionedPolicy(torch.nn.Module):
         self.action_dim = action_dim
 
     def forward(self, images, state, x, t):
-        vision_out = self.encoder(images)  # [B, 50, 768]
-        goal_feat = self.goal_mlp(state[:, :2])  # [B, 2] → [B, 128]
-        goal_q = self.goal_q_proj(goal_feat)     # [B, 768]
-        goal_q = goal_q.unsqueeze(1)              # [B, 1, 768]
+        """Matching train_curriculum_stage3.py forward(): cat[attn_out, goal_q, state_feat, time_emb, noisy_action]"""
+        B = images.shape[0]
+        img_feat = self.encoder(images)  # [B, 50, 768]
+        goal_q = self.goal_q_proj(self.goal_mlp(state[:, :2]))  # [B, 768]
+        goal_q = goal_q.unsqueeze(1)                             # [B, 1, 768]
 
-        state_feat = self.state_net(state[:, :11])  # [B, 11] → [B, 128]
-        state_q = state_feat.unsqueeze(1)            # [B, 1, 128]
+        attn_out, _ = self.cross_attn(goal_q, img_feat, img_feat)
+        attn_out = self.cross_norm(attn_out.squeeze(1))          # [B, 768]
 
-        # Cross-attention: vision as K/V, goal+state as Q
-        vision_q = vision_out
-        attended, _ = self.cross_attn(goal_q, vision_q, vision_q)
-        attended = self.cross_norm(attended.squeeze(1))  # [B, 768]
+        goal_q = goal_q.squeeze(1)                               # [B, 768]
+        state_feat = self.state_net(state[:, :11])              # [B, 128]
+        time_emb = self.time_mlp(t)                             # [B, 256]
 
-        t_feat = self.time_mlp(t)  # [B, 1] → [B, 256]
-
-        combined = torch.cat([attended, goal_feat, state_feat, t_feat, x], dim=-1)
-        v_pred = self.flow_head(combined)
-        return v_pred
+        combined = torch.cat([attn_out, goal_q, state_feat, time_emb, x], dim=-1)
+        return self.flow_head(combined)
 
     def infer(self, images, state, num_steps=4):
         self.eval()
@@ -187,12 +184,9 @@ def evaluate_vla_policy(policy, n_episodes=50, max_steps=300, threshold=0.10):
             img_t = torch.from_numpy(img_small.transpose(2, 0, 1)).float().unsqueeze(0).to(DEVICE)
 
             arm_pos = sim.data.qpos[7:13]
-            wheel_pos = sim.data.qpos[6:9]
             wheel_vel = sim.data.qvel[6:9]
-            base_xy = sim.data.xpos[base_id, :2]
-
-            state = np.concatenate([arm_pos, wheel_pos, wheel_vel, base_xy, goal])
-            state_t = torch.from_numpy(state).float().unsqueeze(0).to(DEVICE)
+            state_11d = np.concatenate([arm_pos, wheel_vel, goal])
+            state_t = torch.from_numpy(state_11d).float().unsqueeze(0).to(DEVICE)
 
             with torch.no_grad():
                 action = policy.infer(img_t, state_t, num_steps=4)
