@@ -67,6 +67,78 @@ bridge_node._step()                 →  MuJoCo step
 - Commit: aee0769 Phase 278: normalize_action double-normalization bug
 
 ---
+
+## [2026-04-23 13:30] Phase 279 — DAgger/Stage3 深入分析 + Bridge Fix 確認
+
+### 已完成
+
+**Phase 278 Fix 確認正確** (commit a1cec22)
+- `vla_policy_node.py`: `normalize_action()` 對 Stage2/DAgger/Stage3 跳過
+- 原因：這些 policies 輸出 native units（wheel: rad/s, arm: Nm），bridge 的 `_action_to_ctrl()` 已經處理標準化
+- 錯誤應用會導致 action 尺度 ×1.4（解釋了為何 40% SR 還能運作）
+
+**DAgger-254 深入分析** (50% SR 根本原因)
+- DAgger-254 action range: [-0.39, 0.73], mean abs=0.226
+- VLA-227 action range: [-0.51, 1.22], mean abs=0.337
+- DAgger 輸出尺度比 VLA-227 **小 33%**（收斂更好但尺度更保守）
+- 50% SR 落後 P-controller CJ (86%)，落後 VLA-227 (70%)
+- best_policy.pt = final_policy.pt（state dict 相同，loss=0.0018）
+- 根本問題：DAgger 專家數據來自 P-controller，學到的策略比專家更差
+
+**Stage3 s3_epoch12 分析**
+- loss=0.237（Phase 264 curriculum，磁盤滿前完成 epoch 12）
+- action range: [-0.60, 0.95], mean abs=0.355
+- wheel actions 可能 collapsed（0% SR in prior eval）
+- Phase 260: Stage3 完整 15 epochs 都訓練完（log 可證），但 checkpoint 保存失敗
+
+**Stage3 Training History（已確認完整）**
+| Phase | 內容 | 狀態 |
+|-------|------|------|
+| Phase 260 | Stage3 15 epochs 訓練 | ✅ 完成但 checkpoint 保存失敗（磁盤滿）|
+| Phase 263 | 重新訓練 | ⚠️ 只完成 epoch 1（又磁盤滿）|
+| Phase 264 | 重新訓練 | ✅ 完成 epoch 3/6/9/12（磁盤已清理部分）|
+
+### 架構現狀（Phase 239-279）
+
+| 元件 | 狀態 | 備註 |
+|------|------|------|
+| bridge_node.py | ✅ 1306 行 | CJ P-ctrl (100% SR), hybrid fallback |
+| vla_policy_node.py | ✅ 987 行 | normalize_action bug FIXED (Phase 278) |
+| CTF Security Layer | ✅ C1-C8 全部 | ctf_integration.py |
+| Camera Adapter | ✅ URDF 20Hz | front + wrist camera |
+| 5× Launch Files | ✅ | bridge/vla/ctf/full/real_mode |
+| DAgger Pipeline | ⚠️ 50% SR | 比 P-ctrl CJ (86%) 差，數據策略問題 |
+| Stage3 Curriculum | ⚠️ s3_epoch12 可用 | 需重新完整訓練才能改善 |
+
+### Policy 評估排名（50 goals, sr=0.10m, URDF sim）
+
+| Policy | SR | 備註 |
+|--------|-----|------|
+| P-controller CJ | 86% | Gold standard |
+| VLA-227 | 70% | Phase 227 contact-jacobian |
+| DAgger-254 | 50% | 比專家 P-ctrl 更差 |
+| Stage2 (r<0.45m) | 40% URDF / 72% primitive | policy limitation |
+| Stage3 s3_epoch12 | 0-15% | wheel collapsed, needs retrain |
+
+### 下一步
+
+- [ ] Phase 280: 重新完整訓練 Stage3（磁盤 42GB free，足够 15 epochs）
+- [ ] Phase 281: DAgger 數據收集策略檢討（為何比專家差？）
+- [ ] Phase 282: 測試 full.launch.py end-to-end（需要 ROS2 環境）
+
+### 阻礙
+
+- Stage3 需要重新完整訓練（s3_epoch12 wheel actions collapsed）
+- DAgger 策略落後於專家，需要新的數據收集策略
+- 無 ROS2 環境無法 end-to-end 測試
+
+### Git
+
+- lekiwi_vla: `a1cec22` Phase 278 FIX: skip normalize_action for Stage2/DAgger/Stage3
+- hermes_research: `2d3b80b` Phase 278: update progress
+
+---
+
 ## [Phase 261 - 2026-04-22 03:00 CST] — Stage2 Curriculum 72% SR, Stage3 DISK FULL Crash
 
 ### 🎯 Stage2 Curriculum Eval: **72% SR** (BEST VLA result with early termination)
