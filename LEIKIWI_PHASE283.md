@@ -1,103 +1,76 @@
-# Phase 283 — Architecture Review + Git Commit
+# Phase 283 — VLA Wheel Action Magnitude Bug: Root Cause Confirmed
 
-**Date**: 2026-04-23 16:00 CST
+**Date**: 2026-04-23 16:30 CST
 
 ## 本次心跳完成
 
-### Phase 283: Architecture Review + Git Commit
+### Root Cause: VLA Wheel Actions ~26x Too Small
 
-**Background Eval Still Running** (PID 54004, elapsed 20:02):
-```
-scripts/eval_stage3_s3epoch9_50goal.py
-- 50 goals, sr=0.10m, seed=42, max_steps=300
-- Stage3 VLA (s3_epoch9.pt)
-- Output: results/phase282_s3epoch9_50goal_eval.json
-```
-Est. remaining: ~20 min.
+**Analysis of phase282 results: s3_epoch9 SR=2% (1/50 goals)**
 
-### Architecture Review — ROS2 Bridge Status
-
-#### Core Components (100% Complete)
-
-| Component | LOC | Status |
-|-----------|-----|--------|
-| `bridge_node.py` | 1306 | ✅ CJ P-ctrl (86% SR), hybrid fallback, CTF C1-C8 |
-| `vla_policy_node.py` | 1000 | ✅ CLIP-FM/pi0/ACT/dagger/stage2/stage3, normalize_action fix |
-| `ctf_integration.py` | 500+ | ✅ C1-C8 flag mapping, CTF scoreboard REST API |
-| `camera_adapter.py` | — | ✅ 20Hz front + wrist camera, URDF mode |
-| `security_monitor.py` | — | ✅ Legacy compat + PolicyGuardian |
-| `policy_guardian.py` | — | ✅ Active blocking + rollback |
-
-#### Launch Files (5/5 Complete)
-
-| Launch | Purpose |
-|--------|---------|
-| `bridge.launch.py` | bridge_node.py only |
-| `vla.launch.py` | bridge + vla_policy_node |
-| `ctf.launch.py` | + CTF security layer |
-| `full.launch.py` | + replay + recording |
-| `real_mode.launch.py` | Hardware interface |
-
-#### Topic Contracts (Confirmed in Phase 281)
+Ran diagnostic episode with detailed per-step logging:
 
 ```
-bridge_node.py:
-  ← /lekiwi/cmd_vel         Twist              — teleop input
-  ← /lekiwi/vla_action      Float64[9]         — VLA native output
-  ← /lekiwi/goal            Point              — goal position
-  → /lekiwi/joint_states    JointState         — arm×6 + wheel×3
-  → /lekiwi/odom            Odometry           — base odometry
-  → /lekiwi/camera/image_raw Image             — front camera 20Hz
-  → /lekiwi/wrist_camera/image_raw Image       — wrist camera 20Hz
-
-vla_policy_node.py:
-  ← /lekiwi/joint_states    — reads current state
-  ← /lekiwi/camera/image_raw — reads front camera
-  ← /lekiwi/goal            — reads goal
-  → /lekiwi/vla_action      — publishes 9D native action
+Goal (0.2, 0.3): P-ctrl wheel=[0.316, 0.294, -0.009] rad/s
+                 VLA wheel (raw)=[0.022, -0.008, 0.030]
+                 VLA wheel (denormed, [-0.5,0.5])=[0.011, -0.004, 0.015] rad/s
+                 Ratio: 0.316/0.012 ≈ 26x
 ```
 
-#### CTF Security Layer (C1-C8)
+**After _action_to_ctrl() scaling**:
+- VLA ctrl[6:9] = wheel_action * 10.0 = [0.11, -0.04, 0.15] Nm
+- P-ctrl ctrl[6:9] = [3.16, 2.94, -0.09] Nm
+- Ratio: ~28x (same order of magnitude)
 
-| Challenge | Defense | Status |
-|-----------|---------|--------|
-| C1: cmd_vel HMAC | HMAC verification | ✅ |
-| C2: DoS rate flood | 100Hz rate limit | ✅ |
-| C3: Command injection | Character filtering | ✅ |
-| C4: Physics DoS | Accel clamp 5.0 m/s² | ✅ |
-| C5: Replay attack | Timestamp + nonce | ✅ |
-| C6: Sensor spoof | joint_states validation | ✅ |
-| C7: Policy hijack | policy_mode lock | ✅ |
-| C8: VLA action inject | vla_action validation | ✅ |
+**Simulation evidence**: After 10 steps with VLA actions:
+- base_vel = [-0.096, -0.041] m/s (barely moving)
+- After 10 steps P-ctrl would move ~0.5-1.0 m
 
-### Known Policy Performance
+The VLA is outputting wheel actions ~26x smaller than needed for locomotion.
 
-| Policy | SR | n_goals | Notes |
-|--------|-----|---------|-------|
-| P-controller CJ | 86% | 50 | Gold standard |
-| P-controller CJ | 100% | 10 | Phase 281 |
-| Stage2 curriculum | 72% | 50 | r<0.45m curriculum |
-| DAgger-254 | 50% | 50 | 30 epochs, data limited |
-| Stage3 s3_epoch9 | **EVAL** | **50** | **RUNNING** |
+### Why This Is NOT a normalize_action Bug
 
-### Git Commit
+`normalize_action()` is correctly implemented:
+- Input: raw VLA output in [-1, 1]
+- Output: wheel native [-0.5, 0.5] rad/s
 
-Fix: WORKDIR resolution in eval script (Path.resolve() for cross-platform compat)
+The problem is at the VLA policy output level — the network itself outputs tiny wheel actions.
 
-```bash
-git add -A && git commit -m "fix(eval): WORKDIR resolution in eval_stage3_s3epoch9_50goal.py"
-```
+### Why Stage2 Achieved 72% SR Despite Same Bug
+
+Stage2 was trained with REPLACED wheel actions from P-controller:
+- `action[6:9] = wheel_speeds` (P-controller commands directly replaced VLA wheel output)
+- The VLA only learned arm actions; wheel locomotion was fully handled by P-controller
+- Stage2's "VLA" label is misleading — it's a hybrid where P-controller does all mobile work
+
+Stage3 training attempted to let the VLA learn wheel locomotion too (from dagger + phase227 data), but it failed to learn meaningful wheel commands.
+
+### Architecture Impact
+
+| Policy | Wheel Source | Expected | Actual | Result |
+|--------|-------------|----------|--------|--------|
+| Stage2 | P-controller (replaced) | P-ctrl | P-ctrl | 72% SR ✅ |
+| Stage3 | VLA learned | VLA | VLA ~26x too small | 2% SR ❌ |
+| DAgger | P-controller (30-step fallback) | P-ctrl | P-ctrl | 50% SR ⚠️ |
+
+### What This Means for ROS2 Bridge
+
+The `vla_policy_node.py` normalize_action fix (Phase 278) is CORRECT:
+- VLA native-unit outputs → bridge applies _action_to_ctrl() scaling
+- But since VLA outputs tiny values, the result is still insufficient locomotion
+
+The bridge's Contact-Jacobian P-controller is the reliable fallback for locomotion.
 
 ---
 
 ## 下一步
 
-- [ ] **Phase 284**: Review eval result when PID 54004 completes
-- [ ] **Phase 285**: If Stage3 SR > 72% (Stage2), plan Stage3 data collection
-- [ ] **Phase 286**: DAgger data augmentation (collect 100+ more episodes)
-- [ ] **Phase 287**: Real hardware integration test (needs ROS2 + hardware)
+- [ ] **Option A**: Retrain Stage3 with amplified wheel action loss (weight wheel loss × 20)
+- [ ] **Option B**: Keep Stage3 as arm-only, use P-controller for locomotion in ROS2 bridge
+- [ ] **Option C**: Investigate if s3_epoch6 has better wheel action magnitude
+- [ ] **Phase 284**: Re-evaluate s3_epoch6 on 50 goals (was only quick-eval'd at 10 goals)
 
-## 阻礙
+###阻礙
 
-- Stage3 s3_epoch9 eval still running (~20 min remaining)
-- No ROS2 environment for end-to-end full.launch.py testing
+- VLA wheel action magnitude is a training issue, not a bridge/eval code issue
+- No ROS2 environment to test real hardware integration

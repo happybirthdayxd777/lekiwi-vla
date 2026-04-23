@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
-Phase 282: Stage3 s3_epoch9 — 50-Goal Evaluation (sr=0.10m, seed=42)
-====================================================================
+Phase 284: Stage3 s3_epoch6 — Full 50-Goal Evaluation
+======================================================
+Compare s3_epoch6 vs s3_epoch9 on 50 goals (same eval protocol as phase282).
+s3_epoch6 had 15% SR in 20-goal eval (phase265), better than s3_epoch9's 2%.
+This 50-goal eval determines if it's actually better.
+
+Checkpoints:
+  - s3_epoch6: results/phase264_curriculum_train/s3_epoch6.pt  (loss=0.2558)
+  - s3_epoch9: results/phase264_curriculum_train/s3_epoch9.pt  (loss=0.2324, overfitted)
 """
 import os, sys, time, json
 import numpy as np
@@ -14,7 +21,8 @@ sys.path.insert(0, str(WORKDIR))
 sys.path.insert(0, str(WORKDIR / "scripts"))
 
 DEVICE = "cpu"
-print(f"[Phase 282] Device: {DEVICE}")
+print(f"[Phase 284] Device: {DEVICE}")
+
 
 # ─── Policy Architecture (matching train_curriculum_stage3.py) ──────────────────
 
@@ -76,7 +84,7 @@ class GoalConditionedPolicy(torch.nn.Module):
         self.action_dim = action_dim
 
     def forward(self, images, state, x, t):
-        """Matching train_curriculum_stage3.py forward(): cat[attn_out, goal_q, state_feat, time_emb, noisy_action]"""
+        """Matching train_curriculum_stage3.py forward()."""
         B = images.shape[0]
         img_feat = self.encoder(images)  # [B, 50, 768]
         goal_q = self.goal_q_proj(self.goal_mlp(state[:, :2]))  # [B, 768]
@@ -98,22 +106,18 @@ class GoalConditionedPolicy(torch.nn.Module):
         dt = 1.0 / num_steps
         for _ in range(num_steps):
             t = torch.ones(state.shape[0], 1).to(state.device) * 0.5
-            v = self.forward(images, state, x, t)
-            x = x + v * dt
-        return torch.clamp(x, -0.5, 0.5)
+            pred = self.forward(images, state, x, t)
+            x = x + pred * dt
+        return x
 
 
 def normalize_action(raw_action):
-    """Policy (unbounded) → LeKiWi native units (wheel range [-0.5, 0.5])."""
-    raw = np.asarray(raw_action, dtype=np.float32)
-    raw_clipped = np.clip(raw, -1.0, 1.0)
-    wheel_limits = np.array([[-0.5, 0.5]] * 3)
-    denormed = (raw_clipped + 1.0) / 2.0 * (wheel_limits[:, 1] - wheel_limits[:, 0]) + wheel_limits[:, 0]
-    return denormed
+    """Map raw VLA output [-1, 1] → wheel native [-0.5, 0.5] rad/s."""
+    return np.clip(raw_action, -1.0, 1.0) * 0.5
 
 
 def evaluate_pcontroller_baseline(n_episodes=50, max_steps=300, threshold=0.10):
-    """P-controller baseline."""
+    """P-controller baseline (same as phase282)."""
     from sim_lekiwi_urdf import LeKiWiSimURDF, twist_to_contact_wheel_speeds
 
     np.random.seed(42)
@@ -157,14 +161,15 @@ def evaluate_pcontroller_baseline(n_episodes=50, max_steps=300, threshold=0.10):
     return sr, mean_fail_dist, mean_steps
 
 
-def evaluate_vla_policy(policy, n_episodes=50, max_steps=300, threshold=0.10):
-    """Evaluate Stage 3 VLA on LeKiWiSimURDF."""
+def evaluate_vla_policy(policy, n_episodes=50, max_steps=300, threshold=0.10, label="VLA"):
+    """Evaluate Stage 3 VLA on LeKiWiSimURDF (same as phase282)."""
     from sim_lekiwi_urdf import LeKiWiSimURDF
 
     np.random.seed(42)
     successes = 0
     fail_dists = []
     steps_list = []
+    wheel_action_mags = []
 
     for ep in range(n_episodes):
         sim = LeKiWiSimURDF()
@@ -192,11 +197,17 @@ def evaluate_vla_policy(policy, n_episodes=50, max_steps=300, threshold=0.10):
                 action = policy.infer(img_t, state_t, num_steps=4)
             action_np = action.cpu().numpy()[0]
 
-            # Wheel normalization: raw → native [-0.5, 0.5]
+            # Wheel normalization: raw [-1,1] → native [-0.5, 0.5] rad/s
             wheel_action = normalize_action(action_np[6:9])
+            if ep == 0 and step < 5:
+                print(f"    Step {step}: raw_wheel={action_np[6:9]} → norm={wheel_action}")
+
             full_action = np.zeros(9)
             full_action[6:9] = wheel_action
             sim.step(full_action)
+
+            if step == 0:
+                wheel_action_mags.append(np.linalg.norm(wheel_action))
 
             pos = sim.data.xpos[base_id, :2]
             if np.linalg.norm(pos - goal) < threshold:
@@ -209,50 +220,91 @@ def evaluate_vla_policy(policy, n_episodes=50, max_steps=300, threshold=0.10):
             fail_dists.append(np.linalg.norm(sim.data.xpos[base_id, :2] - goal))
 
         if (ep + 1) % 10 == 0:
-            print(f"  VLA: {successes}/{ep+1} = {100*successes/(ep+1):.0f}% SR (through episode {ep+1})")
+            print(f"  {label}: {successes}/{ep+1} = {100*successes/(ep+1):.0f}% SR (through episode {ep+1})")
 
     sr = successes / n_episodes
     mean_fail_dist = np.mean(fail_dists) if fail_dists else 0.0
     mean_steps = np.mean(steps_list) if steps_list else 0.0
-    print(f"\n  Stage3 VLA (s3_epoch9): {successes}/{n_episodes} = {100*sr:.0f}% SR | mean_fail_dist={mean_fail_dist:.3f} | mean_steps={mean_steps:.0f}")
-    return sr, mean_fail_dist, mean_steps
+    mean_wheel_mag = np.mean(wheel_action_mags) if wheel_action_mags else 0.0
+    print(f"\n  {label}: {successes}/{n_episodes} = {100*sr:.0f}% SR | mean_fail_dist={mean_fail_dist:.3f} | mean_steps={mean_steps:.0f} | mean_wheel_mag={mean_wheel_mag:.4f}")
+    return sr, mean_fail_dist, mean_steps, mean_wheel_mag
 
 
 def main():
-    ckpt_path = WORKDIR / "results/phase264_curriculum_train/s3_epoch9.pt"
-    print(f"[INFO] Loading checkpoint: {ckpt_path}")
-    policy = GoalConditionedPolicy(device=DEVICE)
-    state_dict = torch.load(ckpt_path, map_location=DEVICE)
-    policy.load_state_dict(state_dict, strict=False)
-    policy.to(DEVICE)
-    policy.eval()
-    print("[INFO] Policy loaded OK")
+    print("=" * 60)
+    print("Phase 284: s3_epoch6 vs s3_epoch9 — 50-Goal Evaluation")
+    print("=" * 60)
 
+    # Load s3_epoch6
+    ckpt6_path = WORKDIR / "results/phase264_curriculum_train/s3_epoch6.pt"
+    print(f"\n[INFO] Loading s3_epoch6: {ckpt6_path}")
+    policy6 = GoalConditionedPolicy(device=DEVICE)
+    state_dict6 = torch.load(ckpt6_path, map_location=DEVICE, weights_only=False)
+    policy6.load_state_dict(state_dict6, strict=False)
+    policy6.to(DEVICE)
+    policy6.eval()
+    print("[INFO] s3_epoch6 loaded OK")
+
+    # Load s3_epoch9
+    ckpt9_path = WORKDIR / "results/phase264_curriculum_train/s3_epoch9.pt"
+    print(f"\n[INFO] Loading s3_epoch9: {ckpt9_path}")
+    policy9 = GoalConditionedPolicy(device=DEVICE)
+    state_dict9 = torch.load(ckpt9_path, map_location=DEVICE, weights_only=False)
+    policy9.load_state_dict(state_dict9, strict=False)
+    policy9.to(DEVICE)
+    policy9.eval()
+    print("[INFO] s3_epoch9 loaded OK")
+
+    # P-controller baseline
     t0 = time.time()
     p_sr, p_mfd, p_ms = evaluate_pcontroller_baseline(n_episodes=50, threshold=0.10)
-    print(f"[P-controller] {50*p_sr:.0f}% SR | {time.time()-t0:.0f}s")
+    p_time = time.time() - t0
+    print(f"[P-controller] {100*p_sr:.0f}% SR | {p_time:.0f}s")
 
+    # s3_epoch6
     t1 = time.time()
-    vla_sr, vla_mfd, vla_ms = evaluate_vla_policy(policy, n_episodes=50, threshold=0.10)
-    print(f"[Stage3 VLA] {50*vla_sr:.0f}% SR | {time.time()-t1:.0f}s")
+    s6_sr, s6_mfd, s6_ms, s6_wm = evaluate_vla_policy(policy6, n_episodes=50, threshold=0.10, label="s3_epoch6")
+    s6_time = time.time() - t1
+    print(f"[s3_epoch6] {100*s6_sr:.0f}% SR | {s6_time:.0f}s")
+
+    # s3_epoch9 (same eval for fair comparison)
+    t2 = time.time()
+    s9_sr, s9_mfd, s9_ms, s9_wm = evaluate_vla_policy(policy9, n_episodes=50, threshold=0.10, label="s3_epoch9")
+    s9_time = time.time() - t2
+    print(f"[s3_epoch9] {100*s9_sr:.0f}% SR | {s9_time:.0f}s")
 
     result = {
-        "phase": 282,
-        "checkpoint": "s3_epoch9.pt",
+        "phase": 284,
         "n_goals": 50,
         "success_radius": 0.10,
         "seed": 42,
         "p_controller": {
             "successes": int(p_sr * 50),
-            "success_rate": round(100 * p_sr, 1)
+            "success_rate": round(100 * p_sr, 1),
+            "mean_fail_dist": round(p_mfd, 4),
+            "mean_steps": round(p_ms, 1)
         },
-        "stage3_vla": {
-            "successes": int(vla_sr * 50),
-            "success_rate": round(100 * vla_sr, 1)
+        "s3_epoch6": {
+            "checkpoint": "phase264_curriculum_train/s3_epoch6.pt",
+            "loss": 0.2558,
+            "successes": int(s6_sr * 50),
+            "success_rate": round(100 * s6_sr, 1),
+            "mean_fail_dist": round(s6_mfd, 4),
+            "mean_steps": round(s6_ms, 1),
+            "mean_wheel_action_mag": round(s6_wm, 4)
+        },
+        "s3_epoch9": {
+            "checkpoint": "phase264_curriculum_train/s3_epoch9.pt",
+            "loss": 0.2324,
+            "successes": int(s9_sr * 50),
+            "success_rate": round(100 * s9_sr, 1),
+            "mean_fail_dist": round(s9_mfd, 4),
+            "mean_steps": round(s9_ms, 1),
+            "mean_wheel_action_mag": round(s9_wm, 4)
         }
     }
 
-    out_path = WORKDIR / "results/phase282_s3epoch9_50goal_eval.json"
+    out_path = WORKDIR / "results/phase284_s3epoch6_vs_s3epoch9.json"
     with open(out_path, "w") as f:
         json.dump(result, f, indent=2)
     print(f"\n[RESULT] {out_path}")
