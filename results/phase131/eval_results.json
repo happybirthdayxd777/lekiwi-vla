@@ -1,7 +1,0 @@
-{
-  "phase": 131,
-  "architecture": "cross_attention",
-  "epochs": 30,
-  "vla_sr": 0.0,
-  "pcontroller_sr": 0.2
-}

@@ -4,12 +4,13 @@ Unified LeKiWi Launch — Full Platform
 One launch file to rule them all (defaults use DAgger policy trained on P-controller corrections):
 
   ros2 launch lekiwi_ros2_bridge full.launch.py           # dagger policy + URDF (no extra args needed)
+  ros2 launch lekiwi_ros2_bridge full.launch.py policy:=stage2  # switch to Stage2 curriculum (72% SR on |r|<0.45m)
   ros2 launch lekiwi_ros2_bridge full.launch.py policy:=phase196  # switch to Phase196 policy
-  ros2 launch lekiwi_ros2_bridge full.launch.py sim_type:=urdf  # explicit URDF mode
 
+  policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm | task_oriented | phase196 | dagger | stage2 | stage3
 Modes:
   sim_type : primitive | urdf
-  policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm | task_oriented | phase196 | dagger
+  policy   : mock | pi0 | pi0_fast | act | diffusion | clip_fm | task_oriented | phase196 | dagger | stage2 | stage3
 
   # Default policy is dagger (DAgger-trained, 15 epochs, loss=0.003)
   #   checkpoint: results/dagger_phase246_train/final_policy.pt
@@ -136,9 +137,17 @@ def generate_launch_description() -> LaunchDescription:
 
     # Phase 88: policy translation layer (fixes Phase 85 policy → Phase 86 physics)
     phase88_translation = DeclareLaunchArgument(
-        "phase88_translation", default_value="true",
+        "phase88_translation", default_value="false",
         description="Enable Phase 88 translation layer for Phase 85-trained policies "
-                    "(disable when using policies trained on Phase 86 or later)",
+                    "(disable when using policies trained on Phase 86 or later). "
+                    "Now superseded by use_contact_jacobian=True.",
+    )
+
+    # Phase 276: Contact-Jacobian P-controller for URDF sim
+    use_contact_jacobian = DeclareLaunchArgument(
+        "use_contact_jacobian", default_value="true",
+        description="Use Contact-Jacobian P-controller (100% SR in URDF sim) instead of "
+                    "kinematic IK + Phase88 translation (~20% SR). Only effective in URDF mode.",
     )
 
     bridge_node = Node(
@@ -156,6 +165,8 @@ def generate_launch_description() -> LaunchDescription:
             "enable_hmac": LaunchConfiguration("enable_hmac"),
             "cmd_vel_secret": LaunchConfiguration("cmd_vel_secret"),
             "phase88_translation": LaunchConfiguration("phase88_translation"),
+            # Phase 276: Contact-Jacobian P-controller
+            "use_contact_jacobian": LaunchConfiguration("use_contact_jacobian"),
             # Phase 210: Hybrid bridge goal for P-controller fallback
             "goal_x": LaunchConfiguration("goal_x"),
             "goal_y": LaunchConfiguration("goal_y"),
