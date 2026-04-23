@@ -1061,3 +1061,200 @@ Gap:                          70%-points
 ### 阻礙
 - Stage3 VLA severely regressing from Stage2 (72% → 15%)
 - P-controller itself only 85% SR (down from 94-100% in prior evals)
+
+---
+## [Phase 267 - 2026-04-22 08:30 CST] — Stage2 + Stage3 Policy Loaders Added to Bridge
+
+### 🎯 Problem
+`vla_policy_node.py` had no loader for curriculum-trained `stage2` (72% SR) and `stage3` (0-15% SR) policies. Checkpoints existed but couldn't deploy via ROS2 bridge.
+
+### ✅ Solution
+Added to `src/lekiwi_ros2_bridge/vla_policy_node.py`:
+- `Stage2PolicyRunner` + `_make_stage2_policy/wrapper`
+- `_make_stage3_policy/wrapper`
+- Both reuse same 4-step Euler inference interface
+
+| Policy | Default Checkpoint | Performance |
+|--------|-------------------|-------------|
+| `stage2` | `phase260_curriculum_train/stage2_r045.pt` | **72% SR** on \|r\|<0.45m |
+| `stage3` | `phase264_curriculum_train/s3_epoch9.pt` | 0-15% SR (all goals) |
+
+**Launch usage:**
+```bash
+ros2 launch lekiwi_ros2_bridge vla.launch.py policy:=stage2   # 72% SR VLA
+ros2 launch lekiwi_ros2_bridge full.launch.py policy:=stage2   # Full bridge + VLA
+```
+
+**Stage3 note**: Training overfitting confirmed — best is epoch 9 (loss=0.2324), later epochs worsen.
+Training PID=16582 still running epochs 13-15 (wasted CPU — should be killed).
+
+### 🔮 Next Steps
+- Kill PID 16582 (overfitting training)
+- Quick offline eval: Stage2PolicyRunner + 10-goal test
+- Add goal-radius filtering (|goal|>0.45m → P-controller fallback)
+- DAgger data collection for Stage 3 improvement
+
+---
+
+## [Phase 268 - 2026-04-22 09:00 CST] — Stage2PolicyRunner Goal-Radius Filtering
+
+### 🎯 Problem
+`Stage2PolicyRunner` had NO goal-radius filtering. Stage2 trained on |r|<0.45m goals,
+but the bridge could send ANY goal (including |r|>0.45m) to the Stage2 policy,
+causing it to make poor predictions on out-of-distribution goals.
+
+### ✅ Solution
+Added goal-radius check in `Stage2PolicyRunner.__call__()`:
+```python
+goal_norm = state[9:11]   # [-1, 1] normalized goal
+goal_xy_m = goal_norm * 0.4   # un-normalize to meters (same scale as training)
+goal_radius = np.linalg.norm(goal_xy_m)
+if goal_radius > 0.45:
+    return np.zeros(9, dtype=np.float32)  # → bridge falls back to P-controller
+```
+- Goals outside |r|<0.45m → zeros action
+- Bridge hybrid logic detects `vla_wheel_raw=0`, falls back to P-controller
+- Zero code changes needed in bridge_node.py — safe, passive protection
+
+### 📋 Architecture State: Phase 268
+
+| Component | Status | File |
+|-----------|--------|------|
+| `bridge_node.py` | ✅ 1260 lines, primitive + URDF modes | `src/lekiwi_ros2_bridge/` |
+| `vla_policy_node.py` | ✅ **735 lines**, stage2/stage3 + goal-radius filter | `src/lekiwi_ros2_bridge/` |
+| CTF Security Layer | ✅ Phase 239-243, C1-C8 challenges | `ctf_integration.py` |
+| Camera Adapter | ✅ URDF mode 20Hz RGB | `camera_adapter.py` |
+| Real HW Adapter | ✅ Real hardware interface | `real_hardware_adapter.py` |
+| 5× Launch Files | ✅ bridge/vla/ctf/full/real_mode | `launch/` |
+
+### 🔮 Next Steps
+- Kill overfitting training (PID=16582, already gone)
+- Stage2 10-goal offline eval (5× |r|<0.45m + 5× |r|>0.45m)
+- DAgger data collection for Stage3 improvement
+- Integrate lekiwi_modular STL meshes into bridge
+
+### 📊 Experiment Record
+
+| Phase | Content | Result |
+|-------|---------|--------|
+| p261 | Stage2 50-goal eval | **72% SR** |
+| p264 | Stage3 training | loss=0.2324@epoch9 |
+| p265 | Stage3 s3_epoch6 | VLA=15% vs P-ctrl=85% |
+| p266 | Stage3 s3_epoch9 | VLA=0% vs P-ctrl=60% |
+| p267 | Stage2+Stage3 loaders added to bridge | ✅ |
+| **p268** | **Stage2PolicyRunner goal-radius filtering** | ✅ |
+
+### Git
+- Commit: `0ed5551` Phase 268: Stage2PolicyRunner goal-radius filtering
+- Working tree: clean
+- Remote: up-to-date
+
+
+---
+
+## [2026-04-22 11:00] Phase 273 — URDF P-ctrl 80%, Stage2 40%: Phase 272 錯誤修正
+
+### 本次心跳完成
+
+**Phase 272 錯誤結論修正：URDF locomotion 是正常運行的**
+
+Phase 272 聲稱 URDF sim "完全壞掉" — 這是**錯誤的**。Phase 273 重新驗證：
+
+| Policy | Sim | SR (10 goals) | 歷史對比 |
+|--------|-----|--------------|---------|
+| P-controller (kP=2.0) | **URDF** | **80%** (8/10) | 新測試 |
+| P-controller (kP=2.0) | Primitive | 86% | Phase 234 |
+| **Stage2 curriculum** | **URDF** | **40%** (4/10) | 新測試 |
+| Stage2 curriculum | Primitive | 72% | Phase 261 |
+
+### Phase 272 錯誤原因
+
+`quick_stage2_eval.py` 中 action 格式錯誤：
+- Stage2 輸出：arm_torque(6) + wheel_speed(3)
+- `step(action)` → `_action_to_ctrl()` 期望 arm(6) + wheel(3) 並對 wheel 乘以 10.0
+- 錯誤的 action維度/格式導致全部 0 輸出 → 0% SR
+
+### 新增腳本
+
+- `scripts/quick_pctrl_eval_urdf.py` — P-ctrl baseline on URDF
+- `scripts/quick_stage2_eval_urdf.py` — Stage2 policy on URDF (正確 action 格式)
+
+### Bridge 部署評估
+
+| 模式 | Stage2 SR | 結論 |
+|------|-----------|------|
+| primitive | 72% | 較好，無 STL mesh |
+| URDF | 40% | 可接受，STL mesh 完整 |
+
+URDF Stage2 40% SR 低於 primitive 72% SR，可能原因：
+- URDF 合成圖像 vs 訓練數據分佈偏移
+- wheel_radius 差異（URDF WHEEL_RADIUS=0.025）
+- 物理接觸動力學差異
+
+### 下一步
+
+- [ ] Phase 274: 整合 Stage2 40% SR into bridge_node — URDF 模式可用性評估
+- [ ] Phase 275: 改善 URDF Stage2 成功率（re-train or fine-tune）
+- [ ] Phase 276: 解決 primitive vs URDF 物理差異
+
+### 阻礙
+
+- Stage2 URDF 40% SR落後於 primitive 72% SR（~32% gap）
+- Disk: 82% used, 3.4GB free
+
+---
+
+## [2026-04-23 11:42] Phase 276 — Contact-Jacobian P-Controller Integrated into bridge_node
+
+### 本次心跳完成
+
+**Phase 276: bridge_node 已添加 Contact-Jacobian 模式**
+
+問題根源（Phase 275 發現）：
+- 舊 bridge_node 的 `_on_cmd_vel` 使用 `twist_to_contact_wheel_speeds()` → 舊 kinematic IK 模型 → ~20% SR
+- 舊 kinematic IK 是為 k_omni=15 overlay 物理設計，與 URDF 真實接觸物理不符
+- `sim_lekiwi_urdf._CONTACT_JACOBIAN_PSEUDO_INV` 才是 URDF 接觸物理的正確映射 → 100% SR
+
+修改內容：
+
+1. **`bridge_node.py`**：
+   - 新增 `_contact_jacobian_pctrl(base_xy, goal_xy, kP=2.0)` 函數
+   - 使用 `sim_lekiwi_urdf._CONTACT_JACOBIAN_PSEUDO_INV` 計算 wheel_speeds
+   - 新增 `use_contact_jacobian` 參數（預設=True）
+   - hybrid fallback：當 VLA 保守時，呼叫 CJ P-ctrl 而非舊的 kinematic IK
+   - 當 `use_contact_jacobian=True` 時，完全繞過 Phase88 translation layer
+
+2. **`full.launch.py`**：
+   - 新增 `use_contact_jacobian` LaunchArgument（預設=true）
+   - `phase88_translation` 預設從 true 改為 false（已被 CJ 取代）
+
+**為何有效**：
+- 舊 kinematic IK（Phase 164）：k_omni overlay 物理模型 → ~20% SR in URDF sim
+- 新 Contact-Jacobian（Phase 276）：直接用物理校準矩陣 → **100% SR in URDF sim**
+- Phase88 translation layer 只在 kinematic 模型下需要
+
+### Bridge Architecture Status (Phase 239-276)
+
+||| 元件 | 狀態 | 備註 |
+||------|------|------|------|
+|| bridge_node.py | ✅ Phase 276 | Contact-Jacobian P-ctrl (+31 lines) |
+|| vla_policy_node.py | ✅ Phase 268 | Stage2/3, CLIP-FM, DAgger |
+|| CTF Security Layer | ✅ C1-C8 全部 | 資安監控整合 |
+|| Camera Adapter | ✅ URDF 20Hz | front + wrist camera |
+|| 5× Launch Files | ✅ | bridge/vla/ctf/full/real_mode |
+|| Stage2PolicyRunner | ✅ Phase 268 | 72% SR on \|r\|<0.45m |
+|| DAgger Pipeline | ✅ Phase 252-254 | collected, trained, 50% SR |
+|| **URDF Physics** | ✅ **100% SR** | Contact-Jacobian P-ctrl confirmed |
+|| **Bridge CJ Mode** | ✅ **Phase 276** | 整合完成 |
+
+### 下一步
+
+- [ ] Phase 277: 橋接 Stage2 政策（72% SR on |r|<0.45m）到 ROS2 /lekiwi/vla_action topic
+- [ ] Phase 278: 測試 full.launch.py end-to-end（需要 ROS2 環境）
+- [ ] Phase 279: 評估 bridge_node CJ 模式下真實導航成功率
+
+### 阻礙
+
+- Stage2 policy（72% SR）需要整合進 bridge_node 的 VLA topic 鏈路
+- 真實 URDF Gazebo 物理可能與 MuJoCo 物理有差異
+
