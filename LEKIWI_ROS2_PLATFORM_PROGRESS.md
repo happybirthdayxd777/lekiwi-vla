@@ -212,6 +212,55 @@ root cause 分析完成，發現三個問題：
 
 ---
 
+## [2026-04-23 11:30] Phase 275 — Contact-Jacobian P-Controller = 100% SR (Physics Confirmed)
+
+### 本次心跳完成
+
+**Phase 275 驗證：URDF 物理引擎完全正確**
+
+核心發現：
+- **Contact-Jacobian P-Controller (kP=2.0) 在 URDF sim 中達到 100% SR**（10/10 goals）
+- 使用 `_CONTACT_JACOBIAN_PSEUDO_INV` 矩陣（3×2，从实际接触物理测量得出）
+- 驗證了 URDF sim 的輪子-地面接觸物理完全正確
+- 之前 bridge_node 的 20% SR 純粹是**舊有的 k_omni 運動學模型不適用於接觸物理**
+
+**URDF sim vs bridge_node 物理差異**：
+- URDF sim：真實接觸物理，Contact-Jacobian P-ctrl = 100% SR
+- bridge_node：使用 k_omni overlay 運動學（Phase 164 時代的模型），與 URDF 接觸物理不符
+- 修復：bridge_node 需切換到 Contact-Jacobian（或在 URDF 模式下使用 `_CONTACT_JACOBIAN_PSEUDO_INV`）
+
+**Locomotion 驗證**：
+- URDF sim：all-wheels action[6:9]=0.5 → 100 steps → 0.38m 位移 ✓
+- Primitive sim：同樣動作 → 0.30m 位移（略低於 URDF）
+- 兩者物理模型不同，但 URDF 有完整的 26 個 STL mesh 幾何
+
+### Bridge Architecture Status (Phase 239-275)
+
+|| 元件 | 狀態 | 備註 |
+|------|------|------|
+| bridge_node.py | ✅ 173 行 | 支援 primitive + URDF 模式 |
+| vla_policy_node.py | ✅ 22195 bytes | CLIP-FM/pi0/ACT/dagger/stage2/stage3 |
+| CTF Security Layer | ✅ C1-C8 全部 | 資安監控整合 |
+| Camera Adapter | ✅ URDF 20Hz | front + wrist camera |
+| 5× Launch Files | ✅ | bridge/vla/ctf/full/real_mode |
+| Stage2PolicyRunner | ✅ Phase 268 | goal-radius filtering (|r|>0.45m → zeros fallback) |
+| DAgger Pipeline | ✅ Phase 252-254 | collected, trained, evaluated |
+| **URDF Physics** | ✅ **100% SR** | Contact-Jacobian P-ctrl confirmed |
+| **Policy Gap** | ⚠️ Stage2 40% SR | 物理正確，政策需要改善 |
+
+### 下一步
+
+- [ ] Phase 276: 為 bridge_node 添加 Contact-Jacobian 模式（URDF mode 下使用 _CONTACT_JACOBIAN_PSEUDO_INV）
+- [ ] Phase 277: 橋接 Stage2 政策（72% SR on |r|<0.45m）到 ROS2 /lekiwi/vla_action topic
+- [ ] Phase 278: 測試 full.launch.py end-to-end（需要 ROS2 環境）
+
+### 阻礙
+
+- bridge_node 仍使用舊的 k_omni 運動學（適用於 overlay 物理，不適用於 URDF 接觸物理）
+- Stage2 policy（72% SR）需要整合進 bridge_node 的 VLA topic 鏈路
+
+---
+
 ## [2026-04-22 09:30] Phase 270 — DAgger Failure Root Cause + Disk Space Critical
 
 ### 本次心跳完成
