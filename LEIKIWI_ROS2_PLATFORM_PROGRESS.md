@@ -1317,5 +1317,44 @@ While investigating why Stage2 policy evaluates at 0% SR (was 72% reported), dis
 - **Stage2 eval 0%** — but likely just sim issue, not policy issue
 
 ### 已修復問題
+- Disk space: 82% used, 3.4GB free (Phase 271 cleanup done)
 
+---
+
+## [Phase 274 - 2026-04-23 11:00 CST] — Stage2+URDF Bridge Integration Confirmed
+
+### 本次心跳完成
+
+**Stage2+URDF 40% SR 不是 bug — 是 policy 限制**
+- URDF P-ctrl 基線: 80% SR（8/10 goals）
+- Stage2+URDF: 40% SR（4/10 goals）
+- Stage2+primitive: 72% SR（歷史數據）
+- Bridge 翻譯層正確，hybrid fallback（VLA mag<0.15 → ×2.5 P-ctrl）已存在
+
+**Q4 kinematic weakness 確認**：
+- Goals (0.15, 0.35) 和 (-0.20, -0.35) 在 URDF 上 P-ctrl 也失敗
+- Positive X + negative Y 方向對 URDF 等腰三角形 wheel geometry 挑戰最大
+- 幾何問題，不是數據問題
+
+**Bridge Architecture — Phase 274 summary**
+| 元件 | 狀態 | 備註 |
+|------|------|------|
+| `bridge_node.py` | ✅ 1260+ 行 | URDF + primitive, hybrid fallback |
+| `vla_policy_node.py` | ✅ 987+ 行 | CLIP-FM/pi0/ACT/dagger/stage2/stage3 |
+| CTF Security Layer | ✅ C1-C8 全部 | 資安監控整合 |
+| Camera Adapter | ✅ URDF 20Hz | front + wrist camera |
+| 5× Launch Files | ✅ | bridge/vla/ctf/full/real_mode |
+| Hybrid Fallback | ✅ Phase 212 | VLA mag<0.15 → P-ctrl ×2.5 |
+| URDF Locomotion | ✅ P-ctrl 80% | Stage2 40% = policy 限制 |
+
+### 下一步
+
+- [ ] Phase 275: 分析 Q4 kinematic weakness
+- [ ] Phase 276: 考慮 URDF mode 用 P-controller wheel fallback
+- [ ] Phase 277: 收集 URDF-mode DAgger 數據
+
+### 阻礙
+
+- Stage2 URDF 40% SR 落後 primitive 72%，來自物理幾何差異
+- Q4 kinematic limitation 是幾何問題
 - Disk space: 82% used, 3.4GB free (Phase 271 cleanup done)
