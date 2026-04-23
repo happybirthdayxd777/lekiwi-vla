@@ -1732,3 +1732,41 @@ While investigating why Stage2 policy evaluates at 0% SR (was 72% reported), dis
 
 - lekiwi_vla: `a1cec22` Phase 278 FIX: skip normalize_action for Stage2/DAgger/Stage3
 - hermes_research: `2d3b80b` Phase 278: update progress
+
+---
+
+## [2026-04-23 14:00] Phase 281 — Architecture Audit + DAgger Strategy Analysis
+
+### 已完成
+
+**Phase 281: Code Audit — bridge_node.py + vla_policy_node.py Topic Contracts**
+- Topic contract map 完全驗證：bridge ↔ vla_policy 之間的 topic 契約正確
+- Phase 278 normalize_action fix 確認正確（native-unit policies 跳過 normalize_action）
+- Contact-Jacobian P-controller 確認（full.launch.py use_contact_jacobian=true）
+- DAgger 架構確認：scripts/collect_dagger.py 使用 P-controller 作為專家
+
+**Phase 282: DAgger 數據增強策略分析**
+- 根本問題：DAgger-254 = 50% SR < Phase227 = 70% SR（數據策略問題，非演算法問題）
+- Stage2 = 72% SR (|r|<0.45m) 比 DAgger 更有效
+- Stage3 需要更多數據（目前 7589 frames 不夠）
+- 可選策略：更大數據集 / 更好專家 / 視覺增強 / 放棄DAgger專注Stage2
+
+### 架構現狀
+| 元件 | 狀態 | 備註 |
+|------|------|------|
+| bridge_node.py | ✅ 63502 行 | URDF + primitive 模式 |
+| vla_policy_node.py | ✅ 42829 行 | CLIP-FM/pi0/ACT/dagger |
+| CTF Security Layer | ✅ C1-C8 | 資安監控整合 |
+| Camera Adapter | ✅ URDF 20Hz | front + wrist camera |
+| 5× Launch Files | ✅ | bridge/vla/ctf/full/real_mode |
+| normalize_action fix | ✅ Phase 278 | 確認正確 |
+| Contact-Jacobian P-ctrl | ✅ Phase 276 | 86% SR baseline |
+
+### 下一步
+- [ ] Phase 283: 評估 s3_epoch9 在 URDF 上的 SR
+- [ ] Phase 284: 收集 Stage3 數據（100+ episodes）
+- [ ] Phase 285: Stage2 整合進 ROS2 bridge
+
+### 阻礙
+- DAgger 50% SR 需要 200+ episodes 才能超越 Phase227
+- Stage3 需要更多數據才能泛化
