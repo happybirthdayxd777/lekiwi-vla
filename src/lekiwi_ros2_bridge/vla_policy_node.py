@@ -793,6 +793,8 @@ class LeKiWiVLAPolicyNode(Node):
 
         self.get_logger().info(f"Loading VLA policy: '{policy_name}' on {device}")
         self.policy = _load_policy(policy_name, pretrained, device)
+        # Phase 278: Store policy name to avoid double-normalization for native-unit policies
+        self._policy_name = policy_name
         self.get_logger().info(f"Policy '{policy_name}' loaded.")
 
         # ── Phase 61: Action Smoother ────────────────────────────────────────
@@ -933,8 +935,19 @@ class LeKiWiVLAPolicyNode(Node):
         }
 
         # Policy inference
-        raw_action = self.policy.predict(obs)         # (9,) in [-1, 1]
-        native_action = normalize_action(raw_action)   # (9,) in native units
+        raw_action = self.policy.predict(obs)         # (9,)
+
+        # Phase 278 FIX: Skip normalize_action for policies that output native units.
+        # - Stage2/DAgger: policy.infer() outputs native units (arm_torque in Nm, wheel_speed in rad/s)
+        # - normalize_action() is only for policies that output [-1,1] (ACT, diffusion, pi0, etc.)
+        # - Bridge's _action_to_ctrl() handles normalization for ALL policies uniformly.
+        # Policies outputting native units: stage2, stage3, dagger
+        # Policies outputting [-1,1]: act, diffusion, pi0, pi0_fast, task_oriented, clip_fm, phase196, mock
+        _NATIVE_UNIT_POLICIES = frozenset(["stage2", "stage3", "dagger"])
+        if hasattr(self, '_policy_name') and self._policy_name in _NATIVE_UNIT_POLICIES:
+            native_action = raw_action  # Skip normalize_action — bridge handles it
+        else:
+            native_action = normalize_action(raw_action)   # (9,) in native units
 
         # ── Phase 61: Action Smoother ─────────────────────────────────────────
         # Apply EMA smoothing + delta clipping to reduce jerky wheel commands
