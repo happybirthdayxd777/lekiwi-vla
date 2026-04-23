@@ -1,0 +1,15 @@
+{
+  "phase": 284,
+  "mode": "quick_10goal_50step",
+  "s3_epoch6": {
+    "sr": 0.0,
+    "mean_raw_wheel_mag": 0.0629,
+    "mean_norm_wheel_mag": 0.0315
+  },
+  "s3_epoch9": {
+    "sr": 0.0,
+    "mean_raw_wheel_mag": 0.0652,
+    "mean_norm_wheel_mag": 0.0326
+  },
+  "note": "Both checkpoints have near-identical tiny wheel actions ~0.03 rad/s. P-controller needs ~0.3 rad/s. VLA wheel magnitude is 10x too small."
+}
