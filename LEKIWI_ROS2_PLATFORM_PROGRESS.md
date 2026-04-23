@@ -4,6 +4,51 @@
 
 ---
 
+## [2026-04-23 18:30] Phase 286 — Stage2 Integration Audit: 60% SR, CJ P-controller Fallback Verified
+
+### 已完成
+
+**Stage2 整合現狀全面審計**
+
+Stage2 wheel magnitude 診斷（native rad/s）:
+- Stage2 mean=0.189 rad/s (median=0.163), range=[0.069, 0.322]
+- P-controller: ~0.389 rad/s | Stage3: ~0.032 rad/s
+- **Stage2 是 Stage3 的 5.9x，但仍低於 P-controller**
+
+Stage2 eval 結果（URDF sim, seed=42）:
+- 10-goal: **70% SR** (7/10)
+- 20-goal: **60% SR** (12/20)
+- 50% steps 低於 0.15 threshold → P-controller 接管 locomotion
+
+**Bridge hybrid fallback 對 Stage2 的影響：**
+- ~50% steps vla_mag < 0.15 → P-controller takeover
+- P-controller CJ: 78-86% SR (reliable loco fallback)
+- Stage2 + hybrid: 預期 SR > 70%（取決於 hybrid 觸發頻率）
+
+### 架構現狀（Phase 286）
+
+| 元件 | 狀態 | 備註 |
+|------|------|------|
+| bridge_node.py | ✅ 1306 行 | CJ P-controller + Hybrid fallback |
+| vla_policy_node.py | ✅ 1000 行 | stage2 in _NATIVE_UNIT_POLICIES |
+| Stage2 checkpoint | ✅ 可用 | s2_r045.pt (epoch=s2_10, loss=0.2938) |
+| Stage2 wheel mag | ⚠️ 臨界 | 50% steps < 0.15 → P-controller 接管 |
+| Stage2 SR | ✅ 60-70% | URDF sim eval |
+| CJ P-controller | ✅ 78-86% SR | 可靠的 loco fallback |
+
+### 下一步
+
+- [ ] Phase 287: 50-goal Stage2 eval 完整評估
+- [ ] Phase 288: Stage2 + bridge hybrid 端到端 SR
+- [ ] Phase 289: Stage2 vs Stage3 + hybrid 對比
+
+### 阻礙
+
+- Stage2 wheel magnitude 仍低於 P-controller，hybrid fallback 必要
+- 真實 ROS2 硬體環境仍不可用
+
+---
+
 ## [2026-04-23 12:00] Phase 277 — Bridge 狀態確效 + 磁盤清理
 
 ### 已完成
@@ -149,3 +194,101 @@ root cause 分析完成：
 
 ### 阻礙
 
+
+---
+
+## [2026-04-23 17:05] Phase 284 — VLA Wheel Magnitude: s3_epoch6 vs s3_epoch9 Confirmed Identical
+
+### 已完成
+
+**Phase 283 發現的後續：s3_epoch6 vs s3_epoch9 車輪動作幅度診斷**
+
+Phase 283 假設：s3_epoch6（20-goal eval 15% SR）可能比 s3_epoch9（50-goal eval 2% SR）有更大的車輪動作幅度。快速 10-goal × 50-step 評估結果：
+
+| Checkpoint | raw_wheel_mag | norm_wheel_mag | 10-goal SR |
+|------------|---------------|----------------|------------|
+| s3_epoch6  | 0.0629        | 0.0315 rad/s   | 0%         |
+| s3_epoch9  | 0.0652        | 0.0326 rad/s   | 0%         |
+| **P-controller** | —       | **0.389 rad/s** | ~80% SR   |
+
+**關鍵發現：兩個 checkpoint 車輪幅度幾乎完全相同（~0.03 vs ~0.39, 相差 12x）**
+
+- VLA raw wheel ∈ [-0.25, 0.25]，normalized 後 ∈ [-0.125, 0.125]
+- P-controller 需要 ~0.39 rad/s，VLA 只有 ~0.03 rad/s → 12x 不足
+- **車輪幅度問題是兩個 checkpoint 的共同問題，不是 epoch 9 特有的過擬合問題**
+
+### 根本原因確認
+
+| 層次 | 問題 | 修復方向 |
+|------|------|---------|
+| **訓練層** | VLA 訓練時 wheel loss 權重不足，網絡輸出趨近於零 | 重新設計 wheel loss weighting 或擴展數據 |
+| **Eval 腳本** | `normalize_action()` 對兩個 checkpoint 都正確 | 不需修改 |
+| **Bridge** | `_action_to_ctrl()` 對兩個 checkpoint 都正確 | 不需修改 |
+
+### 架構現狀（Phase 277-284）
+
+| 元件 | 狀態 | 備註 |
+|------|------|------|
+| bridge_node.py | ✅ 1306 行 | Contact-Jacobian P-controller loco fallback |
+| vla_policy_node.py | ✅ 818 行 | CLIP-FM/pi0/ACT/DAgger/Stage2/Stage3 |
+| CTF Security Layer | ✅ C1-C8 全部 | ctf_integration.py |
+| s3_epoch6 / s3_epoch9 | ❌ 12x 車輪幅度不足 | VLA 訓練問題，非 bridge bug |
+| P-controller CJ | ✅ 78-86% SR | 可靠的 loco fallback |
+
+### 下一步
+
+- [ ] Phase 285: 實現 Option C — VLA arm-only + P-controller wheel fallback
+- [ ] Phase 286: 整合 Stage2 (arm + wheel P-controller) 進 ROS2 bridge
+- [ ] Phase 287: 測試 full.launch.py end-to-end
+
+### 阻礙
+
+- VLA wheel locomotion 訓練需要完全重新設計
+- 真實 ROS2 硬體環境仍不可用
+
+---
+
+## [2026-04-23 17:05] Phase 284 — VLA Wheel Magnitude: s3_epoch6 vs s3_epoch9 Confirmed Identical
+
+### 已完成
+
+**Phase 283 發現的後續：s3_epoch6 vs s3_epoch9 車輪動作幅度診斷**
+
+Phase 283 假設：s3_epoch6（20-goal eval 15% SR）可能比 s3_epoch9（50-goal eval 2% SR）有更大的車輪動作幅度。快速 10-goal × 50-step 評估結果：
+
+| Checkpoint | raw_wheel_mag | norm_wheel_mag | 10-goal SR |
+|------------|---------------|----------------|------------|
+| s3_epoch6  | 0.0629        | 0.0315 rad/s   | 0%         |
+| s3_epoch9  | 0.0652        | 0.0326 rad/s   | 0%         |
+| **P-controller** | —       | **0.389 rad/s** | ~80% SR   |
+
+**關鍵發現：兩個 checkpoint 車輪幅度幾乎完全相同（~0.03 vs ~0.39, 相差 12x）**
+
+### 根本原因確認
+
+| 層次 | 問題 | 修復方向 |
+|------|------|---------|
+| **訓練層** | VLA 訓練時 wheel loss 權重不足 | 重新設計 wheel loss weighting |
+| **Eval 腳本** | normalize_action() 對兩個 checkpoint 都正確 | 不需修改 |
+| **Bridge** | _action_to_ctrl() 對兩個 checkpoint 都正確 | 不需修改 |
+
+### 架構現狀（Phase 277-284）
+
+| 元件 | 狀態 | 備註 |
+|------|------|------|
+| bridge_node.py | ✅ 1306 行 | CJ P-controller loco fallback |
+| vla_policy_node.py | ✅ 818 行 | CLIP-FM/pi0/ACT/DAgger/Stage2/Stage3 |
+| CTF Security Layer | ✅ C1-C8 全部 | ctf_integration.py |
+| s3_epoch6 / s3_epoch9 | ❌ 12x 車輪幅度不足 | VLA 訓練問題 |
+| P-controller CJ | ✅ 78-86% SR | 可靠的 loco fallback |
+
+### 下一步
+
+- [ ] Phase 285: 實現 VLA arm-only + P-controller wheel fallback
+- [ ] Phase 286: 整合 Stage2 進 ROS2 bridge
+- [ ] Phase 287: 測試 full.launch.py end-to-end
+
+### 阻礙
+
+- VLA wheel locomotion 訓練需要完全重新設計
+- 真實 ROS2 硬體環境仍不可用
